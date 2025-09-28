@@ -353,7 +353,8 @@ namespace moris::vis
         mBlockAndFemCellIndexToVisVertexIndices.reserve( 10 * mRequestedBlockSetNames.size() * tNumVerticesInFemMesh );
 
         // update the id for each processor
-        moris_id tNextFreeVisVertexID = get_processor_offset( tNumVerticesInProcLocalVisMesh );
+        // Exodus requires positive (1-based) global IDs. Start IDs at 1 on rank 0.
+        moris_id tNextFreeVisVertexID = get_processor_offset( tNumVerticesInProcLocalVisMesh ) + 1;
 
         // initialize vertex index counter
         moris_index tVisVertexIndexCounter = 0;
@@ -469,7 +470,8 @@ namespace moris::vis
         mBlockAndFemCellIndexToVisVertexIndices.reserve( 10 * mRequestedBlockSetNames.size() * tNumVerticesInFemMesh );
 
         // update the id for each processor
-        moris_id tNextFreeVisVertexID = get_processor_offset( tNumVerticesInProcLocalVisMesh );
+        // Exodus requires positive (1-based) global IDs. Start IDs at 1 on rank 0.
+        moris_id tNextFreeVisVertexID = get_processor_offset( tNumVerticesInProcLocalVisMesh ) + 1;
 
         // initialize vertex index counter
         moris_index tVisVertexIndexCounter = 0;
@@ -600,7 +602,8 @@ namespace moris::vis
         mVisMesh->mCells.resize( tNumCellsInProcLocalVisMesh );
 
         // update the id for each processor
-        moris_id tNextFreeCellID = get_processor_offset( tNumCellsInProcLocalVisMesh );
+        // Exodus requires positive (1-based) global IDs. Start IDs at 1 on rank 0.
+        moris_id tNextFreeCellID = get_processor_offset( tNumCellsInProcLocalVisMesh ) + 1;
 
         // initialize cell index counter
         moris_index tCellIndexCounter = 0;
