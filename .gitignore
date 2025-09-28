@@ -58,3 +58,12 @@ CMakeCache.txt
 
 # don't commit mail map for now
 .mailmap
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
