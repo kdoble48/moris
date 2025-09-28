@@ -1,0 +1,105 @@
+name: Sync develop with upstream
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      run_strategy:
+        description: 'Sync strategy: fast-forward, merge, or rebase'
+        type: choice
+        required: false
+        default: fast-forward
+        options:
+          - fast-forward
+          - merge
+          - rebase
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-develop
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      # Set repo variables in GitHub: Settings → Secrets and variables → Variables
+      #   UPSTREAM_REPO   e.g. ORIGINAL_OWNER/moris
+      #   UPSTREAM_BRANCH (optional, defaults to 'develop', falls back to 'main' if not present upstream)
+      UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO }}
+      UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine upstream branch
+        id: determine
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${UPSTREAM_REPO:-}" ]; then
+            echo "ERROR: Set repository variable 'UPSTREAM_REPO' to 'owner/repo' of the source repository." >&2
+            exit 1
+          fi
+          UB="${UPSTREAM_BRANCH:-develop}"
+          if ! git ls-remote --heads "https://github.com/${UPSTREAM_REPO}.git" "$UB" >/dev/null 2>&1; then
+            UB=main
+          fi
+          echo "Using upstream repo: ${UPSTREAM_REPO}"
+          echo "Using upstream branch: ${UB}"
+          echo "UB=${UB}" >> "$GITHUB_ENV"
+
+      - name: Add upstream remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream --prune
+
+      - name: Ensure local develop branch exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git show-ref --verify --quiet refs/heads/develop; then
+            git checkout develop
+          elif git ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
+            git checkout -b develop origin/develop
+          else
+            git checkout -b develop "upstream/${UB}"
+            git push -u origin develop
+          fi
+
+      - name: Sync from upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch upstream --prune
+          STRATEGY="${{ github.event.inputs.run_strategy || 'fast-forward' }}"
+          echo "Sync strategy: ${STRATEGY}"
+          case "$STRATEGY" in
+            rebase)
+              git rebase "upstream/${UB}"
+              ;;
+            merge)
+              git merge --no-edit "upstream/${UB}"
+              ;;
+            fast-forward|*)
+              git merge --ff-only "upstream/${UB}" || { echo "Non fast-forward. Re-run with strategy=merge or rebase."; exit 2; }
+              ;;
+          esac
+
+      - name: Push updated develop
+        run: git push origin develop
+
