@@ -431,6 +431,24 @@ namespace moris
             }
 
             /**
+             * Move constructor.
+             * Enables efficient reallocation of containers holding matrices.
+             * Uses Eigen's optimized move operations for the underlying data.
+             *
+             * @param[in] other Matrix to move from (will be left in valid but unspecified state).
+             */
+            Matrix(Matrix&& other) noexcept = default;
+
+            /**
+             * Move assignment operator.
+             * Enables efficient swap/move operations without deep copying.
+             *
+             * @param[in] other Matrix to move from.
+             * @return Reference to this matrix.
+             */
+            Matrix& operator=(Matrix&& other) noexcept = default;
+
+            /**
              * Returns the length of a vector. Thows error neither rows nor cols are equal 1.
              */
             size_t
