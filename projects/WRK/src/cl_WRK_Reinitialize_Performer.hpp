@@ -46,8 +46,22 @@ namespace moris
         class Model;
     }
 
+    namespace xtk
+    {
+        class Cut_Integration_Mesh;
+    }
+
     namespace wrk
     {
+        /**
+         * @brief Mode for SDF reinitialization
+         */
+        enum class ReinitMode
+        {
+            FIELD_REMAP,     ///< Original: remap solution field to target mesh
+            INTERFACE_SDF    ///< New: compute exact SDF from XTK interface facets
+        };
+
         class Reinitialize_Performer
         {
           private:
@@ -74,6 +88,10 @@ namespace moris
             // mesh outputting params
             std::string mOutputMeshFile;
             moris::real mTimeOffset;
+
+            // SDF reinitialization mode and parameters
+            ReinitMode  mReinitMode     = ReinitMode::FIELD_REMAP;
+            moris_index mMaterialPhase  = 0;    ///< Bulk phase index for "inside" (negative SDF)
 
           public:
             //------------------------------------------------------------------------------
@@ -166,6 +184,57 @@ namespace moris
              */
             void
             output_fields( mtk::Field* aTarget, mtk::Field* aSource, std::string aExoFileName ) const;
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * @brief Set the reinitialization mode
+             *
+             * @param aMode FIELD_REMAP (original) or INTERFACE_SDF (new)
+             */
+            void
+            set_reinit_mode( ReinitMode aMode );
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * @brief Get the current reinitialization mode
+             */
+            ReinitMode
+            get_reinit_mode() const;
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * @brief Set the material phase index (for sign determination)
+             *
+             * @param aPhase Bulk phase index that represents "inside" (negative SDF)
+             */
+            void
+            set_material_phase( moris_index aPhase );
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * @brief Compute SDF from XTK interface facets
+             *
+             * Uses the triangulated interface from XTK to compute exact signed
+             * distances at all mesh nodes. This is an alternative to field remapping
+             * that maintains the exact SDF property (|∇φ| = 1).
+             *
+             * @param aCutMesh XTK cut integration mesh containing interface facets
+             * @param aInterpMesh Interpolation mesh (Lagrange nodes)
+             * @param aGENPerformer Geometry engine for ADV updates
+             * @param aMTKPerformer Mesh manager
+             * @param aSDFField Output: MTK field with reinitialized SDF values
+             */
+            void
+            compute_sdf_from_interface(
+                    xtk::Cut_Integration_Mesh&                       aCutMesh,
+                    mtk::Mesh*                                       aInterpMesh,
+                    Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+                    Vector< std::shared_ptr< mtk::Mesh_Manager > >&  aMTKPerformer,
+                    std::shared_ptr< mtk::Field >&                   aSDFField );
         };
     }    // namespace wrk
 }    // namespace moris

@@ -44,6 +44,12 @@
 #include "cl_MSI_Equation_Model.hpp"
 #include "fn_sort.hpp"
 
+// XTK includes for interface-based SDF
+#include "cl_XTK_Cut_Integration_Mesh.hpp"
+
+// SDF includes for distance computation
+#include "cl_SDF_From_Interface.hpp"
+
 namespace moris::wrk
 {
     //------------------------------------------------------------------------------
@@ -260,4 +266,195 @@ namespace moris::wrk
         // Finalize
         tWriter.close_file( true );
     }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Reinitialize_Performer::set_reinit_mode( ReinitMode aMode )
+    {
+        mReinitMode = aMode;
+    }
+
+    //------------------------------------------------------------------------------
+
+    ReinitMode
+    Reinitialize_Performer::get_reinit_mode() const
+    {
+        return mReinitMode;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Reinitialize_Performer::set_material_phase( moris_index aPhase )
+    {
+        mMaterialPhase = aPhase;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Reinitialize_Performer::compute_sdf_from_interface(
+            xtk::Cut_Integration_Mesh&                         aCutMesh,
+            mtk::Mesh*                                         aInterpMesh,
+            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+            Vector< std::shared_ptr< mtk::Mesh_Manager > >&    aMTKPerformer,
+            std::shared_ptr< mtk::Field >&                     aSDFField )
+    {
+        Tracer tTracer( "WRK", "Reinitialize ADVs", "Compute SDF from Interface" );
+
+        // Get interface facets from XTK
+        Vector< moris_index > const& tInterfaceFacetIndices = aCutMesh.get_interface_facets();
+
+        if ( tInterfaceFacetIndices.size() == 0 )
+        {
+            MORIS_LOG_WARNING( "No interface facets found in XTK mesh, skipping SDF reinitialization" );
+            return;
+        }
+
+        // Get spatial dimension
+        uint tSpatialDim = aInterpMesh->get_spatial_dim();
+        uint tNodesPerFacet = ( tSpatialDim == 3 ) ? 3 : 2;  // Triangles in 3D, segments in 2D
+
+        // Count total facet nodes (may have duplicates, handled by connectivity)
+        uint tNumFacets = tInterfaceFacetIndices.size();
+
+        // Build facet connectivity and collect unique vertices
+        // For simplicity, we collect facet vertex coordinates directly
+        // Note: This is a simplified approach - production code may need
+        // to handle the facet-to-vertex mapping more carefully
+
+        // Get facet connectivity from XTK's facet-based connectivity
+        std::shared_ptr< xtk::Facet_Based_Connectivity > tFaceConn = aCutMesh.get_face_connectivity();
+
+        MORIS_ERROR( tFaceConn != nullptr,
+                "compute_sdf_from_interface - Face connectivity not available in XTK mesh" );
+
+        // Collect all unique facet node coordinates
+        std::map< moris_index, Matrix< DDRMat > > tUniqueVertexCoords;
+        Matrix< IndexMat > tFacetConn( tNumFacets, tNodesPerFacet );
+
+        for ( uint iFacet = 0; iFacet < tNumFacets; ++iFacet )
+        {
+            moris_index tFacetIndex = tInterfaceFacetIndices( iFacet );
+
+            // Get vertices of this facet directly from mFacetVertices member
+            Vector< moris::mtk::Vertex* > const& tFacetVertices = tFaceConn->mFacetVertices( tFacetIndex );
+
+            for ( uint iNode = 0; iNode < tNodesPerFacet && iNode < tFacetVertices.size(); ++iNode )
+            {
+                if ( tFacetVertices( iNode ) == nullptr )
+                {
+                    continue;  // Skip null vertices
+                }
+
+                moris_index tVertexIndex = tFacetVertices( iNode )->get_index();
+                tFacetConn( iFacet, iNode ) = tVertexIndex;
+
+                // Store vertex coordinates if not already present
+                if ( tUniqueVertexCoords.find( tVertexIndex ) == tUniqueVertexCoords.end() )
+                {
+                    tUniqueVertexCoords[ tVertexIndex ] = tFacetVertices( iNode )->get_coords();
+                }
+            }
+        }
+
+        // Build facet node coordinate matrix
+        uint tNumUniqueVerts = tUniqueVertexCoords.size();
+        Matrix< DDRMat > tFacetNodeCoords( tNumUniqueVerts, tSpatialDim );
+
+        // Create mapping from original indices to compact indices
+        std::map< moris_index, moris_index > tVertexIndexMap;
+        moris_index tCompactIdx = 0;
+        for ( auto const& [tOrigIdx, tCoords] : tUniqueVertexCoords )
+        {
+            tVertexIndexMap[ tOrigIdx ] = tCompactIdx;
+            for ( uint iDim = 0; iDim < tSpatialDim; ++iDim )
+            {
+                tFacetNodeCoords( tCompactIdx, iDim ) = tCoords( iDim );
+            }
+            ++tCompactIdx;
+        }
+
+        // Update facet connectivity to use compact indices
+        for ( uint iFacet = 0; iFacet < tNumFacets; ++iFacet )
+        {
+            for ( uint iNode = 0; iNode < tNodesPerFacet; ++iNode )
+            {
+                tFacetConn( iFacet, iNode ) = tVertexIndexMap[ tFacetConn( iFacet, iNode ) ];
+            }
+        }
+
+        // Get interpolation mesh node coordinates
+        uint tNumNodes = aInterpMesh->get_num_nodes();
+        Matrix< DDRMat > tNodeCoords( tNumNodes, tSpatialDim );
+
+        for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+        {
+            Matrix< DDRMat > tCoords = aInterpMesh->get_mtk_vertex( iNode ).get_coords();
+            for ( uint iDim = 0; iDim < tSpatialDim; ++iDim )
+            {
+                tNodeCoords( iNode, iDim ) = tCoords( iDim );
+            }
+        }
+
+        // Determine bulk phase per node using GEN
+        Vector< moris_index > tNodeBulkPhase( tNumNodes );
+        for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+        {
+            Matrix< DDRMat > tCoords = aInterpMesh->get_mtk_vertex( iNode ).get_coords();
+            tNodeBulkPhase( iNode ) = aGENPerformer( 0 )->get_phase_index( iNode, tCoords );
+        }
+
+        // Compute SDF using SDF_From_Interface
+        Matrix< DDRMat > tSDF;
+        sdf::SDF_From_Interface::compute(
+                tNumNodes,
+                tNodeCoords,
+                tFacetNodeCoords,
+                tFacetConn,
+                tNodeBulkPhase,
+                mMaterialPhase,
+                tSDF );
+
+        // Create MTK Field with computed SDF values
+        aSDFField = std::make_shared< mtk::Field_Discrete >(
+                aMTKPerformer( 0 )->get_mesh_pair( 0 ), mAdofMeshIndex );
+        aSDFField->set_label( mADVFiledName );
+        aSDFField->unlock_field();
+        aSDFField->set_values( tSDF );
+
+        // Map nodal values to coefficients
+        mtk::Mapper tMapper;
+        aSDFField->unlock_field();
+        tMapper.map_input_field_to_output_field_2( aSDFField.get() );
+
+        // Compute coefficients from nodal values
+        mCoefficients = aSDFField->get_coefficients();
+
+        // Clip values to bounds
+        this->impose_upper_lower_bound( aGENPerformer, aSDFField.get() );
+
+        // Store field for GEN update
+        Vector< std::shared_ptr< mtk::Field > > tGENFields;
+        tGENFields.append( aGENPerformer( 0 )->get_mtk_fields() );
+
+        // Find and replace the ADV field
+        auto itr = std::find_if( tGENFields.begin(), tGENFields.end(),
+                [ & ]( std::shared_ptr< mtk::Field > const& aField ) {
+                    return aField->get_label() == mADVFiledName;
+                } );
+
+        if ( itr != tGENFields.end() )
+        {
+            moris_index tADVFieldIndex = std::distance( tGENFields.begin(), itr );
+            tGENFields( tADVFieldIndex ) = aSDFField;
+        }
+
+        mMTKFields = tGENFields;
+
+        MORIS_LOG_INFO( "SDF reinitialization complete: %d nodes, %d interface facets",
+                tNumNodes, tNumFacets );
+    }
+
 }    // namespace moris::wrk
