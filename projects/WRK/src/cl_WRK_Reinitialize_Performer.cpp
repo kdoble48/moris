@@ -81,6 +81,20 @@ namespace moris::wrk
         // get the mesh output info
         mOutputMeshFile = tMORISParameterList( 2 )( 0 ).get< std::string >( "output_mesh_file" );
         mTimeOffset     = tMORISParameterList( 2 )( 0 ).get< real >( "time_offset" );
+
+        // SDF reinitialization mode
+        std::string tReinitModeStr = tMORISParameterList( 2 )( 0 ).get< std::string >( "sdf_reinit_mode" );
+        if ( tReinitModeStr == "interface" )
+        {
+            mReinitMode = ReinitMode::INTERFACE_SDF;
+        }
+        else
+        {
+            mReinitMode = ReinitMode::FIELD_REMAP;  // Default
+        }
+
+        // Material phase for sign determination
+        mMaterialPhase = tMORISParameterList( 2 )( 0 ).get< sint >( "sdf_reinit_material_phase" );
     }
 
     //------------------------------------------------------------------------------
