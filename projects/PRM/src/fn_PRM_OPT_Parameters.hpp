@@ -44,6 +44,15 @@ namespace moris::prm
         tParameterList.insert( "reinitialize_interface_iter", INT_MAX );          // number of iterations until the interface will be reinitialized
         tParameterList.insert( "first_reinitialize_interface_iter", INT_MAX );    // number of iterations until the interface will be reinitialized
 
+        // SDF reinitialization mode: "field_remap" (default) or "interface"
+        // "field_remap": Original mode - map solution field to target mesh
+        // "interface": Compute exact SDF from XTK interface facets
+        tParameterList.insert( "sdf_reinit_mode", "field_remap" );
+
+        // Material phase index for sign determination in interface mode
+        // Nodes in this phase get negative SDF (inside), others get positive (outside)
+        tParameterList.insert( "sdf_reinit_material_phase", 0 );
+
         return tParameterList;
     }
 
