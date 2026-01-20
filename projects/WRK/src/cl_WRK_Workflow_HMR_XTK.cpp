@@ -335,6 +335,53 @@ namespace moris::wrk
         // XTK perform - enrich - ghost - multigrid
         tXTKPerformer->perform_enrichment();
 
+        // Stage *: Interface-based SDF reinitialization (after XTK has interface facets)
+        if ( mPerformerManager->mReinitializePerformer.size() > 0 )
+        {
+            Reinitialize_Performer* tReinitPerformer = mPerformerManager->mReinitializePerformer( 0 ).get();
+
+            if ( tReinitPerformer->get_reinit_mode() == ReinitMode::INTERFACE_SDF )
+            {
+                sint tReinitFreq = tReinitPerformer->get_reinitialization_frequency();
+
+                if ( tOptIter > 0 && tOptIter % tReinitFreq == 0 )
+                {
+                    Tracer tTracer( "GEN", "Levelset", "Interface-SDF-Reinitialize" );
+
+                    // Get XTK cut integration mesh
+                    xtk::Cut_Integration_Mesh* tCutMeshPtr = tXTKPerformer->get_cut_integration_mesh();
+
+                    MORIS_ERROR( tCutMeshPtr != nullptr,
+                            "Workflow_HMR_XTK::perform - Cut integration mesh not available for SDF reinit" );
+
+                    xtk::Cut_Integration_Mesh& tCutMesh = *tCutMeshPtr;
+
+                    // Get interpolation mesh
+                    mtk::Mesh* tInterpMesh = mPerformerManager->mMTKPerformer( 0 )->get_interpolation_mesh( 0 );
+
+                    // Compute SDF from interface and update field
+                    std::shared_ptr< mtk::Field > tSDFField;
+                    tReinitPerformer->compute_sdf_from_interface(
+                            tCutMesh,
+                            tInterpMesh,
+                            mPerformerManager->mGENPerformer,
+                            mPerformerManager->mMTKPerformer,
+                            tSDFField );
+
+                    // Distribute new SDF to ADVs
+                    if ( tSDFField != nullptr )
+                    {
+                        mPerformerManager->mGENPerformer( 0 )->distribute_advs(
+                                mPerformerManager->mMTKPerformer( 0 )->get_mesh_pair( 0 ),
+                                tReinitPerformer->get_mtk_fields() );
+
+                        // Update ADVs for caller
+                        aNewADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+                    }
+                }
+            }
+        }
+
         if ( tDeleteXTK )
         {
             // construct the data base with the mtk performer from xtk
