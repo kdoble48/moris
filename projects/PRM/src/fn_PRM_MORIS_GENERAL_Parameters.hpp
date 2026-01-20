@@ -80,6 +80,15 @@ namespace moris::prm
         aParameterlist.insert( "reinitialization_frequency", 1 );
         aParameterlist.insert( "output_mesh_file", "" );
         aParameterlist.insert( "time_offset", 0.0 );
+
+        // SDF reinitialization mode: "field_remap" (default) or "interface"
+        // "field_remap": Original mode - map solution field to target mesh
+        // "interface": Compute exact SDF from XTK interface facets
+        aParameterlist.insert( "sdf_reinit_mode", "field_remap" );
+
+        // Material phase index for sign determination in interface mode
+        // Nodes in this phase get negative SDF (inside), others get positive (outside)
+        aParameterlist.insert( "sdf_reinit_material_phase", 0 );
     }
 
     //------------------------------------------------------------------------------
