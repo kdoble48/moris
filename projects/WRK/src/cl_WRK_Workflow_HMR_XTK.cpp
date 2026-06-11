@@ -113,6 +113,53 @@ namespace moris::wrk
         Tracer tTracer( "WRK", "HMR-XTK Workflow", "Initialize" );
 
         mInitializeOptimizationRestart = false;
+        
+        // If mSDFReinitPending was true, we're coming from an SDF reinit restart.
+        // Set skip flag to prevent re-triggering SDF reinit on the restart pass.
+        // Also apply the computed SDF coefficients to GEN BEFORE distribute_advs().
+        if ( mSDFReinitPending )
+        {
+            mSkipNextSDFReinit = true;
+            
+            // Apply the stored SDF coefficients to GEN
+            if ( mPerformerManager->mReinitializePerformer.size() > 0 )
+            {
+                Reinitialize_Performer* tReinitPerformer = mPerformerManager->mReinitializePerformer( 0 ).get();
+                Matrix< DDRMat > const& tCoeffs = tReinitPerformer->get_coefficients();
+                
+                if ( tCoeffs.n_rows() > 0 )
+                {
+                    // Get current ADV count from GEN to verify size matches
+                    Vector< real > const& tCurrentADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+                    uint tExpectedSize = tCurrentADVs.size();
+                    uint tStoredSize = tCoeffs.n_rows();
+                    
+                    if ( tStoredSize != tExpectedSize )
+                    {
+                        MORIS_LOG_WARNING( "SDF coefficient count (%d) does not match current ADV count (%d). "
+                                "This can happen if mesh topology changed during reinit. Skipping SDF application.",
+                                (int)tStoredSize, (int)tExpectedSize );
+                    }
+                    else
+                    {
+                        // Convert to Vector for ADVs
+                        Vector< real > tNewADVs( tCoeffs.n_rows() );
+                        for ( uint i = 0; i < tCoeffs.n_rows(); ++i )
+                        {
+                            tNewADVs( i ) = tCoeffs( i );
+                        }
+                        
+                        // Set new ADVs in GEN - these will be picked up by distribute_advs() later
+                        mPerformerManager->mGENPerformer( 0 )->set_advs( tNewADVs );
+                        
+                        MORIS_LOG_INFO( "Applied %d SDF coefficients to GEN in initialize()", (int)tCoeffs.n_rows() );
+                    }
+                }
+            }
+        }
+        
+        // Clear SDF reinit pending flag (coefficients now applied above)
+        mSDFReinitPending = false;
 
         mIter = 0;
 
@@ -215,7 +262,11 @@ namespace moris::wrk
         tOptIter = tOptIter + mIter;
 
         // return vector of design criteria with NANs causing the optimization algorithm to restart
-        if ( mIter >= mReinitializeIterInterval or ( uint ) tOptIter == mReinitializeIterFirst )
+        // Skip this block for INTERFACE_SDF mode - we handle NANs in the SDF reinit block (line ~420)
+        bool tIsInterfaceSDFMode = mPerformerManager->mReinitializePerformer.size() > 0 &&
+                mPerformerManager->mReinitializePerformer( 0 )->get_reinit_mode() == ReinitMode::INTERFACE_SDF;
+        
+        if ( !tIsInterfaceSDFMode && ( mIter >= mReinitializeIterInterval or ( uint ) tOptIter == mReinitializeIterFirst ) )
         {
             mInitializeOptimizationRestart = true;
 
@@ -227,10 +278,12 @@ namespace moris::wrk
         // Stage *: Re-initialization of the adv field
         if ( mPerformerManager->mReinitializePerformer.size() > 0 )
         {
-            // decide if the re-initialization would be required
-            sint tReinitFreq = mPerformerManager->mReinitializePerformer( 0 )->get_reinitialization_frequency();
+            Reinitialize_Performer* tReinitPerformer = mPerformerManager->mReinitializePerformer( 0 ).get();
+            sint tReinitFreq = tReinitPerformer->get_reinitialization_frequency();
 
-            if ( tOptIter > 0 and tOptIter % tReinitFreq == 0 )
+            // FIELD_REMAP mode: reinitialize ADVs from solution field before XTK
+            if ( tReinitPerformer->get_reinit_mode() == ReinitMode::FIELD_REMAP 
+                 && tOptIter > 0 && tOptIter % tReinitFreq == 0 )
             {
                 // Set new advs in GE
                 Tracer tTracer( "GEN", "Levelset", "Re-InitializeADVs" );
@@ -241,6 +294,36 @@ namespace moris::wrk
 
                 // get advs from GE and overwrite them
                 aNewADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+            }
+            // INTERFACE_SDF mode: Handle restart after SDF reinit triggered NANs
+            // Apply the stored SDF coefficients when mSDFReinitPending is set
+            else if ( tReinitPerformer->get_reinit_mode() == ReinitMode::INTERFACE_SDF
+                      && mSDFReinitPending )
+            {
+                Tracer tTracer( "GEN", "Levelset", "Interface-SDF-Apply-ADVs" );
+                
+                // Get the stored SDF coefficients and use them as new ADVs
+                Matrix< DDRMat > const& tCoeffs = tReinitPerformer->get_coefficients();
+                
+                if ( tCoeffs.n_rows() > 0 )
+                {
+                    // Convert to Vector for ADVs
+                    Vector< real > tNewADVs( tCoeffs.n_rows() );
+                    for ( uint i = 0; i < tCoeffs.n_rows(); ++i )
+                    {
+                        tNewADVs( i ) = tCoeffs( i );
+                    }
+                    
+                    // Set new ADVs in GEN AND update aNewADVs
+                    // This is safe on restart - optimizer hasn't computed criteria yet
+                    mPerformerManager->mGENPerformer( 0 )->set_advs( tNewADVs );
+                    aNewADVs = tNewADVs;
+                    
+                    MORIS_LOG_INFO( "Applied %zu SDF coefficients as new ADVs", tCoeffs.n_rows() );
+                }
+                
+                // Clear the pending flag - ADVs have been applied
+                mSDFReinitPending = false;
             }
             else
             {
@@ -344,8 +427,34 @@ namespace moris::wrk
             {
                 sint tReinitFreq = tReinitPerformer->get_reinitialization_frequency();
 
-                if ( tOptIter > 0 && tOptIter % tReinitFreq == 0 )
+                // One-time SDF initialization at the first iteration: start the optimizer
+                // from a true signed distance field rather than the raw initial level set.
+                bool tInitAtStart = tReinitPerformer->get_initialize_at_start()
+                                 && !mSDFInitialized && tOptIter > 0;
+
+                // Regular scheduled reinit on the configured frequency
+                bool tScheduled = tOptIter > 0 && tOptIter % tReinitFreq == 0;
+
+                // In-place mode: redistance the field in-place (no restart) every tReinitFreq
+                // iterations (reinitialization_frequency; =1 means every step). Keeps the field near
+                // a true SDF on that cadence; smoothing fires on the same schedule.
+                bool tEveryStep  = tReinitPerformer->get_reinit_every_step();
+                bool tRedistance = tEveryStep ? ( tOptIter > 0 && tOptIter % tReinitFreq == 0 ) : tScheduled;
+                bool tDoSmooth   = tEveryStep ? ( tOptIter % tReinitFreq == 0 ) : true;
+
+                // Skip SDF reinit on restart pass (first iteration after restart)
+                if ( mSkipNextSDFReinit )
                 {
+                    MORIS_LOG_INFO( "Skipping SDF reinit on restart pass" );
+                    mSkipNextSDFReinit = false;
+                }
+                // Trigger SDF reinit: the one-time start-of-run init, every-step redistance, or schedule
+                else if ( ( tInitAtStart || tRedistance ) && !mSDFReinitPending && !mSDFWeanedOff )
+                {
+                    if ( tInitAtStart )
+                    {
+                        MORIS_LOG_INFO( "Initializing design as SDF on first iteration (sdf_initialize_at_start)" );
+                    }
                     Tracer tTracer( "GEN", "Levelset", "Interface-SDF-Reinitialize" );
 
                     // Get XTK cut integration mesh
@@ -366,21 +475,102 @@ namespace moris::wrk
                             tInterpMesh,
                             mPerformerManager->mGENPerformer,
                             mPerformerManager->mMTKPerformer,
-                            tSDFField );
+                            tSDFField,
+                            tDoSmooth );
 
-                    // Distribute new SDF to ADVs
-                    if ( tSDFField != nullptr )
+                    // Every-step in-place redistance: overwrite the ADVs with the redistanced
+                    // coefficients and continue WITHOUT a NaN/restart. The native MMA optimizer
+                    // (cl_OPT_Algorithm_MMA) owns its loop and writes these back into its design
+                    // vector, so the redistanced design persists and the criteria/gradient stay
+                    // consistent. (The TPL GCMMA cannot do this -- it would hit the gradient
+                    // consistency assert -- so every-step mode requires algorithm = "mma".)
+                    // Skipped on iterations where the basis size changed (remesh handled elsewhere).
+                    if ( tSDFField != nullptr && tEveryStep )
                     {
-                        mPerformerManager->mGENPerformer( 0 )->distribute_advs(
-                                mPerformerManager->mMTKPerformer( 0 )->get_mesh_pair( 0 ),
-                                tReinitPerformer->get_mtk_fields() );
+                        Matrix< DDRMat > const& tCoeffs = tReinitPerformer->get_coefficients();
+                        if ( tCoeffs.n_rows() == aNewADVs.size() && aNewADVs.size() > 0 )
+                        {
+                            for ( uint iADV = 0; iADV < tCoeffs.n_rows(); ++iADV )
+                            {
+                                aNewADVs( iADV ) = tCoeffs( iADV );
+                            }
+                            mSDFInitialized = true;
+                            MORIS_LOG_INFO( "SDF redistanced in-place every step (no restart): %u coeffs%s",
+                                    (uint)tCoeffs.n_rows(), tDoSmooth ? ", smoothed" : "" );
+                        }
+                        else
+                        {
+                            MORIS_LOG_INFO( "SDF redistance skipped this step: coeff count %u != ADV count %u (mesh changed)",
+                                    (uint)tCoeffs.n_rows(), (uint)aNewADVs.size() );
+                        }
+                        // no NaN, no restart -- fall through to FEM with the redistanced design
+                    }
+                    // Distribute new SDF to ADVs (restart-based reinit; scheduled mode every reinit_freq)
+                    else if ( tSDFField != nullptr )
+                    {
+                        // Wean-off decision driven by the actual DESIGN-VARIABLE change between
+                        // reinits, ||x_k - x_{k-1}|| / ||x_{k-1}||. Unlike the reinit's field drift
+                        // (which is dominated by |grad phi| re-normalization and stays large), the
+                        // design-variable change genuinely shrinks as GCMMA converges. When it falls
+                        // below the tolerance the design has settled, so applying further reinits
+                        // would only perturb a converged design: disable reinit for the rest of the
+                        // run. Skipped for the one-time start init and the first scheduled reinit
+                        // (no previous design to compare against yet).
+                        real tWeanTol = tReinitPerformer->get_wean_tol();
+                        bool tWeanOff = false;
+                        if ( !tInitAtStart && tWeanTol > 0.0
+                                && mPrevReinitADVs.size() == aNewADVs.size() && aNewADVs.size() > 0 )
+                        {
+                            real tNumer = 0.0;
+                            real tDenom = 0.0;
+                            for ( uint iADV = 0; iADV < aNewADVs.size(); ++iADV )
+                            {
+                                tNumer += std::pow( aNewADVs( iADV ) - mPrevReinitADVs( iADV ), 2 );
+                                tDenom += std::pow( mPrevReinitADVs( iADV ), 2 );
+                            }
+                            real tDVChange = ( tDenom > 0.0 ) ? std::sqrt( tNumer / tDenom ) : 0.0;
+                            tWeanOff = ( tDVChange < tWeanTol );
+                            MORIS_LOG_INFO( "SDF reinit design-variable change: %.4e (wean tol %.4e)%s",
+                                    tDVChange, tWeanTol, tWeanOff ? " -> wean off" : "" );
+                        }
 
-                        // Update ADVs for caller
-                        aNewADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+                        // Record the current design as the reference for the next reinit
+                        mPrevReinitADVs = aNewADVs;
+
+                        if ( !tInitAtStart && tWeanOff )
+                        {
+                            MORIS_LOG_INFO( "SDF reinit weaned off: design-variable change below tolerance, no further reinits" );
+                            mSDFWeanedOff = true;
+                        }
+                        else
+                        {
+                            // The design is now a true SDF; the one-time start-of-run
+                            // initialization is satisfied and will not fire again.
+                            mSDFInitialized = true;
+
+                            // Mark that SDF coefficients are pending for NEXT iteration
+                            // They will be applied at the start of the next get_criteria call
+                            // (at lines 247-276) BEFORE XTK runs
+                            mSDFReinitPending = true;
+
+                            MORIS_LOG_INFO( "SDF reinitialization computed, returning NANs to trigger restart" );
+
+                            // Return NaNs to trigger optimizer restart
+                            // On restart, ADVs will be applied BEFORE XTK runs
+                            mInitializeOptimizationRestart = true;
+
+                            // Build and return vector of NANs
+                            Vector< real > tNaNVector( mNumCriteria, std::numeric_limits< real >::quiet_NaN() );
+                            return tNaNVector;  // Exit early - don't continue to FEM
+                        }
                     }
                 }
             }
         }
+
+        // NOTE: mSDFReinitPending is NOT cleared here.
+        // It persists until the next iteration, where it's checked at lines 247-276
+        // and the ADVs are applied BEFORE XTK runs (then the flag is cleared there)
 
         if ( tDeleteXTK )
         {
@@ -500,17 +690,24 @@ namespace moris::wrk
         mPerformerManager->mMDLPerformer( 0 )->perform();
 
         // perform mapping at this stage between solution field and adv field as some data will be deleted
+        // This is FIELD_REMAP mode only - INTERFACE_SDF mode handles reinitialization earlier (after XTK)
         if ( mPerformerManager->mReinitializePerformer.size() > 0 )
         {
-            // decide if we need to perform mapping
-            if ( tOptIter % ( mPerformerManager->mReinitializePerformer( 0 )->get_reinitialization_frequency() ) ==    //
-                    mPerformerManager->mReinitializePerformer( 0 )->get_reinitialization_frequency() - 1 )
+            Reinitialize_Performer* tReinitPerformer = mPerformerManager->mReinitializePerformer( 0 ).get();
+            
+            // Only run perform() for FIELD_REMAP mode
+            if ( tReinitPerformer->get_reinit_mode() == ReinitMode::FIELD_REMAP )
             {
-                // perform mapping of the solution to the adv
-                mPerformerManager->mReinitializePerformer( 0 )->perform( mPerformerManager->mHMRPerformer,
-                        mPerformerManager->mGENPerformer,
-                        mPerformerManager->mMTKPerformer,
-                        mPerformerManager->mMDLPerformer );
+                // decide if we need to perform mapping
+                if ( tOptIter % tReinitPerformer->get_reinitialization_frequency() ==
+                        tReinitPerformer->get_reinitialization_frequency() - 1 )
+                {
+                    // perform mapping of the solution to the adv
+                    mPerformerManager->mReinitializePerformer( 0 )->perform( mPerformerManager->mHMRPerformer,
+                            mPerformerManager->mGENPerformer,
+                            mPerformerManager->mMTKPerformer,
+                            mPerformerManager->mMDLPerformer );
+                }
             }
         }
 
