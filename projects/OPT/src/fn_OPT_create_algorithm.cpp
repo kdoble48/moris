@@ -10,6 +10,7 @@
 
 #include "fn_OPT_create_algorithm.hpp"
 #include "cl_OPT_Algorithm_GCMMA.hpp"
+#include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_OPT_Algorithm_SQP.hpp"
 #include "cl_OPT_Algorithm_LBFGS.hpp"
 #include "cl_OPT_Algorithm_Sweep.hpp"
@@ -23,6 +24,10 @@ namespace moris::opt
         if ( tAlgorithmName == "gcmma" )
         {
             return std::make_shared< OptAlgGCMMA >( aAlgorithmParameterList );
+        }
+        else if ( tAlgorithmName == "mma" )
+        {
+            return std::make_shared< Algorithm_MMA >( aAlgorithmParameterList );
         }
         else if ( tAlgorithmName == "sqp" )
         {
