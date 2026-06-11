@@ -58,6 +58,21 @@ namespace moris
         class Workflow_HMR_XTK : public Workflow
         {
           private:
+            /// Flag to track that SDF reinit has triggered NANs and coefficients are pending
+            bool mSDFReinitPending = false;
+            
+            /// Flag to skip SDF reinit on the first iteration after restart
+            bool mSkipNextSDFReinit = false;
+
+            /// Flag to track that the one-time start-of-run SDF initialization has fired
+            bool mSDFInitialized = false;
+
+            /// Flag to permanently disable SDF reinit once it has weaned off (design converged)
+            bool mSDFWeanedOff = false;
+
+            /// Design variables (ADVs) captured at the previous scheduled reinit, used to measure
+            /// the design-variable change between reinits for the wean-off decision
+            Vector< real > mPrevReinitADVs;
 
           public:
             //------------------------------------------------------------------------------
