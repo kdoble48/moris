@@ -28,6 +28,57 @@ namespace moris::opt
 
         // ---------------------------------------------------------------------------------------------------------
 
+        // Native in-tree GCMMA port (cl_OPT_Algorithm_MMA). No TPL dependency, so not guarded by
+        // MORIS_HAVE_GCMMA. Validates the native solver reaches the Rosenbrock minimum like the TPL.
+        SECTION( "MMA native" )
+        {
+            // Set up default parameter lists
+            Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+            Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+
+            tAlgorithmParameterList.set( "norm_drop", 2.5e-5 );
+            tAlgorithmParameterList.set( "asymp_adaptc", 1.1 );
+
+            // Create interface
+            std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                    &initialize_rosenbrock,
+                    &get_criteria_rosenbrock,
+                    &get_dcriteria_dadv_rosenbrock );
+
+            // Create Problem
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &get_constraint_types_rosenbrock,
+                    &compute_objectives_rosenbrock,
+                    &compute_constraints_rosenbrock,
+                    &compute_dobjective_dadv_rosenbrock,
+                    &compute_dobjective_dcriteria_rosenbrock,
+                    &compute_dconstraint_dadv_rosenbrock,
+                    &compute_dconstraint_dcriteria_rosenbrock );
+
+            // Create manager
+            Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+            tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+            Manager tManager( tAlgorithms, tProblem );
+
+            // Solve optimization problem
+            tManager.perform();
+
+            // Check Solution
+            if ( par_rank() == 0 )
+            {
+                REQUIRE( std::abs( tManager.get_objectives()( 0 ) ) < 2E-7 );    // check value of objective
+                Vector< real > tADVs = tManager.get_advs();
+                for ( auto iADV : tADVs )
+                {
+                    REQUIRE( std::abs( iADV - 1.0 ) < 1E-4 );
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
 #ifdef MORIS_HAVE_GCMMA
         SECTION( "GCMMA" )
         {

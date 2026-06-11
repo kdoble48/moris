@@ -42,6 +42,9 @@ OptAlgGCMMA::OptAlgGCMMA( const Parameter_List& aParameterList )
     mRestartIndex         = aParameterList.get< moris::sint >( "restart_index" );
     mMaxIterationsInitial = aParameterList.get< moris::sint >( "max_its" );
     mMaxIterations        = mMaxIterationsInitial;
+    
+    MORIS_LOG_INFO( "GCMMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f",
+            mMaxIterations, mStepSize, mPenalty );
 }
 
 //----------------------------------------------------------------------------------------------------------------------

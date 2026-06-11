@@ -17,6 +17,7 @@ namespace moris::opt
     enum class Optimization_Algorithm_Type
     {
         GCMMA,
+        MMA,
         LBFGS,
         SQP,
         SWEEP
@@ -52,6 +53,38 @@ namespace moris::prm
         // Material phase index for sign determination in interface mode
         // Nodes in this phase get negative SDF (inside), others get positive (outside)
         tParameterList.insert( "sdf_reinit_material_phase", 0 );
+
+        // Phases to exclude from interface facets (comma-separated, e.g., "0" or "0,2")
+        // Use this to exclude external material zones from SDF interface
+        tParameterList.insert( "sdf_exclude_phases", "" );
+
+        // Initialize the design as a signed distance field on the first optimization
+        // iteration (a one-time reinit at iter 1), so the optimizer starts from a true
+        // SDF (|grad phi| = 1) rather than a raw, possibly-clipped level-set field.
+        tParameterList.insert( "sdf_initialize_at_start", false );
+
+        // Wean off the SDF reinitialization once the design has converged. When the relative
+        // design-variable change between successive reinits, ||x_k - x_{k-1}||/||x_{k-1}||,
+        // drops below this tolerance, the optimizer has settled and further reinits only perturb
+        // the converged design -- so reinitialization is disabled for the rest of the run.
+        // 0 = disabled (always reinitialize on schedule).
+        tParameterList.insert( "sdf_reinit_wean_tol", 0.0 );
+
+        // Number of Laplacian smoothing iterations to apply after SDF reinitialization
+        // 0 = disabled (default), 2-5 for aggressive smoothing to remove thin features
+        tParameterList.insert( "sdf_smoothing_iterations", 0 );
+
+        // Laplacian smoothing strength (lambda) per iteration
+        // 0.0-1.0, smaller = lighter smoothing. Default 0.5
+        tParameterList.insert( "sdf_smoothing_lambda", 0.5 );
+
+        // Redistance the level set to a true SDF every iteration, applied in-place without a GCMMA
+        // restart (each per-step correction is tiny, so the optimizer's asymptotes stay valid).
+        // This keeps the field pinned near |grad phi|=1 at all times instead of letting it drift
+        // and collapse between scheduled reinits. When enabled, smoothing is decoupled and applied
+        // only every reinitialization_frequency iterations (on a clean SDF rather than a drifted one).
+        // false (default) = original behavior: redistance + smooth + NaN/restart on the schedule.
+        tParameterList.insert( "sdf_reinit_every_step", false );
 
         return tParameterList;
     }
@@ -101,6 +134,31 @@ namespace moris::prm
         tParameterList.insert( "step_size", 0.01 );       // GCMMA step size
         tParameterList.insert( "penalty", 100.0 );        // GCMMA constraint penalty
         tParameterList.insert( "version", 1 );            // GCMMA version
+
+        return tParameterList;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    inline Parameter_List
+    create_mma_parameter_list()
+    {
+        // Native in-tree GCMMA (cl_OPT_Algorithm_MMA). Same parameters as the TPL-backed "gcmma"
+        // algorithm; only "algorithm" differs so the factory dispatches to the native solver.
+        Parameter_List tParameterList( "MMA" );
+
+        tParameterList.insert( "algorithm", "mma" );      // Algorithm name, don't change
+        tParameterList.insert( "restart_index", 0 );      // Restart iteration index
+        tParameterList.insert( "max_its", 100 );          // Maximum number of iterations
+        tParameterList.insert( "max_inner_its", 0 );      // Maximum inner conservative cycles
+        tParameterList.insert( "norm_drop", 1e-4 );       // KKT relative-residual accuracy
+        tParameterList.insert( "asymp_adapt0", 0.5 );     // Initial asymptote adaptation factor
+        tParameterList.insert( "asymp_adaptb", 0.7 );     // Shrinking asymptote adaptation factor
+        tParameterList.insert( "asymp_adaptc", 1.2 );     // Expanding asymptote adaptation factor
+        tParameterList.insert( "step_size", 0.01 );       // Move-limit step size
+        tParameterList.insert( "penalty", 100.0 );        // Constraint penalty
+        tParameterList.insert( "version", 1 );            // Reserved (2002 solve only)
+        tParameterList.insert( "reinit_in_place", false );// In-place SDF redistance hook each iteration
 
         return tParameterList;
     }
@@ -249,6 +307,8 @@ namespace moris::prm
         {
             case opt::Optimization_Algorithm_Type::GCMMA:
                 return create_gcmma_parameter_list();
+            case opt::Optimization_Algorithm_Type::MMA:
+                return create_mma_parameter_list();
             case opt::Optimization_Algorithm_Type::LBFGS:
                 return create_lbfgs_parameter_list();
             case opt::Optimization_Algorithm_Type::SQP:
