@@ -32,6 +32,17 @@ namespace moris::opt
         Matrix< DDRMat > mObjectiveGradient;           // full gradient of the objectives with respect to the ADVs
         Matrix< DDRMat > mConstraintGradient;          // full gradient of the constraints with respect to the ADVs
 
+        // Gradient fallback: store previous iteration's gradients for explosion detection
+        Matrix< DDRMat > mPrevObjectiveGradient;       // previous iteration objective gradient
+        Matrix< DDRMat > mPrevConstraintGradient;      // previous iteration constraint gradient
+        real mPrevObjGradNorm  = 0.0;                  // previous objective gradient norm
+        real mPrevConGradNorm  = 0.0;                  // previous constraint gradient norm
+        real mPrevObjGradMax   = 0.0;                  // last HEALTHY max |objective gradient entry|
+        real mPrevConGradMax   = 0.0;                  // last HEALTHY max |constraint gradient entry|
+        bool mHasPrevGradients = false;                 // whether previous gradients are valid
+        real mGradExplosionRatio = 1.0e6;              // (legacy) norm ratio threshold, kept for diagnostics
+        real mGradClipFactor     = 20.0;               // clip entries above this x the median nonzero |gradient|
+
         std::string mRestartFile;                      // Restart file
 
         real mADVNormTolerance = 1e-12;                // Tolerance for determining whether ADV vector has changed
