@@ -81,6 +81,17 @@ namespace moris::opt
             return mInitializeOptimizationRestart;
         }
 
+        /**
+         * requests a restart of the optimization (e.g. when an optimization algorithm
+         * produces a non-finite design and needs to be re-initialized from the current
+         * design); the flag is cleared by the workflow on the restart's initialize
+         */
+        void
+        request_restart_optimization()
+        {
+            mInitializeOptimizationRestart = true;
+        }
+
         void
         set_reinitialize_iter( uint aReinitializeIter )
         {

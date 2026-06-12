@@ -14,6 +14,7 @@
 #include "fn_OPT_create_problem.hpp"
 #include "fn_OPT_create_interface.hpp"
 #include "fn_OPT_create_algorithm.hpp"
+#include "cl_Communication_Tools.hpp"
 
 // Logger package
 #include "cl_Logger.hpp"
@@ -89,7 +90,13 @@ namespace moris::opt
             uint aI,
             uint aOptIteration )
     {
-        if ( mProblem->restart_optimization() )
+        // The restart request can originate on processor 0 only (the optimization algorithm's
+        // solve loop -- e.g. the non-finite-iterate guards -- runs on rank 0 while the other
+        // ranks are in dummy_solve), but Problem::initialize() below is collective. Synchronize
+        // the decision so all processors take the same branch; one-sided entry deadlocks.
+        bool tRestart = all_lor( mProblem->restart_optimization() );
+
+        if ( tRestart )
         {
             mAlgorithms( aI )->set_restart_index( aOptIteration - 1 );
 

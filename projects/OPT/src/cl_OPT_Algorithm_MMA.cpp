@@ -88,6 +88,29 @@ namespace moris::opt
     void
     Algorithm_MMA::func( double* aX, real& aF0, std::vector< double >& aF )
     {
+        // Guard: the subproblem can overflow on a degenerate evaluation (huge objective/
+        // gradient jump from a near-degenerate XFEM cut) and produce a non-finite trial
+        // design. Evaluating it would compute garbage criteria and trip the gradient-
+        // consistency assert. Request an optimizer restart instead (the solve loop checks
+        // the flag after every func call and exits; the Manager then re-initializes from
+        // the current design) and return the last evaluated objective and constraints.
+        for ( int i = 0; i < mNumVar; ++i )
+        {
+            if ( !std::isfinite( aX[ i ] ) )
+            {
+                MORIS_LOG_WARNING( "Native MMA produced a non-finite design vector; requesting optimizer restart." );
+
+                mProblem->request_restart();
+
+                aF0 = this->get_objectives()( 0 );
+
+                const Matrix< DDRMat >& tLastCon = this->get_constraints();
+                for ( int j = 0; j < mNumCon; ++j ) aF[ j ] = tLastCon( j );
+
+                return;
+            }
+        }
+
         Vector< real > tADVs( mNumVar );
         for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = aX[ i ];
 
@@ -844,6 +867,19 @@ namespace moris::opt
 
         // initial evaluation
         this->func( xval.data(), f0val, fval );
+
+        // The workflow can request an optimization restart during a criteria evaluation
+        // (adaptive remeshing or a scheduled reinitialization invalidates the current ADV
+        // vector). Mirror the TPL GCMMA wrapper: exit the solve loop immediately so the
+        // Manager re-initializes the problem (fresh mesh + ADVs) and re-enters solve.
+        // Backtracking instead would iterate on a stale design AND on frozen sensitivities
+        // (the pending-restart flag makes the criteria interface return cached gradients).
+        if ( mProblem->restart_optimization() )
+        {
+            MORIS_LOG_INFO( "Native MMA: optimization restart requested during initial evaluation; exiting solve loop." );
+            return istop;
+        }
+
         this->grad( xval.data() );
         nfunc++; nsens++;
 
@@ -882,6 +918,14 @@ namespace moris::opt
             this->func( xmma.data(), f0valnew, fvalnew );
             nfunc++;
 
+            // restart takes precedence over the NaN backtrack: the workflow has invalidated
+            // the current design/mesh and the Manager must re-initialize the problem
+            if ( mProblem->restart_optimization() )
+            {
+                MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested; exiting solve loop.", (int)iter );
+                return istop;
+            }
+
             // NaN guard: a non-finite trial criterion means the forward evaluation failed -- almost
             // always an XTK decomposition failure where the moving interface's cut spans two HMR
             // refinement levels ("not all child meshes on the same level"), which poisons every IQI
@@ -901,6 +945,12 @@ namespace moris::opt
                 this->gcmmasub( iter );
                 this->func( xmma.data(), f0valnew, fvalnew );
                 nfunc++;
+
+                if ( mProblem->restart_optimization() )
+                {
+                    MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during backtrack; exiting solve loop.", (int)iter );
+                    return istop;
+                }
             }
             if ( !this->criteria_finite() )
             {
@@ -928,6 +978,12 @@ namespace moris::opt
                     this->gcmmasub( iter );
                     this->func( xmma.data(), f0valnew, fvalnew );
                     nfunc++;
+
+                    if ( mProblem->restart_optimization() )
+                    {
+                        MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during inner iteration; exiting solve loop.", (int)iter );
+                        return istop;
+                    }
 
                     conserv = 1;
                     if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
