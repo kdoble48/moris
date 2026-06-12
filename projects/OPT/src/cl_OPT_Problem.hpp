@@ -159,6 +159,15 @@ namespace moris::opt
         }
 
         /**
+         * request a restart of the optimization (re-initializes the problem from the
+         * current design); used by algorithms to recover from non-finite iterates
+         */
+        void request_restart()
+        {
+            mInterface->request_restart_optimization();
+        }
+
+        /**
          * Checks that the constraints are given in the correct order (equality constraints first)
          *
          * @return bool, if order is correct

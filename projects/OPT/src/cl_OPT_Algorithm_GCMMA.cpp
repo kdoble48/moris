@@ -19,6 +19,9 @@
 #ifdef MORIS_HAVE_GCMMA
 #include "optalggcmmacall.hpp"
 #include "mma.hpp"
+
+#include <algorithm>
+#include <cmath>
 #endif
 
 using namespace moris;
@@ -192,6 +195,32 @@ opt_alg_gcmma_func_wrap(
         double&      aObjval,
         double*      aConval )
 {
+    // Guard: the TPL solver's internal asymptote arithmetic can overflow on degenerate
+    // evaluations (huge objective/gradient jumps from near-degenerate XFEM cuts) and hand
+    // back non-finite ADVs. Evaluating those would compute garbage criteria and trip the
+    // gradient-consistency assert. Route into the existing optimizer-restart mechanism
+    // instead: the problem re-initializes from the current design and the solve resumes.
+    for ( uint iADVIndex = 0; iADVIndex < aOptAlgGCMMA->mProblem->get_num_advs(); iADVIndex++ )
+    {
+        if ( !std::isfinite( aAdv[ iADVIndex ] ) )
+        {
+            MORIS_LOG_WARNING( "GCMMA produced a non-finite design vector; requesting optimizer restart." );
+
+            aOptAlgGCMMA->mProblem->request_restart();
+
+            // signal the TPL solver to exit its iteration loop
+            aIter = -aIter;
+
+            // return the last evaluated (finite) objective and constraints
+            aObjval = aOptAlgGCMMA->get_objectives()( 0 );
+
+            auto tLastConval = aOptAlgGCMMA->get_constraints().data();
+            std::copy( tLastConval, tLastConval + aOptAlgGCMMA->mProblem->get_num_constraints(), aConval );
+
+            return;
+        }
+    }
+
     // Update the ADV matrix
     Vector< real > tADVs( aOptAlgGCMMA->mProblem->get_num_advs() );
     for ( uint iADVIndex = 0; iADVIndex < tADVs.size(); iADVIndex++ )
@@ -229,6 +258,24 @@ opt_alg_gcmma_grad_wrap(
         double**     aD_Con,
         int*         aActive )
 {
+    // Guard: companion to the func_wrap non-finite-ADV guard. A restart is already
+    // pending, so return zero gradients (the TPL solver exits before using them)
+    // instead of tripping the ADV-consistency assert in the problem.
+    for ( uint iADVIndex = 0; iADVIndex < aOptAlgGCMMA->mProblem->get_num_advs(); iADVIndex++ )
+    {
+        if ( !std::isfinite( aAdv[ iADVIndex ] ) )
+        {
+            std::fill( aD_Obj, aD_Obj + aOptAlgGCMMA->mProblem->get_num_advs(), 0.0 );
+
+            for ( moris::uint i = 0; i < aOptAlgGCMMA->mProblem->get_num_constraints(); ++i )
+            {
+                std::fill( aD_Con[ i ], aD_Con[ i ] + aOptAlgGCMMA->mProblem->get_num_advs(), 0.0 );
+            }
+
+            return;
+        }
+    }
+
     // Update the vector of active constraints flag
     aOptAlgGCMMA->mActive = Matrix< DDSMat >( *aActive, aOptAlgGCMMA->mProblem->get_num_constraints(), 1 );
 

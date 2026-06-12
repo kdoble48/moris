@@ -73,6 +73,24 @@ namespace moris::opt
         // Log number of optimization variables
         MORIS_LOG_SPEC( "Number of optimization variables", mADVs.size() );
 
+        // Diagnostic: non-finite entries handed back by the interface poison the optimizer
+        // (NaN ADVs make every downstream consistency check fail). Detect them at the source.
+        if ( par_rank() == 0 )
+        {
+            uint tNanADVs    = 0;
+            uint tNanBounds  = 0;
+            for ( uint iADV = 0; iADV < mADVs.size(); iADV++ )
+            {
+                if ( !std::isfinite( mADVs( iADV ) ) ) tNanADVs++;
+                if ( !std::isfinite( mLowerBounds( iADV ) ) || !std::isfinite( mUpperBounds( iADV ) ) ) tNanBounds++;
+            }
+            if ( tNanADVs > 0 || tNanBounds > 0 )
+            {
+                MORIS_LOG_WARNING( "Problem::initialize - non-finite entries after interface initialize: %u ADVs, %u bounds (of %zu).",
+                        tNanADVs, tNanBounds, mADVs.size() );
+            }
+        }
+
         MORIS_ERROR( mADVs.size() == mLowerBounds.size() and mADVs.size() == mUpperBounds.size(),
                 "ADVs and its lower and upper bound vectors need to have same length.\n" );
 
