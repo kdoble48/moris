@@ -42,6 +42,12 @@ namespace moris::opt
 
         // Parameters: restart file name
         mRestartFile = aParameterList.get< std::string >( "restart_file" );
+
+        // Parameters: gradient-explosion clip factor; <= 0 disables the clip
+        if ( aParameterList.exists( "grad_clip_factor" ) )
+        {
+            mGradClipFactor = aParameterList.get< real >( "grad_clip_factor" );
+        }
     }
 
     // -------------------------------------------------------------------------------------------------------------
@@ -271,7 +277,7 @@ namespace moris::opt
 
             bool tGradClipped = false;
 
-            // ----- Self-calibrating gradient-explosion clip (every iteration) -----
+            // ----- Self-calibrating gradient-explosion clip (opt-in via grad_clip_factor) -----
             // Small XFEM cut cells make a few dIQI/dADV entries explode by many orders of magnitude
             // (dIQI/dPDV ~ 1/cell_volume as the interface nears a background node). The design
             // gradient is bimodal: most B-spline coeffs are EXACTLY 0 (inactive, no interface in
@@ -282,65 +288,70 @@ namespace moris::opt
             // which is why a relative-jump test (ratio > threshold) never fired and the raw 1e8
             // gradient froze the design; and (b) immune to the inactive-zero floor that made a
             // P90-of-ALL-entries reference collapse to ~0 and crush the whole active gradient.
-            auto tActiveScale = []( const Matrix< DDRMat >& aGrad ) -> real {
-                std::vector< real > tNz;
-                tNz.reserve( aGrad.n_rows() * aGrad.n_cols() );
-                for ( uint ii = 0; ii < aGrad.n_rows(); ++ii )
-                    for ( uint jj = 0; jj < aGrad.n_cols(); ++jj )
-                    {
-                        real tv = std::abs( aGrad( ii, jj ) );
-                        if ( tv > 0.0 ) tNz.push_back( tv );
-                    }
-                if ( tNz.empty() ) return 0.0;
-                uint tMid = tNz.size() / 2;
-                std::nth_element( tNz.begin(), tNz.begin() + tMid, tNz.end() );
-                return tNz[ tMid ];
-            };
-
-            real tObjClipVal = mGradClipFactor * tActiveScale( mObjectiveGradient );
-            real tConClipVal = mGradClipFactor * tActiveScale( mConstraintGradient );
-
-            // degenerate (all-zero) gradient: disable clipping for it
-            if ( !( tObjClipVal > 0.0 ) ) tObjClipVal = 1.0e30;
-            if ( !( tConClipVal > 0.0 ) ) tConClipVal = 1.0e30;
-
-            uint tObjClipCount = 0;
-            uint tConClipCount = 0;
-
-            for ( uint j = 0; j < mADVs.size(); j++ )
+            // The cap also flattens legitimately large sensitivities, so the clip is disabled
+            // unless explicitly requested (grad_clip_factor > 0).
+            if ( mGradClipFactor > 0.0 )
             {
-                for ( uint i = 0; i < mObjectiveGradient.n_rows(); i++ )
+                auto tActiveScale = []( const Matrix< DDRMat >& aGrad ) -> real {
+                    std::vector< real > tNz;
+                    tNz.reserve( aGrad.n_rows() * aGrad.n_cols() );
+                    for ( uint ii = 0; ii < aGrad.n_rows(); ++ii )
+                        for ( uint jj = 0; jj < aGrad.n_cols(); ++jj )
+                        {
+                            real tv = std::abs( aGrad( ii, jj ) );
+                            if ( tv > 0.0 ) tNz.push_back( tv );
+                        }
+                    if ( tNz.empty() ) return 0.0;
+                    uint tMid = tNz.size() / 2;
+                    std::nth_element( tNz.begin(), tNz.begin() + tMid, tNz.end() );
+                    return tNz[ tMid ];
+                };
+
+                real tObjClipVal = mGradClipFactor * tActiveScale( mObjectiveGradient );
+                real tConClipVal = mGradClipFactor * tActiveScale( mConstraintGradient );
+
+                // degenerate (all-zero) gradient: disable clipping for it
+                if ( !( tObjClipVal > 0.0 ) ) tObjClipVal = 1.0e30;
+                if ( !( tConClipVal > 0.0 ) ) tConClipVal = 1.0e30;
+
+                uint tObjClipCount = 0;
+                uint tConClipCount = 0;
+
+                for ( uint j = 0; j < mADVs.size(); j++ )
                 {
-                    if ( std::abs( mObjectiveGradient( i, j ) ) > tObjClipVal )
+                    for ( uint i = 0; i < mObjectiveGradient.n_rows(); i++ )
                     {
-                        real tSign                  = ( mObjectiveGradient( i, j ) > 0.0 ) ? 1.0 : -1.0;
-                        mObjectiveGradient( i, j )  = tSign * tObjClipVal;
-                        tObjClipCount++;
+                        if ( std::abs( mObjectiveGradient( i, j ) ) > tObjClipVal )
+                        {
+                            real tSign                  = ( mObjectiveGradient( i, j ) > 0.0 ) ? 1.0 : -1.0;
+                            mObjectiveGradient( i, j )  = tSign * tObjClipVal;
+                            tObjClipCount++;
+                        }
+                    }
+                    for ( uint i = 0; i < mConstraintGradient.n_rows(); i++ )
+                    {
+                        if ( std::abs( mConstraintGradient( i, j ) ) > tConClipVal )
+                        {
+                            real tSign                  = ( mConstraintGradient( i, j ) > 0.0 ) ? 1.0 : -1.0;
+                            mConstraintGradient( i, j ) = tSign * tConClipVal;
+                            tConClipCount++;
+                        }
                     }
                 }
-                for ( uint i = 0; i < mConstraintGradient.n_rows(); i++ )
+
+                tGradClipped = ( tObjClipCount + tConClipCount ) > 0;
+
+                if ( tGradClipped )
                 {
-                    if ( std::abs( mConstraintGradient( i, j ) ) > tConClipVal )
-                    {
-                        real tSign                  = ( mConstraintGradient( i, j ) > 0.0 ) ? 1.0 : -1.0;
-                        mConstraintGradient( i, j ) = tSign * tConClipVal;
-                        tConClipCount++;
-                    }
+                    MORIS_LOG_WARNING(
+                            "Gradient clip: %u obj + %u con entries clipped (clip_val = %.4e / %.4e, "
+                            "raw obj_norm = %.4e).",
+                            tObjClipCount,
+                            tConClipCount,
+                            tObjClipVal,
+                            tConClipVal,
+                            tObjGradNorm );
                 }
-            }
-
-            tGradClipped = ( tObjClipCount + tConClipCount ) > 0;
-
-            if ( tGradClipped )
-            {
-                MORIS_LOG_WARNING(
-                        "Gradient clip: %u obj + %u con entries clipped (clip_val = %.4e / %.4e, "
-                        "raw obj_norm = %.4e).",
-                        tObjClipCount,
-                        tConClipCount,
-                        tObjClipVal,
-                        tConClipVal,
-                        tObjGradNorm );
             }
 
             // ----- Gradient diagnostics logging -----

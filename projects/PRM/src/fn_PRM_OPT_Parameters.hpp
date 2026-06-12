@@ -86,6 +86,14 @@ namespace moris::prm
         // false (default) = original behavior: redistance + smooth + NaN/restart on the schedule.
         tParameterList.insert( "sdf_reinit_every_step", false );
 
+        // Gradient-explosion clip: cap each objective/constraint gradient entry at
+        // grad_clip_factor x the median of the nonzero |entries| (the active-sensitivity
+        // scale). Intended as a recovery tool for ill-conditioned designs where small XFEM
+        // cut cells make a few dIQI/dADV entries explode (~1/cell_volume). Note that it
+        // also caps legitimately large sensitivities, which can bias the descent direction.
+        // <= 0 (default) = disabled, the raw gradient is passed to the optimizer.
+        tParameterList.insert( "grad_clip_factor", 0.0 );
+
         return tParameterList;
     }
 
