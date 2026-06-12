@@ -23,6 +23,80 @@
 
 namespace moris::opt
 {
+    // ---------------------------------------------------------------------------------------------------------
+    // Bimodal test problem for the gradient-explosion clip: one exploding sensitivity (1e8),
+    // three healthy entries (~0.01), one exactly-zero (inactive) entry -- the structure of a
+    // level-set design gradient with a small-cut-cell explosion.
+
+    namespace bimodal
+    {
+        void initialize(
+                Vector< real >& aADVs,
+                Vector< real >& aLowerBounds,
+                Vector< real >& aUpperBounds )
+        {
+            if ( par_rank() == 0 )
+            {
+                aADVs        = { 0.5, 0.5, 0.5, 0.5, 0.5 };
+                aLowerBounds = { 0.0, 0.0, 0.0, 0.0, 0.0 };
+                aUpperBounds = { 1.0, 1.0, 1.0, 1.0, 1.0 };
+            }
+        }
+
+        Vector< real > get_criteria( const Vector< real >& aADVs )
+        {
+            if ( par_rank() == 0 )
+            {
+                return { 1.0 };
+            }
+            return { {} };
+        }
+
+        Matrix< DDRMat > get_dcriteria_dadv( const Vector< real >& aADVs )
+        {
+            if ( par_rank() == 0 )
+            {
+                return { { 1.0e8, 0.01, 0.012, 0.008, 0.0 } };
+            }
+            return { {} };
+        }
+
+        Matrix< DDSMat > get_constraint_types()
+        {
+            return { { 1 } };
+        }
+
+        Matrix< DDRMat > compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { aCriteria( 0 ) } };
+        }
+
+        Matrix< DDRMat > compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 0.0 } };
+        }
+
+        Matrix< DDRMat > compute_dobjective_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, 5, 0.0 );
+        }
+
+        Matrix< DDRMat > compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 1.0 } };
+        }
+
+        Matrix< DDRMat > compute_dconstraint_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, 5, 0.0 );
+        }
+
+        Matrix< DDRMat > compute_dconstraint_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 0.0 } };
+        }
+    }    // namespace bimodal
+
     TEST_CASE( "[optimization]" )
     {
 
@@ -73,6 +147,68 @@ namespace moris::opt
                 for ( auto iADV : tADVs )
                 {
                     REQUIRE( std::abs( iADV - 1.0 ) < 1E-4 );
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
+        // Gradient clip gate: off by default (raw gradient passes through untouched), and when
+        // enabled via "grad_clip_factor" the exploding entry is capped at factor x the median of
+        // the nonzero |entries| while healthy and zero entries are left alone.
+        SECTION( "Gradient clip gate" )
+        {
+            for ( bool tClipOn : { false, true } )
+            {
+                Parameter_List tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+
+                if ( tClipOn )
+                {
+                    tProblemParameterList.set( "grad_clip_factor", 20.0 );
+                }
+
+                std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                        &bimodal::initialize,
+                        &bimodal::get_criteria,
+                        &bimodal::get_dcriteria_dadv );
+
+                std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                        tProblemParameterList,
+                        tInterface,
+                        &bimodal::get_constraint_types,
+                        &bimodal::compute_objectives,
+                        &bimodal::compute_constraints,
+                        &bimodal::compute_dobjective_dadv,
+                        &bimodal::compute_dobjective_dcriteria,
+                        &bimodal::compute_dconstraint_dadv,
+                        &bimodal::compute_dconstraint_dcriteria );
+
+                tProblem->initialize();
+
+                Vector< real > tADVs = tProblem->get_advs();
+                tProblem->compute_design_criteria( tADVs );
+                tProblem->compute_design_criteria_gradients( tADVs );
+
+                if ( par_rank() == 0 )
+                {
+                    const Matrix< DDRMat >& tObjGrad = tProblem->get_objective_gradients();
+
+                    if ( tClipOn )
+                    {
+                        // median of nonzero |entries| {1e8, 0.01, 0.012, 0.008} is 0.012 -> clip at 20 x 0.012
+                        REQUIRE( tObjGrad( 0, 0 ) == Approx( 20.0 * 0.012 ) );
+                    }
+                    else
+                    {
+                        // clip disabled: exploding entry passes through untouched
+                        REQUIRE( tObjGrad( 0, 0 ) == Approx( 1.0e8 ) );
+                    }
+
+                    // healthy and inactive entries are never modified
+                    REQUIRE( tObjGrad( 0, 1 ) == Approx( 0.01 ) );
+                    REQUIRE( tObjGrad( 0, 2 ) == Approx( 0.012 ) );
+                    REQUIRE( tObjGrad( 0, 3 ) == Approx( 0.008 ) );
+                    REQUIRE( tObjGrad( 0, 4 ) == 0.0 );
                 }
             }
         }

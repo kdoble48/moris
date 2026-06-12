@@ -41,7 +41,7 @@ namespace moris::opt
         real mPrevConGradMax   = 0.0;                  // last HEALTHY max |constraint gradient entry|
         bool mHasPrevGradients = false;                 // whether previous gradients are valid
         real mGradExplosionRatio = 1.0e6;              // (legacy) norm ratio threshold, kept for diagnostics
-        real mGradClipFactor     = 20.0;               // clip entries above this x the median nonzero |gradient|
+        real mGradClipFactor     = 0.0;                // clip entries above this x the median nonzero |gradient|; <= 0 = off (set via "grad_clip_factor")
 
         std::string mRestartFile;                      // Restart file
 
