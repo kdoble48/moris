@@ -111,21 +111,27 @@ namespace moris
             // get path to moris executable
             const std::string& tExec = gMorisComm.get_exec_path();
 
-            // get app path
-            std::string tApps = getenv( "APPS" );
-
-            MORIS_ERROR( tApps.size() > 0,
-                    "Environment variable APPS not set." );
+            // locate the pprof tool: prefer $APPS/gperftools/bin/pprof, otherwise fall
+            // back to "google-pprof" (the name used by the system gperftools package)
+            const char* tAppsEnv = getenv( "APPS" );
+            std::string tPprof   = ( tAppsEnv != nullptr && std::string( tAppsEnv ).size() > 0 )
+                                         ? std::string( tAppsEnv ) + "/gperftools/bin/pprof"
+                                         : "google-pprof";
 
             // assemble command line
-            std::string tCommand = tApps + "/gperftools/bin/pprof --callgrind "
+            std::string tCommand = tPprof + " --callgrind "
                                  + tExec + " " + mLogFile + " > " + mCallgrindFile;
 
             // fixme: replace this line with moris logger
             std::cout << "Creating callgrind file " << mCallgrindFile << " ..." << std::endl;
 
             // convert logfile to callgrind
-            system( tCommand.c_str() );
+            int tSysRet = system( tCommand.c_str() );
+            if ( tSysRet != 0 )
+            {
+                std::cerr << "MORIS Profiler: callgrind conversion failed (exit "
+                          << tSysRet << "). Command: " << tCommand << std::endl;
+            }
 
             // fixme: replace this line with moris logger
             std::cout << "... Stopped MORIS Profiler" << std::endl;

@@ -42,6 +42,13 @@ namespace moris::prm
         tParameterList.insert( "finite_difference_epsilons", "1E-8" );    // Epsilon(s) to use per ADV for finite differencing
         tParameterList.insert( "library", "" );                           // Path to a shared object file for user-defined functions
 
+        // Consolidated end-of-run performance report (per-module wall time + memory).
+        // Granularity level: 0 = run total only, 1 = top-level modules, 2 = modules +
+        // nested sub-regions, 3 = full nested tracer tree. < 0 disables the report.
+        // Overridable at run time by the MORIS_PERF_LEVEL env var or the --perf-level CLI flag.
+        tParameterList.insert( "performance_report_level", 1 );
+        tParameterList.insert( "performance_report_file", "perf_report.json" );    // JSON report path (rank 0)
+
         tParameterList.insert( "reinitialize_interface_iter", INT_MAX );          // number of iterations until the interface will be reinitialized
         tParameterList.insert( "first_reinitialize_interface_iter", INT_MAX );    // number of iterations until the interface will be reinitialized
 

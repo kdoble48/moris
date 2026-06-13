@@ -58,6 +58,9 @@ namespace moris
         // list of starting times for each active entity
         std::vector< real > mTimeStamps;
 
+        // list of memory usage (MB) sampled when each active entity signed in
+        std::vector< real > mMemoryStamps;
+
         // list of maps for action data for each active entry
         std::vector< std::unordered_map< std::string, real > > mActionData;
 
@@ -87,11 +90,14 @@ namespace moris
          * @param aEntityBase Entity base
          * @param aEntityType Entity type
          * @param aEntityAction Entity action
+         * @param aMemoryNowMb Current process memory usage [MB] (supplied by the
+         *                     Logger, which owns the memory sampler)
          */
         void sign_in(
                 const std::string& aEntityBase,
                 const std::string& aEntityType,
-                const std::string& aEntityAction );
+                const std::string& aEntityAction,
+                real               aMemoryNowMb = 0.0 );
 
         // --------------------------------------------------------------------------------
         // operation to stop tracing an entity, decrement all lists
