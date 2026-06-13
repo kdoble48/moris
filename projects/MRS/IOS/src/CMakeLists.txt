@@ -34,6 +34,7 @@ set(HEADERS
         ios.hpp
         Log_Constants.hpp
         cl_Json_Object.hpp
+        cl_Performance_Reporter.hpp
 )
 
 # List library source files
@@ -54,6 +55,7 @@ set(LIB_SOURCES
         cl_Ascii.cpp
         fn_Parsing_Tools.cpp
         cl_Json_Object.cpp
+        cl_Performance_Reporter.cpp
 )
 
 

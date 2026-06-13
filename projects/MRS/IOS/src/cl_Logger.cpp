@@ -35,6 +35,11 @@
 #include "Log_Constants.hpp"
 #include "cl_Git_info.hpp"
 #include "cl_Communication_Tools.hpp"
+#include "cl_Performance_Reporter.hpp"
+
+#ifdef WITHGPERFTOOLS
+#include <gperftools/malloc_extension.h>
+#endif
 
 namespace moris
 {
@@ -129,8 +134,14 @@ namespace moris
             const std::string& aEntityType,
             const std::string& aEntityAction )
     {
+        // sample current memory usage and feed the global clock + performance reporter
+        real tMemoryNowMb = this->current_memory_mb();
+
         // pass save info to clock
-        mGlobalClock.sign_in( aEntityBase, aEntityType, aEntityAction );
+        mGlobalClock.sign_in( aEntityBase, aEntityType, aEntityAction, tMemoryNowMb );
+
+        // track run-level peak memory
+        gPerfReporter.update_peak_rss( tMemoryNowMb );
 
         // log to file
         if ( mWriteToAscii )
@@ -296,6 +307,34 @@ namespace moris
             }    // end if: sufficient output severity
 
         }    // end if: current proc is output rank
+
+        // feed the consolidated performance reporter before the clock pops this entity
+        if ( gPerfReporter.is_enabled() )
+        {
+            const uint tLevel = mGlobalClock.mIndentationLevel;
+
+            // prefer wall time for the per-module report; fall back to CPU time
+            real tRegionTime = tElapsedTime;
+            if ( PRINT_WALL_TIME )
+            {
+                std::chrono::duration< double > tRegionWall =
+                        ( std::chrono::system_clock::now() - mGlobalClock.mWallTimeStamps[ tLevel ] );
+                tRegionTime = tRegionWall.count();
+            }
+
+            real tMemoryNowMb = this->current_memory_mb();
+            real tMemoryDelta = tMemoryNowMb - mGlobalClock.mMemoryStamps[ tLevel ];
+
+            gPerfReporter.record_region(
+                    mGlobalClock.mCurrentEntity[ tLevel ],
+                    mGlobalClock.mCurrentType[ tLevel ],
+                    mGlobalClock.mCurrentAction[ tLevel ],
+                    tLevel,
+                    tRegionTime,
+                    tMemoryDelta );
+
+            gPerfReporter.update_peak_rss( tMemoryNowMb );
+        }
 
         // decrement clock
         mGlobalClock.sign_out();
@@ -810,5 +849,28 @@ namespace moris
                      " | min " + std::to_string( tMinUsage );
 
         return tMemUsage;
+    }
+
+    // -----------------------------------------------------------------------------
+
+    // current process memory usage [MB] as a number
+    real
+    Logger::current_memory_mb()
+    {
+#ifdef WITHGPERFTOOLS
+        // heap bytes currently handed out by tcmalloc (the active allocator)
+        size_t tBytes = 0;
+        if ( MallocExtension::instance()->GetNumericProperty( "generic.current_allocated_bytes", &tBytes ) )
+        {
+            return tBytes / 1024.0 / 1024.0;
+        }
+#endif
+        // fallback: physical resident set size from /proc (same source as memory_usage())
+        std::ifstream statm( "/proc/self/statm" );
+        unsigned long vmem_size = 0;
+        unsigned long phys_size = 0;
+        statm >> vmem_size >> phys_size;
+
+        return phys_size * (size_t)sysconf( _SC_PAGESIZE ) / 1024.0 / 1024.0;
     }
 }    // end namespace moris
