@@ -102,7 +102,7 @@ namespace moris::opt
 
                 mProblem->request_restart();
 
-                aF0 = this->get_objectives()( 0 );
+                aF0 = mObjScale * this->get_objectives()( 0 );
 
                 const Matrix< DDRMat >& tLastCon = this->get_constraints();
                 for ( int j = 0; j < mNumCon; ++j ) aF[ j ] = tLastCon( j );
@@ -116,7 +116,7 @@ namespace moris::opt
 
         this->compute_design_criteria( tADVs );
 
-        aF0 = this->get_objectives()( 0 );
+        aF0 = mObjScale * this->get_objectives()( 0 );
 
         const Matrix< DDRMat >& tCon = this->get_constraints();
         for ( int j = 0; j < mNumCon; ++j ) aF[ j ] = tCon( j );
@@ -147,7 +147,28 @@ namespace moris::opt
         const Matrix< DDRMat >& tObjGrad = this->get_objective_gradients();      // 1 x numvar
         const Matrix< DDRMat >& tConGrad = this->get_constraint_gradients();     // numcon x numvar
 
-        for ( int i = 0; i < mNumVar; ++i ) df0dx[ i ] = tObjGrad( 0, i );
+        // Uniform objective scaling: engage only above the pathology threshold, quantized to
+        // decades, and re-book the stored objective value (currently in the previous scale)
+        // so the whole outer iteration is consistent in the new scale.
+        real tRawMax = 0.0;
+        for ( int i = 0; i < mNumVar; ++i ) tRawMax = mx( tRawMax, std::abs( tObjGrad( 0, i ) ) );
+
+        real tNewScale = 1.0;
+        if ( tRawMax > sObjGradEngage )
+        {
+            // smallest power of ten that brings tRawMax at or below the target
+            tNewScale = std::pow( 10.0, -std::ceil( std::log10( tRawMax / sObjGradTarget ) ) );
+        }
+
+        if ( tNewScale != mObjScale )
+        {
+            MORIS_LOG_INFO( "Native MMA: objective scale -> %.1e (raw max|df0dx| = %.4e).",
+                    tNewScale, tRawMax );
+            f0val    *= tNewScale / mObjScale;
+            mObjScale = tNewScale;
+        }
+
+        for ( int i = 0; i < mNumVar; ++i ) df0dx[ i ] = mObjScale * tObjGrad( 0, i );
         for ( int j = 0; j < mNumCon; ++j )
             for ( int i = 0; i < mNumVar; ++i ) dfdx[ j ][ i ] = tConGrad( j, i );
     }
@@ -848,6 +869,9 @@ namespace moris::opt
     Algorithm_MMA::mma_solve()
     {
         this->mma_initialize();
+
+        // fresh solve (possibly after a restart): objective scale re-derives from the first grad()
+        mObjScale = 1.0;
 
         int iter  = 0;
         int istop = 0;
