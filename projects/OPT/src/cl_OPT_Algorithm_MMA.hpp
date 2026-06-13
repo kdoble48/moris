@@ -86,6 +86,20 @@ namespace moris::opt
         // ---- NaN guard ----
         real mMoveScale = 1.0;      ///< move-limit multiplier; shrunk while backtracking off a bad step
 
+        // ---- objective scaling (degenerate-evaluation safeguard) ----
+        // GCMMA assumes an O(1-100) objective (Svanberg's own scaling recommendation). Degenerate
+        // XFEM cuts can hand back gradients of 1e10+, which overflow the subproblem's interior-point
+        // arithmetic into NaN iterates. When max|df0dx| exceeds the target, the objective and its
+        // gradient are scaled UNIFORMLY for the current outer iteration -- this preserves the descent
+        // direction exactly (unlike per-entry clipping, which distorts it) and returns the subproblem
+        // to its proven operating range. The stored objective value is re-booked at each grad() call
+        // so all quantities within an outer iteration share one consistent scale.
+        real mObjScale             = 1.0;      ///< current uniform objective scale (1 = unscaled)
+        static constexpr real sObjGradEngage = 1.0e9;    ///< scale only above this -- the solver demonstrably
+                                                         ///< handles 1e8 raw and overflows ~1e10; engaging in
+                                                         ///< proven regimes needlessly perturbs the trajectory
+        static constexpr real sObjGradTarget = 1.0e8;    ///< decade-quantized scale brings max into (1e7, 1e8]
+
         /** true if the current trial criteria (f0valnew, fvalnew) are all finite */
         bool criteria_finite() const;
 

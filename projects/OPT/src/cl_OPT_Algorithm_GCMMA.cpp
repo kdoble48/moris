@@ -69,6 +69,9 @@ OptAlgGCMMA::solve(
     // running status has to be wait when starting a solve
     mRunning = opt::Task::wait;
 
+    // fresh solve (possibly after a restart): objective scale re-derives from the first gradient
+    mObjScale = 1.0;
+
     mCurrentOptAlgInd = aCurrentOptAlgInd;    // set index of current optimization algorithm
     mProblem          = aOptProb;             // set the member variable mProblem to aOptProb
 
@@ -234,8 +237,8 @@ opt_alg_gcmma_func_wrap(
     // Update for objectives and constraints
     aOptAlgGCMMA->compute_design_criteria( tADVs );
 
-    // Convert outputs from type MORIS
-    aObjval = aOptAlgGCMMA->get_objectives()( 0 );
+    // Convert outputs from type MORIS (objective in the solver's current uniform scale)
+    aObjval = aOptAlgGCMMA->mObjScale * aOptAlgGCMMA->get_objectives()( 0 );
 
     // Update the pointer of constraints
     auto tConval = aOptAlgGCMMA->get_constraints().data();
@@ -292,7 +295,35 @@ opt_alg_gcmma_grad_wrap(
     // copy objective gradient
     auto tD_Obj = aOptAlgGCMMA->get_objective_gradients().data();
 
-    std::copy( tD_Obj, tD_Obj + aOptAlgGCMMA->mProblem->get_num_advs(), aD_Obj );
+    // Uniform objective scaling: engage only above the pathology threshold and quantize the
+    // scale to decades (see header). Preserves the descent direction exactly; keeps the TPL
+    // subproblem inside its proven operating range while leaving healthy regimes untouched.
+    {
+        moris::real tRawMax = 0.0;
+        for ( moris::uint i = 0; i < aOptAlgGCMMA->mProblem->get_num_advs(); ++i )
+        {
+            tRawMax = std::max( tRawMax, std::abs( tD_Obj[ i ] ) );
+        }
+
+        moris::real tNewScale = 1.0;
+        if ( tRawMax > OptAlgGCMMA::sObjGradEngage )
+        {
+            // smallest power of ten that brings tRawMax at or below the target
+            tNewScale = std::pow( 10.0, -std::ceil( std::log10( tRawMax / OptAlgGCMMA::sObjGradTarget ) ) );
+        }
+
+        if ( tNewScale != aOptAlgGCMMA->mObjScale )
+        {
+            MORIS_LOG_INFO( "GCMMA: objective scale -> %.1e (raw max|dObj/dADV| = %.4e).",
+                    tNewScale, tRawMax );
+        }
+        aOptAlgGCMMA->mObjScale = tNewScale;
+    }
+
+    for ( moris::uint i = 0; i < aOptAlgGCMMA->mProblem->get_num_advs(); ++i )
+    {
+        aD_Obj[ i ] = aOptAlgGCMMA->mObjScale * tD_Obj[ i ];
+    }
 
     // Get the constraint gradient as a MORIS Matrix
     Matrix< DDRMat > tD_Con = aOptAlgGCMMA->get_constraint_gradients();

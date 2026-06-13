@@ -34,6 +34,19 @@ private:
     moris::real mPenalty;             // GCMMA constraint penalty
     moris::sint mIvers;               // GCMMA version
 
+    // Uniform objective scaling (degenerate-evaluation safeguard): the TPL solver's internal
+    // arithmetic overflows to NaN when degenerate XFEM cuts push the objective gradient past
+    // ~1e10, while gradients up to ~1e8 are demonstrably handled raw. When max|dObj/dADV|
+    // exceeds the engage threshold, objective and gradient are scaled uniformly (preserves
+    // the descent direction exactly) by a DECADE-QUANTIZED factor that brings the max into
+    // [target/10, target]. Quantization matters: the TPL's stored objective value cannot be
+    // re-booked when the scale changes, so every change costs one inconsistent
+    // conservativeness check -- a continuously re-derived scale corrupts every iteration,
+    // while a quantized one only transitions when the gradient magnitude crosses a decade.
+    moris::real                  mObjScale = 1.0;
+    static constexpr moris::real sObjGradEngage = 1.0e9;    ///< scale only above this (true pathology)
+    static constexpr moris::real sObjGradTarget = 1.0e8;    ///< scaled max lands in (1e7, 1e8]
+
     /**
      * @brief External function call for computing objective and constraints, to
      *        interface with gcmma library
