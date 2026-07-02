@@ -4,7 +4,7 @@
  *
  *------------------------------------------------------------------------------------
  *
- * example_test_case.cpp.template
+ * example_test_case.cpp
  *
  */
 
@@ -17,25 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-uint gTestIndex;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_laplace_2d
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         uint               aTestCaseIndex,
@@ -141,7 +138,7 @@ check_results(
 }
 
 // free function to check the results fully
-extern "C" void
+void
 check_results_serial_parallel( bool aSolvewithPetsc = false )
 {
     // check results
@@ -178,13 +175,15 @@ check_results_serial_parallel( bool aSolvewithPetsc = false )
 }
 
 TEST_CASE( "Laplace_Anasazi",
-        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Anasazi]" )
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Anasazi],[EXA_Laplace_2D]" )
 {
     // define command line call
     int argc = 2;
 
-    gTestIndex          = 0;
-    gInterpolationOrder = 1;
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestIndex            = 0;
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Laplace.so";
@@ -206,13 +205,15 @@ TEST_CASE( "Laplace_Anasazi",
 
 #ifdef MORIS_HAVE_SLEPC
 TEST_CASE( "Laplace_Slepc",
-        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Slepc]" )
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Slepc],[EXA_Laplace_2D]" )
 {
     // define command line call
     int argc = 2;
 
-    gTestIndex          = 1;
-    gInterpolationOrder = 1;
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestIndex            = 1;
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Laplace.so";
@@ -232,3 +233,5 @@ TEST_CASE( "Laplace_Slepc",
     check_results_serial_parallel( true );
 }
 #endif
+
+}    // namespace exa_laplace_2d
