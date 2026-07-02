@@ -1,0 +1,86 @@
+#
+# Copyright (c) 2022 University of Colorado
+# Licensed under the MIT license. See LICENSE.txt file in the MORIS root for details.
+#
+#------------------------------------------------------------------------------------
+#
+
+namespace moris{
+
+/** @defgroup XTKIdsIndices XTK/MTK: Global IDs vs Local Indices
+
+@section IdsIndicesDefs Definitions
+
+- A local <b>INDEX</b> (\c moris_index) is 0-based, processor-local, and contiguous: it is
+  the entity's position in the owning container (e.g.
+  \c Cut_Integration_Mesh::mIntegrationVertices). Indices are the fast handle used in
+  loops and connectivity construction; they are meaningless across processors and across
+  meshes.
+
+- A <b>GLOBAL ID</b> (\c moris_id) is parallel-unique and not necessarily contiguous, and
+  in MORIS it is <b>0-based</b>: background meshes hand out ids starting at 0, and XTK
+  allocates ids for newly created entities by continuing after the background maximum
+  (\c Cut_Integration_Mesh::mGlobalMaxVertexId is seeded with
+  <tt>background max id + 1</tt> and advanced through the parallel-coordinated
+  gather/scatter in \c Cut_Integration_Mesh::allocate_entity_ids). After cutting, cell id
+  ranges are sparse: parents that were replaced by children leave gaps.
+
+Rule of thumb: use <tt>get_index()</tt> for container access, loops, and connectivity;
+use <tt>get_id()</tt> for anything parallel-global — maps shared across processors,
+communication, and file output. Never feed indices into an id map.
+
+@section IdsIndicesExodus The Exodus boundary: ids are written +1
+
+The Exodus II format requires id-map entries to be <b>positive</b> (1-based); an id of 0
+is invalid. MORIS's 0-based global ids therefore cannot be written verbatim.
+\c mtk::Writer_Exodus consequently writes <tt>moris_id + 1</tt> into \c EX_NODE_MAP and
+\c EX_ELEM_MAP — the same +1 convention the writer has always used for connectivity. In
+any MORIS-written exodus file:
+
+<tt>exodus user id == moris_id + 1</tt>
+
+Tools that map exodus ids back to MORIS ids must subtract 1. So that readers can tell
+MORIS files from everything else, \c mtk::Writer_Exodus stamps every file with the QA
+record <tt>"MORIS | exodus_ids=moris_id+1"</tt>, and
+\c mtk::Exodus_IO_Helper detects the stamp at open: its by-id lookup
+(\c get_node_index_by_Id, used by \c mtk::Field::load_field_from_exodus and the EXA
+reference checks \c get_nodal_field_value / \c get_nodal_coordinate) takes a
+<em>MORIS</em> id and searches the file's map for <tt>id + 1</tt> <b>only on stamped
+files</b>. Unstamped files — external meshes (e.g. Cubit fixtures, whose 1-based ids ARE
+the MORIS ids once read through STK) and files written by pre-stamp MORIS binaries — are
+queried verbatim, i.e. exactly the pre-fix behavior. Consequence: all three file
+populations read correctly, and hard-coded reference node ids in the EXA tests keep
+addressing the same physical nodes everywhere.
+
+<b>Why this matters (observed with ParaView 5.11):</b> IOSS-based readers (ParaView's
+default exodus reader, modern SEACAS tools) validate the id maps lazily on first use and
+<em>drop whichever element block they happen to be reading when validation fails</em> —
+not necessarily the block containing the offending id. On a 4-block XTK output this
+silently yields a partial mesh (the cut blocks vanished); on a 2-block output the mesh is
+fully degenerate (0 cells).
+
+<b>Files written before this fix (pre 2026-07)</b> carry 0-based maps. To view them:
+load the \c LegacyExodusReader plugin (Tools &gt; Manage Plugins) and open the file with
+the legacy "Exodus II" reader, which tolerates 0-based maps for display; or repair a copy
+of the file (pvtools: <tt>pvkit.load(..., fix_ids=True)</tt> /
+<tt>pvkit.fix_zero_global_ids</tt>) and use any reader. The repair is required for the
+default IOSS reader and for anything keyed on global ids (Find Data by GlobalID,
+id labeling, re-export).
+
+@section IdsIndicesConflation Known conflation in Cut_Integration_Mesh
+
+\c Cut_Integration_Mesh::get_glb_entity_id_from_entity_loc_index() currently returns
+<tt>get_index()</tt> — the local index — not <tt>get_id()</tt>, while the inverse query
+\c get_loc_entity_ind_from_entity_glb_id() is keyed by the <em>real</em> ids
+(\c mIntegrationVertexIdToIndexMap / \c mIntegrationCellIdToIndexMap). The round trip
+id &rarr; index &rarr; id is therefore inconsistent, and in parallel the index-as-id
+answer collides across processors (it only "works" serially because indices and 0-based
+ids are nearly interchangeable there). \c vis::Visualization_Mesh implements the same
+query correctly (returns <tt>get_id()</tt>).
+
+Changing the XTK query to return <tt>get_id()</tt> is a known TODO: audit callers first —
+code built against the current behavior may rely on receiving indices.
+
+*/
+
+}

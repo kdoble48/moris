@@ -9,6 +9,7 @@
  */
 
 #include <exodusII.h>
+#include <ctime>
 
 #include "cl_MTK_Writer_Exodus.hpp"
 #include "cl_MTK_Mesh_Core.hpp"
@@ -735,6 +736,24 @@ namespace moris::mtk
                 (int)mElementBlockIndices.size(),
                 (int)mNodeSetIndices.size(),
                 (int)mSideSetIndices.size() );
+
+        // stamp the id convention as a QA record so readers can detect that this file's
+        // id maps store moris_id + 1 (exodus ids are 1-based); external files (e.g.
+        // Cubit) carry no stamp and their ids are used verbatim -- see
+        // share/doc/Dev_XTK_Ids_And_Indices.dox
+        {
+            time_t    tNow = time( nullptr );
+            struct tm tLocal;
+            localtime_r( &tNow, &tLocal );
+            char tDate[ MAX_STR_LENGTH + 1 ];
+            char tTime[ MAX_STR_LENGTH + 1 ];
+            strftime( tDate, sizeof( tDate ), "%Y-%m-%d", &tLocal );
+            strftime( tTime, sizeof( tTime ), "%H:%M:%S", &tLocal );
+            char  tCode[] = "MORIS";
+            char  tDesc[] = "exodus_ids=moris_id+1";
+            char* tQaRecord[ 1 ][ 4 ] = { { tCode, tDesc, tDate, tTime } };
+            ex_put_qa( mExoID, 1, tQaRecord );
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -918,7 +937,9 @@ namespace moris::mtk
             // Get global ids for id map using either MTK or ad-hoc node ID map
             if ( mMtkIndexMap )
             {
-                tNodeMap( tNodeIndex ) = mMesh->get_glb_entity_id_from_entity_loc_index( tNodeIndex, EntityRank::NODE );
+                // add 1 since exodus id maps are 1-based (an id of 0 is invalid) while MORIS
+                // global ids are 0-based; see share/doc/Dev_XTK_Ids_And_Indices.dox
+                tNodeMap( tNodeIndex ) = mMesh->get_glb_entity_id_from_entity_loc_index( tNodeIndex, EntityRank::NODE ) + 1;
             }
             else
             {
@@ -1110,7 +1131,9 @@ namespace moris::mtk
                 // Assign exodus element id using either MTK or ad-hoc map
                 if ( mMtkIndexMap )
                 {
-                    tExodusTotalElementIds( tElemCounter++ ) = tElementIDs( tElementNumber );
+                    // add 1 since exodus id maps are 1-based (an id of 0 is invalid) while MORIS
+                    // global ids are 0-based; see share/doc/Dev_XTK_Ids_And_Indices.dox
+                    tExodusTotalElementIds( tElemCounter++ ) = tElementIDs( tElementNumber ) + 1;
                 }
                 else
                 {
