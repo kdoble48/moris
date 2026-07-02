@@ -17,23 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder = 1;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_stefans_problem_cut
+{
+
+void
 check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -78,7 +77,7 @@ check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -119,7 +118,7 @@ check_quadratic_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -150,7 +149,7 @@ check_linear_results_serial()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -183,10 +182,12 @@ check_quadratic_results_serial()
 //---------------------------------------------------------------
 
 TEST_CASE( "Comsol_cut_Linear",
-        "[moris],[example],[thermal],[diffusion]" )
+        "[moris],[example],[thermal],[diffusion],[EXA_Stefans_Problem_cut]" )
 {
-    // set interpolation order
-    gInterpolationOrder = 1;
+    // set all globals this test case or its deck consumes (rule R4)
+    // (value carries over the deleted file-scope initializer gInterpolationOrder = 1)
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     // define command line call
     int argc = 2;
@@ -220,10 +221,11 @@ TEST_CASE( "Comsol_cut_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE( "Comsol_cut_Quadratic",
-        "[moris],[example],[thermal],[diffusion]" )
+        "[moris],[example],[thermal],[diffusion],[EXA_Stefans_Problem_cut]" )
 {
-    // set interpolation order
-    gInterpolationOrder = 2;
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 2;
+    gPrintReferenceValues = false;
 
     // define command line call
     int argc = 2;
@@ -253,3 +255,5 @@ TEST_CASE( "Comsol_cut_Quadratic",
         }
     }
 }
+
+}    // namespace exa_stefans_problem_cut

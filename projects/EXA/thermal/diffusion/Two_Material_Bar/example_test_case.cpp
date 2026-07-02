@@ -18,29 +18,22 @@
 #include "fn_norm.hpp"
 #include "fn_stringify_matrix.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_two_material_bar
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -213,7 +206,7 @@ check_results(
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_results_xtk_mesh(
         const std::string &aExoFileNameIG,
         const std::string &aExoFileNameIP )
@@ -327,7 +320,7 @@ check_results_xtk_mesh(
 //---------------------------------------------------------------
 
 TEST_CASE( "Two_Material_Bar_Linear",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Two_Material_Bar]" )
 {
     // define command line call
     int argc = 2;
@@ -336,6 +329,9 @@ TEST_CASE( "Two_Material_Bar_Linear",
     char tString2[] = "./Two_Material_Bar.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
 
     // set interpolation order
     gInterpolationOrder = 1;
@@ -376,7 +372,7 @@ TEST_CASE( "Two_Material_Bar_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE( "Two_Material_Bar_Quadratic",
-        "[moris],[example],[structure],[quadratic]" )
+        "[moris],[example],[structure],[quadratic],[EXA_Two_Material_Bar]" )
 {
     // define command line call
     int argc = 2;
@@ -385,6 +381,9 @@ TEST_CASE( "Two_Material_Bar_Quadratic",
     char tString2[] = "./Two_Material_Bar.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
 
     // set interpolation order
     gInterpolationOrder = 2;
@@ -426,3 +425,5 @@ TEST_CASE( "Two_Material_Bar_Quadratic",
     // perform check for Test Case 3
     check_results( "Two_Material_Bar_3.exo", gTestCaseIndex );
 }
+
+}    // namespace exa_two_material_bar
