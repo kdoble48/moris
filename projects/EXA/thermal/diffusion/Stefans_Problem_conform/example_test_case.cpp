@@ -17,26 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for test case index
-uint gTestCaseIndex = 0;
-
-// global variable for interpolation order
-uint gInterpolationOrder = 1;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_stefans_problem_conform
+{
+
+void
 check_linear_results( moris::mtk::Exodus_IO_Helper& aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -85,7 +81,7 @@ check_linear_results( moris::mtk::Exodus_IO_Helper& aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results( moris::mtk::Exodus_IO_Helper& aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -135,7 +131,7 @@ check_quadratic_results( moris::mtk::Exodus_IO_Helper& aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -167,7 +163,7 @@ check_linear_results_serial()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -201,21 +197,21 @@ check_quadratic_results_serial()
 //---------------------------------------------------------------
 
 TEST_CASE( "Comsol_conform_Linear",
-        "[moris],[example],[thermal],[diffusion]" )
+        "[moris],[example],[thermal],[diffusion],[EXA_Stefans_Problem_conform]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    // (values carry over the deleted file-scope initializers gTestCaseIndex = 0, gInterpolationOrder = 1)
+    gTestCaseIndex        = 0;
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Comsol_conform.so";
 
     char* argv[ 2 ] = { tString1, tString2 };
-
-    // set test case index
-    gTestCaseIndex = 0;
-
-    // set interpolation order
-    gInterpolationOrder = 1;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -242,21 +238,20 @@ TEST_CASE( "Comsol_conform_Linear",
 
 // quadratic case seems to fail dependent on machine it is run on
 TEST_CASE( "Comsol_conform_Quadratic",
-        "[moris],[example],[thermal],[diffusion]" )
+        "[moris],[example],[thermal],[diffusion],[EXA_Stefans_Problem_conform]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex        = 1;
+    gInterpolationOrder   = 2;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Comsol_conform.so";
 
     char* argv[ 2 ] = { tString1, tString2 };
-
-    // set test case index
-    gTestCaseIndex = 1;
-
-    // set interpolation order
-    gInterpolationOrder = 2;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -278,3 +273,5 @@ TEST_CASE( "Comsol_conform_Quadratic",
         }
     }
 }
+
+}    // namespace exa_stefans_problem_conform

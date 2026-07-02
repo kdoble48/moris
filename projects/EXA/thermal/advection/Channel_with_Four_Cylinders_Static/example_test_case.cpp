@@ -17,23 +17,21 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C"
+namespace exa_channel_with_four_cylinders_static
+{
+
 void check_linear_results(moris::mtk::Exodus_IO_Helper & aExoIO,uint aNodeId)
 {
     if (gPrintReferenceValues)
@@ -111,7 +109,6 @@ void check_linear_results(moris::mtk::Exodus_IO_Helper & aExoIO,uint aNodeId)
 
 //---------------------------------------------------------------
 
-extern "C"
 void check_linear_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -141,7 +138,6 @@ void check_linear_results_serial()
 
 //---------------------------------------------------------------
 
-extern "C"
 void check_linear_results_parallel()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -174,18 +170,19 @@ void check_linear_results_parallel()
 //---------------------------------------------------------------
 
 TEST_CASE("Channel_with_Four_Cylinders_Static_Linear",
-        "[moris],[example],[thermal],[advection]")
+        "[moris],[example],[thermal],[advection],[EXA_Channel_with_Four_Cylinders_Static]")
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Channel_with_Four_Cylinders_Static.so";
 
     char * argv[2] = {tString1,tString2};
-
-    // set interpolation order
-    gInterpolationOrder = 1;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -215,8 +212,12 @@ TEST_CASE("Channel_with_Four_Cylinders_Static_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE("Channel_with_Four_Cylinders_Static_Quadratic",
-        "[moris],[example],[thermal],[advection]")
+        "[moris],[example],[thermal],[advection],[EXA_Channel_with_Four_Cylinders_Static]")
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 2;
+    gPrintReferenceValues = false;
+
     // quadratic case currently not working
     if (false)
     {
@@ -227,9 +228,6 @@ TEST_CASE("Channel_with_Four_Cylinders_Static_Quadratic",
         char tString2[] = "./Channel_with_Four_Cylinders_Static.so";
 
         char * argv[2] = {tString1,tString2};
-
-        // set interpolation order
-        gInterpolationOrder = 2;
 
         // call to performance manager main interface
         fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -257,4 +255,6 @@ TEST_CASE("Channel_with_Four_Cylinders_Static_Quadratic",
         }
     }
 }
+
+}    // namespace exa_channel_with_four_cylinders_static
 

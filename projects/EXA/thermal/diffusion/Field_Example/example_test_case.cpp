@@ -20,29 +20,22 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_field_example
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -173,28 +166,25 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Field_example_write",
-        "[moris],[example],[thermal],[Field_example_write]" )
+        "[moris],[example],[thermal],[Field_example_write],[EXA_Field_Example]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;    // interpolation order
+    gDim                  = 2;    // dimension: 2D
+    gTestCaseIndex        = 0;    // test case index
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Field_example_write.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gInterpolationOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Field_Example_Write - 2D: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set dimension: 2D
-    gDim = 2;
-
-    // set test case index
-    gTestCaseIndex = 0;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -206,28 +196,25 @@ TEST_CASE( "Field_example_write",
 //---------------------------------------------------------------
 
 TEST_CASE( "Field_example_read",
-        "[moris],[example],[thermal],[Field_example_read]" )
+        "[moris],[example],[thermal],[Field_example_read],[EXA_Field_Example]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;    // interpolation order
+    gDim                  = 2;    // dimension: 2D
+    gTestCaseIndex        = 1;    // test case index
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Field_example_read.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gInterpolationOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Field_Example_Read - 2D: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set dimension: 2D
-    gDim = 2;
-
-    // set test case index
-    gTestCaseIndex = 1;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -239,28 +226,25 @@ TEST_CASE( "Field_example_read",
 //---------------------------------------------------------------
 
 TEST_CASE( "Field_example_compare",
-        "[moris],[example],[thermal],[Field_example_compare]" )
+        "[moris],[example],[thermal],[Field_example_compare],[EXA_Field_Example]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;    // interpolation order
+    gDim                  = 2;    // dimension: 2D
+    gTestCaseIndex        = 2;    // test case index
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Field_example_compare.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gInterpolationOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Field_Example_Compare - 2D: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set dimension: 2D
-    gDim = 2;
-
-    // set test case index
-    gTestCaseIndex = 2;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -268,3 +252,5 @@ TEST_CASE( "Field_example_compare",
     // perform check for Test Case 0
     check_results( "Field_example_compare.exo", gTestCaseIndex );
 }
+
+}    // namespace exa_field_example

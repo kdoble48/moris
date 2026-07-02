@@ -12,14 +12,21 @@
 
 #include "cl_Logger.hpp" // MRS/IOS/src
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_two_channels_with_separation_wall_transient
+{
 
 TEST_CASE("Two_Channels_with_Separation_Wall_Transient",
-        "[moris],[example],[thermal],[advection]")
+        "[moris],[example],[thermal],[advection],[EXA_Two_Channels_with_Separation_Wall_Transient]")
 {
     // define command line call
     int argc = 2;
@@ -34,6 +41,7 @@ TEST_CASE("Two_Channels_with_Separation_Wall_Transient",
 
     // catch test statements should follow
     //REQUIRE( tRet ==  0 );
+    (void) tRet;    // return-value check above is disabled (legacy); keep -Wall/-Werror clean
 
 //    // open and query exodus output file (set verbose to true to get basic mesh information)
 //    moris::mtk::Exodus_IO_Helper tExoIO("Two_Channels_with_Separation_Wall_Transient.exo",0,false);
@@ -77,3 +85,4 @@ TEST_CASE("Two_Channels_with_Separation_Wall_Transient",
 //    REQUIRE(  tRelIQIDifference < 1.0e-8);
 }
 
+}    // namespace exa_two_channels_with_separation_wall_transient
