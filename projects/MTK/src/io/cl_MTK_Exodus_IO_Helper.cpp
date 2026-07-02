@@ -8,6 +8,9 @@
  *
  */
 
+#include <cstring>
+#include <vector>
+
 #include "cl_Communication_Tools.hpp"
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "cl_Logger.hpp"
@@ -42,6 +45,31 @@ namespace moris::mtk
 
         MORIS_ERROR( cpu_ws == io_ws,
                 "Word size of floating point variables stored in exodus file and used in moris are not the same." );
+
+        // detect the MORIS id-convention QA stamp: files written by mtk::Writer_Exodus
+        // store moris_id + 1 in their id maps and carry "exodus_ids=moris_id+1"; external
+        // (e.g. Cubit) and pre-stamp files do not, and their ids are used verbatim --
+        // see share/doc/Dev_XTK_Ids_And_Indices.dox
+        int tNumQa = ex_inquire_int( mExoFileId, EX_INQ_QA );
+        if ( tNumQa > 0 )
+        {
+            std::vector< char >  tQaBuffer( 4 * tNumQa * ( MAX_STR_LENGTH + 1 ), '\0' );
+            std::vector< char* > tQaPointers( 4 * tNumQa );
+            for ( int i = 0; i < 4 * tNumQa; ++i )
+            {
+                tQaPointers[ i ] = tQaBuffer.data() + i * ( MAX_STR_LENGTH + 1 );
+            }
+            if ( ex_get_qa( mExoFileId, reinterpret_cast< char*( * )[ 4 ] >( tQaPointers.data() ) ) >= 0 )
+            {
+                for ( int i = 0; i < tNumQa; ++i )
+                {
+                    if ( std::strstr( tQaPointers[ 4 * i + 1 ], "exodus_ids=moris_id+1" ) != nullptr )
+                    {
+                        mMorisIdOffset = 1;
+                    }
+                }
+            }
+        }
 
         get_init_mesh_data();
         get_init_global();
@@ -1484,8 +1512,10 @@ namespace moris::mtk
     uint
     Exodus_IO_Helper::get_node_index_by_Id( uint aNodeId )
     {
-        // find index of node given its nodeId
-        auto tItr = std::find( mNodeNumMap.data(), mNodeNumMap.data() + mNumNodes, aNodeId );
+        // aNodeId is a MORIS node id; MORIS-written (QA-stamped) files store moris_id + 1
+        // in their id maps, external/pre-stamp files store ids verbatim -- the offset was
+        // detected at open; see share/doc/Dev_XTK_Ids_And_Indices.dox
+        auto tItr = std::find( mNodeNumMap.data(), mNodeNumMap.data() + mNumNodes, aNodeId + mMorisIdOffset );
 
         // compute index
         uint tIndex = std::distance( mNodeNumMap.data(), tItr );

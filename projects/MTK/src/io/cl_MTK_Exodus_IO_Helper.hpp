@@ -25,6 +25,11 @@ namespace moris::mtk
         bool mVerbose     = false;
         bool mBuildGlobal = false;
 
+        // +1 iff the file carries the MORIS QA stamp "exodus_ids=moris_id+1" (files written
+        // by mtk::Writer_Exodus); 0 for external / pre-stamp files, whose ids are used
+        // verbatim in by-id lookups -- see share/doc/Dev_XTK_Ids_And_Indices.dox
+        int mMorisIdOffset = 0;
+
         // general mesh info
         int         mNumDim      = -1;
         int         mNumNodes    = -1;
