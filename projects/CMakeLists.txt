@@ -33,3 +33,8 @@ foreach(MORIS_SOURCE_DIR ${MORIS_SOURCE_DIRS})
     add_subdirectory(${MORIS_SOURCE_DIR})
 endforeach()
 
+# Python bindings (moris_py) - self-guarded on BUILD_PYBINDINGS
+if(BUILD_PYBINDINGS)
+    add_subdirectory(PYBIND)
+endif()
+

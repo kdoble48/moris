@@ -1,0 +1,68 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": { "major": 3, "minor": 21 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "/home/doble/codes/.spack-env/view/bin/mpicc",
+                "CMAKE_CXX_COMPILER": "/home/doble/codes/.spack-env/view/bin/mpic++",
+                "CMAKE_PREFIX_PATH": "/home/doble/codes/.spack-env/view",
+                "Python_ROOT_DIR": "/home/doble/codes/.spack-env/view",
+                "BUILD_ALL": "ON",
+                "MORIS_USE_MUMPS": "OFF",
+                "MORIS_HAVE_SNOPT": "OFF"
+            }
+        },
+        {
+            "name": "opt",
+            "displayName": "Release (optimized)",
+            "inherits": "base",
+            "binaryDir": "${sourceDir}/build_opt",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_PYBINDINGS": "ON"
+            }
+        },
+        {
+            "name": "dbg",
+            "displayName": "Debug (assertions + symbols)",
+            "inherits": "base",
+            "binaryDir": "${sourceDir}/build_dbg",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "MORIS_HAVE_DEBUG": "ON",
+                "MORIS_HAVE_SYMBOLIC": "ON",
+                "MORIS_HAVE_SYMBOLIC_STRONG": "OFF"
+            }
+        },
+        {
+            "name": "ci-opt",
+            "displayName": "CI optimized (mirrors .github/workflows/ctest.yml opt job)",
+            "inherits": "opt",
+            "binaryDir": "${sourceDir}/build_opt",
+            "cacheVariables": {
+                "MORIS_USE_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "ci-dbg",
+            "displayName": "CI debug (mirrors .github/workflows/ctest.yml dbg job)",
+            "inherits": "dbg",
+            "binaryDir": "${sourceDir}/build_dbg",
+            "cacheVariables": {
+                "MORIS_USE_EXAMPLES": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "opt", "configurePreset": "opt", "jobs": 4 },
+        { "name": "dbg", "configurePreset": "dbg", "jobs": 4 }
+    ],
+    "testPresets": [
+        { "name": "opt", "configurePreset": "opt", "output": { "outputOnFailure": true } },
+        { "name": "dbg", "configurePreset": "dbg", "output": { "outputOnFailure": true } }
+    ]
+}
