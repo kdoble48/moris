@@ -13,16 +13,23 @@
 #include "cl_Logger.hpp" // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_sa_cut_bar_static
+{
 
 TEST_CASE("SA_Cut_Bar_Static",
-        "[moris],[example],[optimization],[sweep],[sweep_static]")
+        "[moris],[example],[optimization],[sweep],[sweep_static],[EXA_SA_Cut_Bar_Static]")
 {
     // Tolerance for adjoint vs. FD sensitivities
     moris::real tToleranceSensties = 0.01;
@@ -92,4 +99,6 @@ TEST_CASE("SA_Cut_Bar_Static",
     // close file
     close_hdf5_file( tFileID );
 }
+
+}    // namespace exa_sa_cut_bar_static
 

@@ -19,29 +19,20 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gLevelSetInterpolationOrder;
-uint gFEMInterpolationOrder;
-uint gLagrMeshInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //------------------------------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_bedding_sensitivity_test
+{
 
 void test_pause()
 {
@@ -69,7 +60,7 @@ void test_pause()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_results(
         const std::string& aExoFileName,
         const std::string& aHdf5FileName,
@@ -372,8 +363,16 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Bedding_Sensitivity_Test",
-        "[moris],[example],[optimization],[bedding]" )
+        "[moris],[example],[optimization],[bedding],[EXA_Bedding_Sensitivity_Test]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gLevelSetInterpolationOrder = 0;    // legacy zero-init; unused by this deck
+    gFEMInterpolationOrder      = 0;    // legacy zero-init; unused by this deck
+    gLagrMeshInterpolationOrder = 0;    // legacy zero-init; unused by this deck
+    gDim                        = 2;
+    gTestCaseIndex              = 0;
+    gPrintReferenceValues       = false;
+
     // remove files from previous test runs
     // FIXME: should be made independent of OS; note std::remove does not take wild cards
     if ( par_rank() == 0 )
@@ -485,3 +484,5 @@ TEST_CASE( "Bedding_Sensitivity_Test",
     }
 #endif
 }
+
+}    // namespace exa_bedding_sensitivity_test

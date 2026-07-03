@@ -14,15 +14,22 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_levelset_boxbeam
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -81,7 +88,7 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Leveset Boxbeam",
-        "[moris],[example],[optimization],[levelset_boxbeam]" )
+        "[moris],[example],[optimization],[levelset_boxbeam],[EXA_LevelSet_Boxbeam]" )
 {
     // define command line call
     int argc = 2;
@@ -104,7 +111,7 @@ TEST_CASE( "Leveset Boxbeam",
 }
 
 // TEST_CASE("LevelSet_BoxBeam_LinQuad",
-//         "[moris],[example],[optimization],[levelset_boxbeam]")
+//         "[moris],[example],[optimization],[levelset_boxbeam],[EXA_LevelSet_Boxbeam]")
 //{
 //     if( moris::par_size() == 1 )
 //     {
@@ -133,3 +140,5 @@ TEST_CASE( "Leveset Boxbeam",
 //         check_results("Levelset_Boxbeam_Lin_Quad_LevelSet.exo.e-s.0002",tTestCaseIndex);
 //     }
 // }
+
+}    // namespace exa_levelset_boxbeam

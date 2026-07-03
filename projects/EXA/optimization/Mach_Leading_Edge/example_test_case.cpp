@@ -14,16 +14,23 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_mach_leading_edge
+{
 
 TEST_CASE("Mach_Leading_Edge",
-        "[moris],[example],[optimization],[Mach_Leading_Edge]")
+        "[moris],[example],[optimization],[Mach_Leading_Edge],[EXA_Mach_Leading_Edge]")
 {
     // define command line call
     int argc = 2;
@@ -39,4 +46,6 @@ TEST_CASE("Mach_Leading_Edge",
     // catch test statements should follow
     REQUIRE( tRet ==  0 );
 }
+
+}    // namespace exa_mach_leading_edge
 
