@@ -52,7 +52,25 @@ Replace the per-example `add_executable(Main_<X>)` with a single `EXA-test.exe` 
 | ctest registrations (opt) | **73** (not 67 — the in-tree 67 `add_test` *calls* expand by per-example PROCS lists; 73 is what `build_opt` actually registers) | `grep -c add_test build_opt/projects/EXA/**/CTestTestfile.cmake` → 146/2 |
 | Input `.so` files (opt) | 68, from 64 `dynamic_link_input()` calls (some leaves build several: `Field_Example` 3, `…_Restart` 2) | `find build_opt/projects/EXA -name "*.so"` |
 
-### 1.3 Predicted deltas (to be verified per §1.5 before any claim is repeated)
+### 1.3-VERIFIED — Final A/B measurement (2026-07-02, migration complete)
+
+Two full clean builds, identical config (BUILD_ALL=ON, EXAMPLES=ON, Ninja -j4, CI-mirror flags),
+pure committed states via git worktrees (`7ea5ef129^` vs `7017b0a77`), same machine:
+
+| Metric | Before | After | Δ (measured) | Predicted |
+|---|---|---|---|---|
+| Clean-build wall time | **51 m 35 s** | **22 m 03 s** | **−57%** | 25–32 min ✓ (beat) |
+| Total edge CPU | 201.9 min | 83.5 min | **−118.4 CPU-min (−59%)** | ~−134 ✓ |
+| Link share of build | 71.6% | 33.1% | −38.5 pts | ✓ |
+| Executables | 2,411.9 MB (83) | 429.0 MB (27) | **−1,983 MB (−82%)** | −1,755 ✓ (beat) |
+| Build tree | 3.89 GB | 1.62 GB | **−2.27 GB (−58%)** | ✓ |
+| Static libs / shared libs | identical | identical | 0 — change touched only examples | ✓ |
+
+Snapshots: `$MORIS_RUNS_DIR/benchmarks/build_metrics/exa-final-{before,after}_*.json`.
+`build_dbg`'s ~−20 GB accrues on its next clean rebuild (examples were OFF there anyway;
+now they can be ON for free).
+
+### 1.3 Predicted deltas (superseded by 1.3-VERIFIED above; kept for the record)
 
 | Metric | Before | After | Δ |
 |---|---|---|---|
