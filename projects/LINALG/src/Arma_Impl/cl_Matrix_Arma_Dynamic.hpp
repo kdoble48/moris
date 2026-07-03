@@ -123,6 +123,41 @@ namespace moris
                 : mMatrix( X.matrix_data() )
         {
         }
+
+        // -----------------------------------------------------------------
+
+        /**
+         * Move constructor.
+         * Enables efficient reallocation of containers holding matrices
+         * (mirrors the Eigen implementation's move support).
+         *
+         * Implemented via arma::Mat::swap rather than a defaulted move:
+         * arma::Mat's own move members are not declared noexcept, and
+         * std::vector only moves during reallocation when the move
+         * constructor is noexcept. swap is allocation-free and steals the
+         * heap buffer, leaving the source empty.
+         *
+         * @param[in] other Matrix to move from (left empty).
+         */
+        Matrix( Matrix< arma::Mat< Type > >&& other ) noexcept
+                : mMatrix()
+        {
+            mMatrix.swap( other.mMatrix );
+        }
+
+        /**
+         * Move assignment operator.
+         * Enables efficient swap/move operations without deep copying.
+         *
+         * @param[in] other Matrix to move from.
+         * @return Reference to this matrix.
+         */
+        Matrix< arma::Mat< Type > >&
+        operator=( Matrix< arma::Mat< Type > >&& other ) noexcept
+        {
+            mMatrix.swap( other.mMatrix );
+            return *this;
+        }
         // -----------------------------------------------------------------
 
         // template constructor

@@ -47,8 +47,15 @@ namespace moris
         original(0, 0) = 42.0;
         original(9, 9) = 99.0;
 
+        // capture the heap buffer address (100 elements > any small-matrix
+        // preallocation, so the data lives on the heap for both backends)
+        const real* tDataPtr = original.data();
+
         // Use move constructor
         Matrix<DDRMat> moved(std::move(original));
+
+        // a true move steals the buffer; a copy would allocate a new one
+        REQUIRE(moved.data() == tDataPtr);
 
         // Verify moved matrix has correct dimensions and values
         REQUIRE(moved.n_rows() == 10);
@@ -64,9 +71,15 @@ namespace moris
         Matrix<DDRMat> source(5, 5, 2.0);
         source(2, 2) = 7.0;
 
+        // capture the heap buffer address (25 elements > small-matrix preallocation)
+        const real* tDataPtr = source.data();
+
         // Move assign to target
         Matrix<DDRMat> target;
         target = std::move(source);
+
+        // a true move steals the buffer; a copy would allocate a new one
+        REQUIRE(target.data() == tDataPtr);
 
         // Verify target has correct dimensions and values
         REQUIRE(target.n_rows() == 5);
