@@ -26,6 +26,10 @@ endforeach()
 # This is done outside of the previous loop because cyclical dependencies may
 # use the variables from packages that haven't been called yet
 foreach(MORIS_SOURCE_DIR ${MORIS_SOURCE_DIRS})
+    # Label every test created under this package with the package name,
+    # so `ctest -L <PKG>` and `ctest -LE EXA` work as documented.
+    string(REGEX REPLACE "([^\/]*)\/" "" DIR_NAME ${MORIS_SOURCE_DIR})
+    set_property(DIRECTORY PROPERTY LABELS ${DIR_NAME})
     add_subdirectory(${MORIS_SOURCE_DIR})
 endforeach()
 

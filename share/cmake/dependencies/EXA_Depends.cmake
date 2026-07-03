@@ -19,7 +19,7 @@ set(EXA_CONFIGURED_ONCE "YES")
 list(APPEND MORIS_SOURCE_DIRS ${EXA})
 
 # Include all libraries for EXA
-set(MAIN_TPL_DEPENDENCIES
+set(EXA_TPL_DEPENDENCIES
     "trilinos"
     )
 

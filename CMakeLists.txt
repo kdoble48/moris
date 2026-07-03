@@ -310,8 +310,6 @@ option(BUILD_GUI "Build the GUI executable." OFF)
 
 option(BUILD_SDF "Build the SDF executable." OFF)
 
-option(BUILD_STK "Build the STK executable." OFF)
-
 # option(BUILD_TIN "Build the TIN executable." OFF)
 
 option(BUILD_TOL "Build the tools executable." OFF)
@@ -562,24 +560,26 @@ endif()
 if (MORIS_HAVE_PEDANTIC)
     
     # Add some strict compiler checks.
-    check_cxx_compiler_flag("-pedantic" HAVE_PEDANTIC )
-    if (HAVE_PEDANTIC)
+    # each check needs its own cache variable: check_cxx_compiler_flag caches
+    # the result, so reusing one name skips every check after the first
+    check_cxx_compiler_flag("-pedantic" HAVE_FLAG_PEDANTIC )
+    if (HAVE_FLAG_PEDANTIC)
         set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -pedantic" )
     endif()
-    check_cxx_compiler_flag("-pedantic-errors" HAVE_PEDANTIC )
-    if (HAVE_PEDANTIC)
+    check_cxx_compiler_flag("-pedantic-errors" HAVE_FLAG_PEDANTIC_ERRORS )
+    if (HAVE_FLAG_PEDANTIC_ERRORS)
         set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -pedantic-errors" )
     endif()
-    check_cxx_compiler_flag("-Wall" HAVE_PEDANTIC )
-    if (HAVE_PEDANTIC)
+    check_cxx_compiler_flag("-Wall" HAVE_FLAG_WALL )
+    if (HAVE_FLAG_WALL)
         set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -Wall" )
     endif()
-    check_cxx_compiler_flag("-Wextra" HAVE_PEDANTIC )
-    #if (HAVE_PEDANTIC)
+    #check_cxx_compiler_flag("-Wextra" HAVE_FLAG_WEXTRA )
+    #if (HAVE_FLAG_WEXTRA)
     #    set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -Wextra" )
     #endif()
-    check_cxx_compiler_flag("-Werror" HAVE_PEDANTIC )
-    if (HAVE_PEDANTIC)
+    check_cxx_compiler_flag("-Werror" HAVE_FLAG_WERROR )
+    if (HAVE_FLAG_WERROR)
         set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -Werror" )
     endif()
 
@@ -698,7 +698,7 @@ endif()
 # SACADO : Make sure that paths are set correctly.
 # -------------------------------------------------------------------------
 option(MORIS_USE_SACADO "UseSacado (check paths in CMakeLists.txt)." OFF)
-if (USE_SACADO)
+if (MORIS_USE_SACADO)
     set( MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -I$ENV{HOME}/codes/Sacado/Trilinos-master/packages/sacado/src" )
     set( MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -I$ENV{HOME}/codes/Sacado/Trilinos-master/packages/sacado/src/mpl" )
     set( MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -I$ENV{HOME}/codes/Sacado/Trilinos-master/packages/sacado/src/parameter" )
@@ -1074,10 +1074,6 @@ endif()
 
 if(BUILD_PRM)
     include(${MORIS_DEPENDS_DIR}/PRM_Depends.cmake)
-endif()
-
-if(BUILD_STK)
-    include(${MORIS_DEPENDS_DIR}/STK_Depends.cmake)
 endif()
 
 if(BUILD_SDF)

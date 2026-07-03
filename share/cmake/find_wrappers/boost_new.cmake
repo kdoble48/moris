@@ -15,8 +15,8 @@
 # (http://stackoverflow.com/questions/23782799/properly-configuring-boost-in-cmake)
 
 if(NOT BOOST_FOUND_ONCE)
-	find_package(Boost CONFIG 1.54.0 REQUIRED filesystem system log log_setup thread serialization timer)
-	set(MORIS_BOOST_REQUIREMENTS "Boost 1.54.0 REQUIRED filesystem system log log_setup thread serialization timer")
+	find_package(Boost CONFIG 1.54.0 REQUIRED filesystem system timer)
+	set(MORIS_BOOST_REQUIREMENTS "Boost 1.54.0 REQUIRED filesystem system timer")
 	
 	if(Boost_FOUND)
 	    message(STATUS "Boost_FOUND: ${Boost_FOUND}")
@@ -85,12 +85,9 @@ if(NOT BOOST_FOUND_ONCE)
 	    set(MORIS_BOOST_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} CACHE INTERNAL "Boost include directories." )
 	    set(MORIS_BOOST_LIBRARY_DIRS ${Boost_LIBRARY_DIRS} CACHE INTERNAL "Boost include directories." )
 	    set(MORIS_BOOST_LIBRARIES 
+	    	Boost::filesystem 
 	    	Boost::system 
-	    	Boost::log 
-	    	Boost::log_setup 
-	    	Boost::thread 
-	    	Boost::serialization 
-	    	Boost::timer CACHE INTERNAL "Boost include directories." )
+	    	Boost::timer CACHE INTERNAL "Boost libraries." )
 	    
 	    #set(BOOST_FOUND_ONCE TRUE CACHE INTERNAL "Boost was found.")
 	    set(BOOST_FOUND_ONCE TRUE)
@@ -104,7 +101,7 @@ endif()
 if(NOT TARGET ${MORIS}::boost)
 	add_library(${MORIS}::boost INTERFACE IMPORTED GLOBAL)
 	#target_link_libraries(boost INTERFACE ${MORIS_BOOST_LIBRARIES})
-	target_link_libraries(${MORIS}::boost INTERFACE Boost::filesystem Boost::system Boost::log Boost::log_setup Boost::thread Boost::serialization Boost::timer)
+	target_link_libraries(${MORIS}::boost INTERFACE Boost::filesystem Boost::system Boost::timer)
 endif()
 
 #link_directories(${MORIS_BOOST_FLAGS})
