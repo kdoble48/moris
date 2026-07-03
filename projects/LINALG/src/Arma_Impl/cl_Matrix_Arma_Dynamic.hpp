@@ -123,6 +123,36 @@ namespace moris
                 : mMatrix( X.matrix_data() )
         {
         }
+
+        // -----------------------------------------------------------------
+
+        /**
+         * Move constructor.
+         * Enables efficient reallocation of containers holding matrices
+         * (mirrors the Eigen implementation's move support).
+         *
+         * Defaulted so arma::Mat's own move members run: they correctly
+         * handle matrices constructed over auxiliary (external) memory and
+         * strict views, which MORIS uses when wrapping mesh arrays - a
+         * blind swap aborts there (Mat::init aux-size mismatch). arma does
+         * not declare its moves noexcept; the explicit noexcept here is
+         * honored per P1286R2 (GCC 9+) and is required for std::vector to
+         * move rather than copy during reallocation.
+         *
+         * @param[in] other Matrix to move from (valid but unspecified after).
+         */
+        Matrix( Matrix< arma::Mat< Type > >&& other ) noexcept = default;
+
+        /**
+         * Move assignment operator.
+         * Enables efficient move without deep copying. See the move
+         * constructor note on aux-memory handling and noexcept.
+         *
+         * @param[in] other Matrix to move from.
+         * @return Reference to this matrix.
+         */
+        Matrix< arma::Mat< Type > >&
+        operator=( Matrix< arma::Mat< Type > >&& other ) noexcept = default;
         // -----------------------------------------------------------------
 
         // template constructor

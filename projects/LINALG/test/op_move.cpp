@@ -47,8 +47,15 @@ namespace moris
         original(0, 0) = 42.0;
         original(9, 9) = 99.0;
 
+        // capture the heap buffer address (100 elements > any small-matrix
+        // preallocation, so the data lives on the heap for both backends)
+        const real* tDataPtr = original.data();
+
         // Use move constructor
         Matrix<DDRMat> moved(std::move(original));
+
+        // a true move steals the buffer; a copy would allocate a new one
+        REQUIRE(moved.data() == tDataPtr);
 
         // Verify moved matrix has correct dimensions and values
         REQUIRE(moved.n_rows() == 10);
@@ -64,15 +71,46 @@ namespace moris
         Matrix<DDRMat> source(5, 5, 2.0);
         source(2, 2) = 7.0;
 
+        // capture the heap buffer address (25 elements > small-matrix preallocation)
+        const real* tDataPtr = source.data();
+
         // Move assign to target
         Matrix<DDRMat> target;
         target = std::move(source);
+
+        // a true move steals the buffer; a copy would allocate a new one
+        REQUIRE(target.data() == tDataPtr);
 
         // Verify target has correct dimensions and values
         REQUIRE(target.n_rows() == 5);
         REQUIRE(target.n_cols() == 5);
         REQUIRE(target(2, 2) == 7.0);
         REQUIRE(target(0, 0) == 2.0);
+    }
+
+    TEST_CASE("moris::Matrix move of auxiliary-memory view", "[linalgebra],[move_semantics]")
+    {
+        // MORIS wraps external arrays as strict arma views (advanced
+        // constructor, e.g. around mesh data blocks). Moving such a Matrix
+        // must not abort and must preserve the values.
+        // Regression: a swap-based move implementation died here with
+        // "Mat::init(): mismatch between size of auxiliary memory and
+        // requested size" during MTK mesh building.
+        real tData[ 6 ] = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
+
+        Matrix<DDRMat> view( tData, 3, 2, false, true );    // no-copy, strict
+        Matrix<DDRMat> moved( std::move( view ) );
+        REQUIRE( moved.n_rows() == 3 );
+        REQUIRE( moved.n_cols() == 2 );
+        REQUIRE( moved( 0, 0 ) == 1.0 );
+        REQUIRE( moved( 2, 1 ) == 6.0 );
+
+        real tData2[ 4 ] = { 7.0, 8.0, 9.0, 10.0 };
+        Matrix<DDRMat> view2( tData2, 2, 2, false, true );
+        Matrix<DDRMat> target;
+        target = std::move( view2 );
+        REQUIRE( target.n_rows() == 2 );
+        REQUIRE( target( 1, 1 ) == 10.0 );
     }
 
     TEST_CASE("moris::Matrix vector push_back with move semantics", "[linalgebra],[move_semantics]")
