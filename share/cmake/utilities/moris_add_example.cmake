@@ -42,6 +42,11 @@ function(moris_add_example)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${BIN})
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${BIN})
 
+    # The tests' WORKING_DIRECTORY must exist even for NO_INPUTS leaves, where no
+    # target output creates it (legacy per-example exes used to). Fresh build
+    # trees otherwise leave meshgen tests "Not Run".
+    file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
     set(SO_TPLS "trilinos" ${ARMADILLO_EIGEN})
 
     # get list of INT and MTK subfolders
