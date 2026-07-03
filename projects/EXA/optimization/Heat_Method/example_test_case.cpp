@@ -19,29 +19,22 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_heat_method
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         const std::string &aHdf5FileName,
@@ -277,7 +270,7 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "HeatMethod_Linear",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Heat_Method]" )
 {
     // define command line call
     int argc = 2;
@@ -287,18 +280,16 @@ TEST_CASE( "HeatMethod_Linear",
 
     char *argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gInterpolationOrder = 1;
+    // set all globals this test case or its deck consumes (rule R4):
+    // interpolation order 1, dimension 2D, test case index 0
+    gInterpolationOrder   = 1;
+    gDim                  = 2;
+    gTestCaseIndex        = 0;
+    gPrintReferenceValues = false;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Heat Method - 2D: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set dimension: 2D
-    gDim = 2;
-
-    // set test case index
-    gTestCaseIndex = 0;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -326,7 +317,7 @@ TEST_CASE( "HeatMethod_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE( "HeatMethod_Quadratic",
-        "[moris],[example],[structure],[quadratic]" )
+        "[moris],[example],[structure],[quadratic],[EXA_Heat_Method]" )
 {
     // define command line call
     int argc = 2;
@@ -336,18 +327,16 @@ TEST_CASE( "HeatMethod_Quadratic",
 
     char *argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gInterpolationOrder = 2;
+    // set all globals this test case or its deck consumes (rule R4):
+    // interpolation order 2, dimension 2D, test case index 2
+    gInterpolationOrder   = 2;
+    gDim                  = 2;
+    gTestCaseIndex        = 2;
+    gPrintReferenceValues = false;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Heat Method - 2D: Interpolation order 2 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set dimension: 2D
-    gDim = 2;
-
-    // set test case index
-    gTestCaseIndex = 2;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -371,3 +360,5 @@ TEST_CASE( "HeatMethod_Quadratic",
     // perform check for Test Case 3
     check_results( "HeatMethod_3.exo", "SEN_HeatMethod_3.hdf5", gTestCaseIndex );
 }
+
+}    // namespace exa_heat_method

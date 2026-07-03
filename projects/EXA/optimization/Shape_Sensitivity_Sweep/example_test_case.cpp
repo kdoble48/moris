@@ -13,16 +13,23 @@
 #include "cl_Logger.hpp" // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_shape_sensitivity_sweep
+{
 
 TEST_CASE("Shape_Sensitivity_Sweep",
-        "[moris],[example],[optimization],[sweep]")
+        "[moris],[example],[optimization],[sweep],[EXA_Shape_Sensitivity_Sweep]")
 {
     // define command line call
     int argc = 2;
@@ -90,4 +97,6 @@ TEST_CASE("Shape_Sensitivity_Sweep",
         close_hdf5_file( tFileID );
     }
 }
+
+}    // namespace exa_shape_sensitivity_sweep
 

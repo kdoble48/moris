@@ -14,18 +14,22 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
-using namespace moris;
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
 
-// flag to print reference values
-bool gPrintReferenceValues = false;
+using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_levelset_boxbeam_adaptive_refinement
+{
+
+void
 check_results_serial(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -81,7 +85,7 @@ check_results_serial(
     REQUIRE( tNumElems == tReferenceNumElems( aTestCaseIndex ) );
 }
 
-extern "C" void
+void
 check_results_parallel(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -162,8 +166,11 @@ check_results_parallel(
 //---------------------------------------------------------------
 
 TEST_CASE( "Leveset Boxbeam Adaptive Refinement",
-        "[moris],[example],[optimization],[levelset_boxbeam_adaptive_refinement]" )
+        "[moris],[example],[optimization],[levelset_boxbeam_adaptive_refinement],[EXA_LevelSet_Boxbeam_Adaptive_Refinement]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
+
     // remove files from previous test runs
     // FIXME: should be made independent of OS; note std::remove does not take wild cards
     if ( par_rank() == 0 )
@@ -215,8 +222,11 @@ TEST_CASE( "Leveset Boxbeam Adaptive Refinement",
 //---------------------------------------------------------------
 
 TEST_CASE( "Leveset Boxbeam Adaptive Refinement Quadratic",
-        "[moris],[example],[optimization],[levelset_boxbeam_adaptive_refinement_quadratic]" )
+        "[moris],[example],[optimization],[levelset_boxbeam_adaptive_refinement_quadratic],[EXA_LevelSet_Boxbeam_Adaptive_Refinement]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -256,3 +266,5 @@ TEST_CASE( "Leveset Boxbeam Adaptive Refinement Quadratic",
         }
     }
 }
+
+}    // namespace exa_levelset_boxbeam_adaptive_refinement

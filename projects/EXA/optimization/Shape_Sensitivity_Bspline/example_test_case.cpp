@@ -13,18 +13,22 @@
 #include "cl_Logger.hpp"    // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
-using namespace moris;
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
 
-// global variable to define test cases
-uint tGeoModel;
+using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_shape_sensitivity_bspline
+{
+
+void
 check_results( uint aTestCaseIndex, const std::string& aHDF5FileName )
 {
     MORIS_LOG_INFO( " " );
@@ -84,8 +88,11 @@ check_results( uint aTestCaseIndex, const std::string& aHDF5FileName )
 // ---------------------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE( "Shape_Sensitivity_Bspline_2D",
-        "[moris],[example],[optimization],[sweep]" )
+        "[moris],[example],[optimization],[sweep],[EXA_Shape_Sensitivity_Bspline]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    tGeoModel = 0;    // reassigned by the configuration loop below
+
     // remove files from previous test runs
     // FIXME: should be made independent of OS; note std::remove does not take wild cards
     if ( par_rank() == 0 )
@@ -120,8 +127,11 @@ TEST_CASE( "Shape_Sensitivity_Bspline_2D",
 }
 
 TEST_CASE( "Shape_Sensitivity_Bspline_3D",
-        "[moris],[example],[optimization],[sweep]" )
+        "[moris],[example],[optimization],[sweep],[EXA_Shape_Sensitivity_Bspline]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    tGeoModel = 0;    // reassigned by the configuration loop below
+
     // remove files from previous test runs
     // FIXME: should be made independent of OS; note std::remove does not take wild cards
     if ( par_rank() == 0 )
@@ -154,3 +164,5 @@ TEST_CASE( "Shape_Sensitivity_Bspline_3D",
         }
     }
 }
+
+}    // namespace exa_shape_sensitivity_bspline
