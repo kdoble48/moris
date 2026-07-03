@@ -17,24 +17,29 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_couette_flow_static
+{
 
 TEST_CASE("Couette_Flow_Static",
-        "[moris],[example],[fluid],[laminar]")
+        "[moris],[example],[fluid],[laminar],[EXA_Couette_Flow_Static]")
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Couette_Flow_Static.so";
@@ -45,3 +50,4 @@ TEST_CASE("Couette_Flow_Static",
     fn_WRK_Workflow_Main_Interface( argc, argv );
 }
 
+}    // namespace exa_couette_flow_static
