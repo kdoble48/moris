@@ -258,6 +258,8 @@ option(MORIS_USE_CLANG_TIDY
 
 option(BUILD_MAIN "Build main executable." OFF)
 
+option(BUILD_PYBINDINGS "Build the moris_py Python bindings module." OFF)
+
 option(BUILD_ALL "Build all executables." OFF)
 
 option(BUILD_NONE "Build no executables." OFF)
@@ -338,29 +340,17 @@ include(${MORIS_CMAKE_DIR}/utilities/dynamic_link_input.cmake)
 # Compiler ----------------------------------------------------------------
 # -------------------------------------------------------------------------
 
-# Set default C compiler.
-if (NOT MORIS_C_COMPILER )
-    set(MORIS_C_COMPILER "mpicc" )
-endif()
+# Compilers are chosen at first configure (cache -DCMAKE_CXX_COMPILER=..., the
+# CC/CXX environment, a toolchain file, or CMakePresets.json) - CMake does not
+# support changing them after project(). The previous after-project() override
+# to mpicc/mpic++ was unsupported and let build trees configured from different
+# shells end up on different toolchains. MORIS_*_COMPILER now MIRROR the
+# detected compilers; the package Config.cmake exports keep working truthfully.
+set(MORIS_C_COMPILER   ${CMAKE_C_COMPILER})
+set(MORIS_CXX_COMPILER ${CMAKE_CXX_COMPILER})
 
-# Set default C++ compiler
-if (NOT MORIS_CXX_COMPILER )
-    if (MORIS_USE_INTEL ) 
-        set(MORIS_CXX_COMPILER "mpicxx" )
-        if (HAVE_PEDANTIC)
-            set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -Wunused-variable -Wsign-compare" )
-        endif()
-    else()
-        set(MORIS_CXX_COMPILER "mpic++")
-        message(STATUS "MORIS_CXX_COMPILER is set to ${MORIS_CXX_COMPILER}")
-    endif()
-endif()
-
-set(MORIS_C_LINK_EXECUTABLE ${MORIS_C_COMPILER} )
-set(MORIS_CXX_LINK_EXECUTABLE ${MORIS_CXX_COMPILER})
-
-message(STATUS "MORIS recognized the C compiler type MORIS_C_COMPILER=${MORIS_C_COMPILER}.")
-message(STATUS "MORIS recognized the C++ compiler type MORIS_CXX_COMPILER=${MORIS_CXX_COMPILER}.")
+message(STATUS "MORIS C compiler   (detected): ${MORIS_C_COMPILER}")
+message(STATUS "MORIS C++ compiler (detected): ${MORIS_CXX_COMPILER}")
 
 # Check for compiler flags.
 include(CheckCXXCompilerFlag)
@@ -476,7 +466,10 @@ if (MORIS_HAVE_DEBUG)
 endif()
 
 if (MORIS_HAVE_SYMBOLIC)
-    set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type Debug" FORCE)
+    # default (only when the user/preset did not choose a build type)
+    if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+    endif()
     
     if (MORIS_HAVE_SYMBOLIC_STRONG)
         # add here option to ease debugging
@@ -507,7 +500,10 @@ if (MORIS_HAVE_SYMBOLIC)
     #    set(MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -fanalyzer")
     #endif()
 else()    
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type Release" FORCE)
+    # default (only when the user/preset did not choose a build type)
+    if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+    endif()
     check_cxx_compiler_flag(-O3 HAVE_O3_OPTIMISATION)
     if (HAVE_O3_OPTIMISATION)
         if (MORIS_USE_INTEL)
@@ -951,9 +947,7 @@ IF(CMAKE_CXX_COMPILER_ID MATCHES "^GNU$")
     endif()
 endif()
 
-# C++ compiler flags.
-set(CMAKE_C_COMPILER ${MORIS_C_COMPILER})
-set(CMAKE_CXX_COMPILER ${MORIS_CXX_COMPILER})
+# C++ compiler flags. (Compilers are NOT set here: unsupported after project().)
 set(CMAKE_CXX_FLAGS ${MORIS_CXX_FLAGS})
 
 # to activaite custom malloc and free
@@ -1011,6 +1005,11 @@ if(BUILD_NONE)
 endif()
 
 if(BUILD_MAIN)
+    include(${MORIS_DEPENDS_DIR}/main_includes.cmake)
+endif()
+
+if(BUILD_PYBINDINGS)
+    # moris_py links the same library closure as the main executable
     include(${MORIS_DEPENDS_DIR}/main_includes.cmake)
 endif()
 
