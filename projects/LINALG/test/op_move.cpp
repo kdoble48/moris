@@ -88,6 +88,31 @@ namespace moris
         REQUIRE(target(0, 0) == 2.0);
     }
 
+    TEST_CASE("moris::Matrix move of auxiliary-memory view", "[linalgebra],[move_semantics]")
+    {
+        // MORIS wraps external arrays as strict arma views (advanced
+        // constructor, e.g. around mesh data blocks). Moving such a Matrix
+        // must not abort and must preserve the values.
+        // Regression: a swap-based move implementation died here with
+        // "Mat::init(): mismatch between size of auxiliary memory and
+        // requested size" during MTK mesh building.
+        real tData[ 6 ] = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
+
+        Matrix<DDRMat> view( tData, 3, 2, false, true );    // no-copy, strict
+        Matrix<DDRMat> moved( std::move( view ) );
+        REQUIRE( moved.n_rows() == 3 );
+        REQUIRE( moved.n_cols() == 2 );
+        REQUIRE( moved( 0, 0 ) == 1.0 );
+        REQUIRE( moved( 2, 1 ) == 6.0 );
+
+        real tData2[ 4 ] = { 7.0, 8.0, 9.0, 10.0 };
+        Matrix<DDRMat> view2( tData2, 2, 2, false, true );
+        Matrix<DDRMat> target;
+        target = std::move( view2 );
+        REQUIRE( target.n_rows() == 2 );
+        REQUIRE( target( 1, 1 ) == 10.0 );
+    }
+
     TEST_CASE("moris::Matrix vector push_back with move semantics", "[linalgebra],[move_semantics]")
     {
         // This test verifies that std::vector can use move semantics

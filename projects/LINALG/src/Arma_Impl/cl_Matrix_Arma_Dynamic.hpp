@@ -131,33 +131,28 @@ namespace moris
          * Enables efficient reallocation of containers holding matrices
          * (mirrors the Eigen implementation's move support).
          *
-         * Implemented via arma::Mat::swap rather than a defaulted move:
-         * arma::Mat's own move members are not declared noexcept, and
-         * std::vector only moves during reallocation when the move
-         * constructor is noexcept. swap is allocation-free and steals the
-         * heap buffer, leaving the source empty.
+         * Defaulted so arma::Mat's own move members run: they correctly
+         * handle matrices constructed over auxiliary (external) memory and
+         * strict views, which MORIS uses when wrapping mesh arrays - a
+         * blind swap aborts there (Mat::init aux-size mismatch). arma does
+         * not declare its moves noexcept; the explicit noexcept here is
+         * honored per P1286R2 (GCC 9+) and is required for std::vector to
+         * move rather than copy during reallocation.
          *
-         * @param[in] other Matrix to move from (left empty).
+         * @param[in] other Matrix to move from (valid but unspecified after).
          */
-        Matrix( Matrix< arma::Mat< Type > >&& other ) noexcept
-                : mMatrix()
-        {
-            mMatrix.swap( other.mMatrix );
-        }
+        Matrix( Matrix< arma::Mat< Type > >&& other ) noexcept = default;
 
         /**
          * Move assignment operator.
-         * Enables efficient swap/move operations without deep copying.
+         * Enables efficient move without deep copying. See the move
+         * constructor note on aux-memory handling and noexcept.
          *
          * @param[in] other Matrix to move from.
          * @return Reference to this matrix.
          */
         Matrix< arma::Mat< Type > >&
-        operator=( Matrix< arma::Mat< Type > >&& other ) noexcept
-        {
-            mMatrix.swap( other.mMatrix );
-            return *this;
-        }
+        operator=( Matrix< arma::Mat< Type > >&& other ) noexcept = default;
         // -----------------------------------------------------------------
 
         // template constructor
