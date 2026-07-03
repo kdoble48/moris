@@ -13,17 +13,30 @@
 #include "cl_Logger.hpp" // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_sa_cut_pcbar_transient
+{
 
 TEST_CASE("SA_Cut_PCBar_Transient",
-        "[moris],[example],[optimization],[sweep],[sweep_transient]")
+        "[moris],[example],[optimization],[sweep],[sweep_transient],[EXA_SA_Cut_PCBar_Transient]")
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    // (SA_Cut_PCBar_Transient.cpp declares extern gInterpolationOrder /
+    //  gPrintReferenceValues but never reads them; set defensively)
+    gInterpolationOrder   = 0;
+    gPrintReferenceValues = false;
+
     // Tolerance for adjoint vs. FD sensitivities
     moris::real tToleranceSensties = 0.05;
 
@@ -92,4 +105,6 @@ TEST_CASE("SA_Cut_PCBar_Transient",
     // close file
     close_hdf5_file( tFileID );
 }
+
+}    // namespace exa_sa_cut_pcbar_transient
 

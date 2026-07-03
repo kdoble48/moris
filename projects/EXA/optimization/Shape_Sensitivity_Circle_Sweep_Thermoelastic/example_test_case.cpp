@@ -12,16 +12,23 @@
 #include "cl_Logger.hpp"    // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_shape_sensitivity_circle_sweep_thermoelastic
+{
 
 TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic",
-        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic]" )
+        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic],[EXA_Shape_Sensitivity_Circle_Sweep_Thermoelastic]" )
 {
     if ( par_size() == 1 )
     {
@@ -118,7 +125,7 @@ TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic",
 }
 
 TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_Staggered",
-        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic_staggered]" )
+        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic_staggered],[EXA_Shape_Sensitivity_Circle_Sweep_Thermoelastic]" )
 {
     if ( par_size() == 1 )
     {
@@ -188,7 +195,7 @@ TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_Staggered",
 }
 
 TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_GCMMA",
-        "[moris],[example],[optimization],[gcmma_thermoelastic]" )
+        "[moris],[example],[optimization],[gcmma_thermoelastic],[EXA_Shape_Sensitivity_Circle_Sweep_Thermoelastic]" )
 {
 #ifdef MORIS_HAVE_GCMMA
     // define command line call
@@ -206,3 +213,5 @@ TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_GCMMA",
     REQUIRE( tRet == 0 );
 #endif
 }
+
+}    // namespace exa_shape_sensitivity_circle_sweep_thermoelastic

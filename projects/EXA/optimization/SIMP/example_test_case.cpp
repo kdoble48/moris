@@ -14,16 +14,23 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_simp
+{
 
 TEST_CASE("SIMP",
-        "[moris],[example],[optimization],[sweep]")
+        "[moris],[example],[optimization],[sweep],[EXA_SIMP]")
 {
     // define command line call
     int argc = 2;
@@ -54,4 +61,6 @@ TEST_CASE("SIMP",
     CHECK(tExoIO.get_nodal_field_value( 800, 2, 0 ) == Approx(0.419973));
 
 }
+
+}    // namespace exa_simp
 

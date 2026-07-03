@@ -17,26 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-// global variable for test case index ( in this case either petsc/ amesos solver)
-uint gTestCaseIndex;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_channel_with_four_cylinders_static_temp_only
+{
+
+void
 check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -121,7 +117,7 @@ check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -206,7 +202,7 @@ check_quadratic_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_serial()
 {
     MORIS_LOG_INFO( " " );
@@ -246,7 +242,7 @@ check_linear_results_serial()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_parallel()
 {
     MORIS_LOG_INFO( " " );
@@ -286,7 +282,7 @@ check_linear_results_parallel()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results_serial()
 {
     MORIS_LOG_INFO( " " );
@@ -326,7 +322,7 @@ check_quadratic_results_serial()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results_parallel()
 {
     MORIS_LOG_INFO( " " );
@@ -366,19 +362,25 @@ check_quadratic_results_parallel()
 
 //---------------------------------------------------------------
 
-TEST_CASE( "Channel_with_Four_Cylinders_Static_Linear",
-        "[moris],[example],[thermal],[diffusion]" )
+// Catch2 test name carries the "Temp_Only_" prefix (RFC 2.3c rename): the bare name
+// collides with advection/Channel_with_Four_Cylinders_Static inside the shared
+// EXA-test runner and Catch2 hard-fails on duplicates. The ctest names are unchanged
+// (Channel_with_Four_Cylinders_Static_Temp_Only-{1,2}-procs via TEST_BASE).
+TEST_CASE( "Temp_Only_Channel_with_Four_Cylinders_Static_Linear",
+        "[moris],[example],[thermal],[diffusion],[EXA_Channel_with_Four_Cylinders_Static_Temp_Only]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
+    gTestCaseIndex        = 0;    // re-set per solve below (0 = PETSc, 1 = AMESOS)
 
     char tString1[] = "";
     char tString2[] = "./Channel_with_Four_Cylinders_Static_Temp_Only.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 1;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Channel_with_Four_Cylinders_Static_Temp_Only: Interpolation order 1 - %i Processors.", par_size() );
@@ -459,19 +461,22 @@ TEST_CASE( "Channel_with_Four_Cylinders_Static_Linear",
 
 //---------------------------------------------------------------
 
-TEST_CASE( "Channel_with_Four_Cylinders_Static_Quadratic",
-        "[moris],[example],[thermal],[diffusion]" )
+// Catch2 test name carries the "Temp_Only_" prefix (RFC 2.3c rename) - see the Linear case above.
+TEST_CASE( "Temp_Only_Channel_with_Four_Cylinders_Static_Quadratic",
+        "[moris],[example],[thermal],[diffusion],[EXA_Channel_with_Four_Cylinders_Static_Temp_Only]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 2;
+    gPrintReferenceValues = false;
+    gTestCaseIndex        = 1;    // AMESOS solve - the value the Linear case left behind in the legacy full-binary run
 
     char tString1[] = "";
     char tString2[] = "./Channel_with_Four_Cylinders_Static_Temp_Only.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 2;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Channel_with_Four_Cylinders_Static_Temp_Only: Interpolation order 2 - %i Processors.", par_size() );
@@ -509,3 +514,5 @@ TEST_CASE( "Channel_with_Four_Cylinders_Static_Quadratic",
         }
     }
 }
+
+}    // namespace exa_channel_with_four_cylinders_static_temp_only

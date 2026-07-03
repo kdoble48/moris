@@ -17,26 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// test case index
-uint gTestCaseIndex;
-
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_fickian_problem
+{
+
+void
 check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -82,7 +78,7 @@ check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -129,7 +125,7 @@ check_quadratic_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -161,7 +157,7 @@ check_linear_results_serial()
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_quadratic_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -194,7 +190,7 @@ check_quadratic_results_serial()
 //---------------------------------------------------------------
 
 TEST_CASE( "Fickian_Problem_Linear",
-        "[moris],[example],[thermal],[diffusion]" )
+        "[moris],[example],[thermal],[diffusion],[EXA_Fickian_Problem]" )
 {
     // temporary
     gLogger.initialize( "Log.log" );
@@ -202,16 +198,15 @@ TEST_CASE( "Fickian_Problem_Linear",
     // define command line call
     int argc = 2;
 
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex        = 0;
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
+
     char tString1[] = "";
     char tString2[] = "./Fick_Problem.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set test case index
-    gTestCaseIndex = 0;
-
-    // set interpolation order
-    gInterpolationOrder = 1;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -237,21 +232,20 @@ TEST_CASE( "Fickian_Problem_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE( "Fickian_Problem_Quadratic",
-        "[moris],[example],[thermal],[diffusion]" )
+        "[moris],[example],[thermal],[diffusion],[EXA_Fickian_Problem]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex        = 1;
+    gInterpolationOrder   = 2;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Fick_Problem.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 2;
-
-    // set test case index
-    gTestCaseIndex = 1;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -273,3 +267,5 @@ TEST_CASE( "Fickian_Problem_Quadratic",
         }
     }
 }
+
+}    // namespace exa_fickian_problem

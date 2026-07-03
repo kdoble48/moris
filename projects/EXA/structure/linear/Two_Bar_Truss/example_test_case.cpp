@@ -19,35 +19,35 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_two_bar_truss
+{
 
 TEST_CASE( "Two_Bar_Truss",
-        "[moris],[example],[structure],[linear],[optimization],[sweep]" )
+        "[moris],[example],[structure],[linear],[optimization],[sweep],[EXA_Two_Bar_Truss]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Two_Bar_Truss.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 1;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Two_Bar_Truss: Interpolation order %i - %i Processors.", gInterpolationOrder, par_size() );
@@ -109,3 +109,5 @@ TEST_CASE( "Two_Bar_Truss",
     // close file
     close_hdf5_file( tFileID );
 }
+
+}    // namespace exa_two_bar_truss

@@ -17,21 +17,22 @@
 #include "fn_norm.hpp"
 #include "cl_MTK_Exodus_IO_Helper.hpp"    // MTK/src
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_shape_sensitivity_two_material_sweep_thermoelastic
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -165,8 +166,12 @@ check_results(
 }
 
 TEST_CASE( "Shape_Sensitivity_Two_Material_Sweep_Thermoelastic",
-        "[moris],[example],[optimization],[sweep],[sweep_two_material_thermoelastic]" )
+        "[moris],[example],[optimization],[sweep],[sweep_two_material_thermoelastic],[EXA_Shape_Sensitivity_Two_Material_Sweep_Thermoelastic]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex        = 0;
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -178,9 +183,6 @@ TEST_CASE( "Shape_Sensitivity_Two_Material_Sweep_Thermoelastic",
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
 
-    // set test case index
-    gTestCaseIndex = 0;
-
     // catch test statements should follow
     REQUIRE( tRet == 0 );
 
@@ -189,8 +191,12 @@ TEST_CASE( "Shape_Sensitivity_Two_Material_Sweep_Thermoelastic",
 }
 
 TEST_CASE( "Shape_Sensitivity_Two_Material_Sweep_Thermoelastic_Staggered",
-        "[moris],[example],[optimization],[sweep],[sweep_two_material_thermoelastic_staggered]" )
+        "[moris],[example],[optimization],[sweep],[sweep_two_material_thermoelastic_staggered],[EXA_Shape_Sensitivity_Two_Material_Sweep_Thermoelastic]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex        = 1;
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -205,9 +211,8 @@ TEST_CASE( "Shape_Sensitivity_Two_Material_Sweep_Thermoelastic_Staggered",
     // catch test statements should follow
     REQUIRE( tRet == 0 );
 
-    // set test case index
-    gTestCaseIndex = 1;
-
     // perform check for Test Case 0
     check_results( "ShapeSensitivitiesTwoMaterialStaggered.exo", gTestCaseIndex );
 }
+
+}    // namespace exa_shape_sensitivity_two_material_sweep_thermoelastic

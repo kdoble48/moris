@@ -19,34 +19,22 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gLevelSetInterpolationOrder;
-uint gFEMInterpolationOrder;
-uint gLagrMeshInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// use Bspline parameterization or primitives
-bool gUseBspline;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_contact_sensitivity_test
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         const std::string& aHdf5FileName,
@@ -342,8 +330,17 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Constact_Sensitivity_Test_2D",
-        "[moris],[example],[optimization],[contact]" )
+        "[moris],[example],[optimization],[contact],[EXA_Contact_Sensitivity_Test]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gLevelSetInterpolationOrder = 1;
+    gFEMInterpolationOrder      = 1;
+    gLagrMeshInterpolationOrder = 1;
+    gDim                        = 2;
+    gUseBspline                 = false;
+    gTestCaseIndex              = 0;
+    gPrintReferenceValues       = false;
+
     // define command line call
     int argc = 2;
 
@@ -528,3 +525,5 @@ TEST_CASE( "Constact_Sensitivity_Test_2D",
         }
     }
 }
+
+}    // namespace exa_contact_sensitivity_test

@@ -20,20 +20,22 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_beam_temperature_field
+{
+
+void
 check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -77,7 +79,7 @@ check_linear_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -109,11 +111,17 @@ check_linear_results_serial()
 
 //---------------------------------------------------------------
 
-TEST_CASE( "Field_example_write",
-        "[moris],[example],[structure],[Plate_Temperature_Field_Write]" )
+// Renamed from "Field_example_write" (copy-paste artifact) - the shared EXA runner
+// forbids duplicate Catch2 test names; thermal/diffusion/Field_Example owns the
+// genuine "Field_example_write" case (approved rename, doc/internal/EXA_RUNNER_RFC.md par. 2.3c).
+TEST_CASE( "Beam_Temperature_Field_write",
+        "[moris],[example],[structure],[Plate_Temperature_Field_Write],[EXA_Beam_Temperature_Field]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Beam_Temperature_Field.so";
@@ -140,3 +148,5 @@ TEST_CASE( "Field_example_write",
         }
     }
 }
+
+}    // namespace exa_beam_temperature_field

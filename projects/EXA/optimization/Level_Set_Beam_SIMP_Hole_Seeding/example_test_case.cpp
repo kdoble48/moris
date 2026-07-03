@@ -14,15 +14,22 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_level_set_beam_simp_hole_seeding
+{
+
+void
 check_results_serial(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -78,7 +85,7 @@ check_results_serial(
     REQUIRE( tNumElems == tReferenceNumElems( aTestCaseIndex ) );
 }
 
-extern "C" void
+void
 check_results_parallel(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -158,7 +165,7 @@ check_results_parallel(
 //---------------------------------------------------------------
 
 TEST_CASE( "Level_Set_Beam_SIMP_Hole_Seeding",
-        "[moris],[example],[optimization],[Level_Set_Beam_SIMP_Hole_Seeding]" )
+        "[moris],[example],[optimization],[Level_Set_Beam_SIMP_Hole_Seeding],[EXA_Level_Set_Beam_SIMP_Hole_Seeding]" )
 {
     // define command line call
     int argc = 2;
@@ -199,5 +206,7 @@ TEST_CASE( "Level_Set_Beam_SIMP_Hole_Seeding",
         }
     }
 }
+
+}    // namespace exa_level_set_beam_simp_hole_seeding
 
 //---------------------------------------------------------------

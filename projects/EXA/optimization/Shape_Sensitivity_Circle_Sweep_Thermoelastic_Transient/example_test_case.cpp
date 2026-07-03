@@ -18,18 +18,22 @@
 #include "fn_norm.hpp"
 #include "cl_MTK_Exodus_IO_Helper.hpp"    // MTK/src
 
-using namespace moris;
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
 
-// test case index
-uint gTestCaseIndex;
+using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_shape_sensitivity_circle_sweep_thermoelastic_transient
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -162,8 +166,11 @@ check_results(
 }
 
 TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_Transient",
-        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic_transient]" )
+        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic_transient],[EXA_Shape_Sensitivity_Circle_Sweep_Thermoelastic_Transient]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex = 0;
+
     // define command line call
     int argc = 2;
 
@@ -178,16 +185,16 @@ TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_Transient",
     // catch test statements should follow
     REQUIRE( tRet == 0 );
 
-    // set test case index
-    gTestCaseIndex = 0;
-
     // perform check for Test Case 0
     check_results( "ShapeSensitivitiesThermoelasticTransient.exo", gTestCaseIndex );
 }
 
 TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_Transient_Staggered",
-        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic_transient_staggered]" )
+        "[moris],[example],[optimization],[sweep],[sweep_thermoelastic_transient_staggered],[EXA_Shape_Sensitivity_Circle_Sweep_Thermoelastic_Transient]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestCaseIndex = 1;
+
     // define command line call
     int argc = 2;
 
@@ -202,9 +209,8 @@ TEST_CASE( "Shape_Sensitivity_Circle_Sweep_Thermoelastic_Transient_Staggered",
     // catch test statements should follow
     REQUIRE( tRet == 0 );
 
-    // set test case index
-    gTestCaseIndex = 1;
-
     // perform check for Test Case 0
     check_results( "ShapeSensitivitiesThermoelasticTransientStaggered.exo", gTestCaseIndex );
 }
+
+}    // namespace exa_shape_sensitivity_circle_sweep_thermoelastic_transient

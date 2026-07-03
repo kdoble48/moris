@@ -11,22 +11,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
-//---------------------------------------------------------------
-
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_oscillator
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -208,10 +208,14 @@ check_results(
 }
 
 TEST_CASE( "Oscillator",
-        "[moris],[example],[fluid],[BodyFitted]" )
+        "[moris],[example],[fluid],[BodyFitted],[EXA_Oscillator]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    // (gInterpolationOrder is set below, as in the legacy test case)
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Oscillator.so";
@@ -266,3 +270,5 @@ TEST_CASE( "Oscillator",
         }
     }
 }
+
+}    // namespace exa_oscillator

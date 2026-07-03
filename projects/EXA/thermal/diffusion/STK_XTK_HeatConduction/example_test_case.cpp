@@ -17,23 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_stk_xtk_heatconduction
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -165,10 +164,14 @@ check_results(
 }
 
 TEST_CASE( "STK_XTK_HeatConduction",
-        "[moris],[example],[structure],[STK_XTK_HeatConduction]" )
+        "[moris],[example],[structure],[STK_XTK_HeatConduction],[EXA_STK_XTK_HeatConduction]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./STK_XTK_HeatConduction.so";
@@ -223,3 +226,5 @@ TEST_CASE( "STK_XTK_HeatConduction",
         }
     }
 }
+
+}    // namespace exa_stk_xtk_heatconduction

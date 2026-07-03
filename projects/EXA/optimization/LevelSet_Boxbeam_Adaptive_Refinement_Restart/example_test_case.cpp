@@ -14,18 +14,24 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
-using namespace moris;
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
 
-// flag to print reference values
-bool gPrintReferenceValues = false;
+using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+// NOTE: intra-TU declaration order is load-bearing - the Create File case writes the
+// ADV hdf5 that the Restart case's deck reads (Catch2 runs cases in declaration order).
 
-extern "C" void
+namespace exa_levelset_boxbeam_adaptive_refinement_restart
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -66,8 +72,11 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Leveset Boxbeam Create File",
-        "[moris],[example],[optimization],[levelset_boxbeam_create_file]" )
+        "[moris],[example],[optimization],[levelset_boxbeam_create_file],[EXA_LevelSet_Boxbeam_Adaptive_Refinement_Restart]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
+
     // remove files from previous test runs
     // FIXME: should be made independent of OS; note std::remove does not take wild cards
     if ( par_rank() == 0 )
@@ -94,8 +103,11 @@ TEST_CASE( "Leveset Boxbeam Create File",
 //---------------------------------------------------------------
 
 TEST_CASE( "Leveset Boxbeam Restart",
-        "[moris],[example],[optimization],[levelset_boxbeam_restart]" )
+        "[moris],[example],[optimization],[levelset_boxbeam_restart],[EXA_LevelSet_Boxbeam_Adaptive_Refinement_Restart]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -116,3 +128,5 @@ TEST_CASE( "Leveset Boxbeam Restart",
     // perform check for Test Case 0
     check_results( "Levelset_Boxbeam_Restart.exo.e-s.0016", tTestCaseIndex );
 }
+
+}    // namespace exa_levelset_boxbeam_adaptive_refinement_restart

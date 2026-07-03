@@ -19,29 +19,22 @@
 
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_one_element_mat_geo_pdv_sweep
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         const std::string& aHdf5FileName,
@@ -49,8 +42,14 @@ check_results(
 {
 }
 TEST_CASE( "One_Element_Mat_Geo_Pdv_sweep",
-        "[moris],[example],[optimization],[One_Element_Mat_Geo_Pdv_sweep]" )
+        "[moris],[example],[optimization],[One_Element_Mat_Geo_Pdv_sweep],[EXA_One_Element_Mat_Geo_Pdv_sweep]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 0;    // legacy zero-init; unused by this deck
+    gDim                  = 0;    // legacy zero-init; unused by this deck
+    gTestCaseIndex        = 0;    // legacy zero-init; unused by this deck
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -143,3 +142,5 @@ TEST_CASE( "One_Element_Mat_Geo_Pdv_sweep",
         close_hdf5_file( tFileID );
     }
 }
+
+}    // namespace exa_one_element_mat_geo_pdv_sweep

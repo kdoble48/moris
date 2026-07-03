@@ -17,29 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// problem dimension: 2D or 3D
-uint gDim;
-
-// test case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_voxel_grain_structure
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -121,28 +114,25 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Voxel_Grain_Structure",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Voxel_Grain_Structure]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;    // interpolation order
+    gDim                  = 2;    // dimension: 2D
+    gTestCaseIndex        = 0;    // test case index
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Voxel_Grain_Structure.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gInterpolationOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Voxel_Grain_Structure - 2D: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set dimension: 2D
-    gDim = 2;
-
-    // set test case index
-    gTestCaseIndex = 0;
 
     // call to performance manager main interface
     fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -150,3 +140,5 @@ TEST_CASE( "Voxel_Grain_Structure",
     // perform check for Test Case 0
     check_results( "Voxel_Grain_Structure.exo", gTestCaseIndex );
 }
+
+}    // namespace exa_voxel_grain_structure

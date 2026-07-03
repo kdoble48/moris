@@ -14,27 +14,25 @@
 #include "cl_MTK_Exodus_IO_Helper.hpp"
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char * argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-// initialize various solver parameters as global variables
-
-bool gHaveStaggeredFA = false;
-bool gHaveStaggeredSA = false;  // only relevant if Fwd. analysis also staggered
-bool gUseMixedTimeElements = false;
-bool gUseBelosWithILUT = false;
-
-//---------------------------------------------------------------
+namespace exa_solver_examples
+{
 
 TEST_CASE("Standard_Monolithic",
-        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Standard_Monolithic]")
+        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Standard_Monolithic],[EXA_Solver_Examples]")
 {
-    // change parameters
+    // set all globals this test case or its deck consumes (rule R4)
     gHaveStaggeredFA = false;
     gHaveStaggeredSA = false;
     gUseMixedTimeElements = false;
@@ -59,9 +57,9 @@ TEST_CASE("Standard_Monolithic",
 
 // FIXME: This solver configuration returns an error in the matrix assembly due to the mixed time elements
 // TEST_CASE("Monolithic_Mixed_Time_Elements",
-//         "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Monolithic_Mixed_Time_Elements]")
+//         "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Monolithic_Mixed_Time_Elements],[EXA_Solver_Examples]")
 // {
-//     // change parameters
+//     // set all globals this test case or its deck consumes (rule R4)
 //     gHaveStaggeredFA = false;
 //     gHaveStaggeredSA = false;
 //     gUseMixedTimeElements = true;
@@ -85,9 +83,9 @@ TEST_CASE("Standard_Monolithic",
 //---------------------------------------------------------------
 
 TEST_CASE("Staggered_FA_Monolithic_SA",
-        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Staggered_FA_Monolithic_SA]")
+        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Staggered_FA_Monolithic_SA],[EXA_Solver_Examples]")
 {
-    // change parameters
+    // set all globals this test case or its deck consumes (rule R4)
     gHaveStaggeredFA = true;
     gHaveStaggeredSA = false;
     gUseMixedTimeElements = false;
@@ -111,9 +109,9 @@ TEST_CASE("Staggered_FA_Monolithic_SA",
 //---------------------------------------------------------------
 
 TEST_CASE("Staggered_FA_and_SA",
-        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Staggered_FA_and_SA]")
+        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Staggered_FA_and_SA],[EXA_Solver_Examples]")
 {
-    // change parameters
+    // set all globals this test case or its deck consumes (rule R4)
     gHaveStaggeredFA = true;
     gHaveStaggeredSA = true;
     gUseMixedTimeElements = false;
@@ -137,9 +135,9 @@ TEST_CASE("Staggered_FA_and_SA",
 //---------------------------------------------------------------
 
 TEST_CASE("Staggered_FA_and_SA_Mixed_Time_Elements",
-        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Staggered_FA_and_SA_Mixed_Time_Elements]")
+        "[moris],[example],[optimization],[Solver_Examples_Thermo_Elastic],[Staggered_FA_and_SA_Mixed_Time_Elements],[EXA_Solver_Examples]")
 {
-    // change parameters
+    // set all globals this test case or its deck consumes (rule R4)
     gHaveStaggeredFA = true;
     gHaveStaggeredSA = true;
     gUseMixedTimeElements = true;
@@ -159,4 +157,6 @@ TEST_CASE("Staggered_FA_and_SA_Mixed_Time_Elements",
     // catch test statements should follow
     REQUIRE( tRet ==  0 );
 }
+
+}    // namespace exa_solver_examples
 

@@ -17,23 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_heated_sphere
+{
+
+void
 check_results(
         const std::string &aExoFileName,
         uint               aTestCaseIndex )
@@ -172,7 +171,7 @@ check_results(
 //---------------------------------------------------------------
 
 TEST_CASE( "Heated_Sphere_Linear",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Heated_Sphere]" )
 {
     // define command line call
     int argc = 2;
@@ -181,6 +180,9 @@ TEST_CASE( "Heated_Sphere_Linear",
     char tString2[] = "./Heated_Sphere.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
 
     // set interpolation order
     gInterpolationOrder = 1;
@@ -280,3 +282,5 @@ TEST_CASE( "Heated_Sphere_Linear",
 //         }
 //     }
 // }
+
+}    // namespace exa_heated_sphere

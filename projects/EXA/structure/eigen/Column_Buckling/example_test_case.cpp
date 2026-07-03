@@ -17,32 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// interpolation order
-std::string tOrder;
-
-// spatial dimensions
-uint tDim;
-
-// stress used in geometric stiffness (PK2 or Linear)
-std::string tStressType;
-
-// output file name
-std::string tOutputFileName;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_column_buckling
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -163,7 +153,7 @@ check_results(
 #ifdef MORIS_HAVE_SLEPC
 
 TEST_CASE( "Column_Buckling_2D",
-        "[moris],[example],[structure],[eigen]" )
+        "[moris],[example],[structure],[eigen],[EXA_Column_Buckling]" )
 {
     // define command line call
     int argc = 2;
@@ -176,6 +166,8 @@ TEST_CASE( "Column_Buckling_2D",
     // test case index
     uint tTestCase = par_size() == 1 ? 0 : 1;
 
+    // set all globals this test case or its deck consumes (rule R4)
+
     // interpolation order
     tOrder = "1";
 
@@ -187,6 +179,9 @@ TEST_CASE( "Column_Buckling_2D",
 
     // file name
     tOutputFileName = "Column_Buckling_" + tStressType + "_PolyOrd_" + tOrder + "_" + std::to_string( tDim ) + "D.exo";
+
+    // flag to print reference values
+    gPrintReferenceValues = false;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Column Buckling in %iD with interpolation order %s using %s stress on %i Processors.",
@@ -277,7 +272,7 @@ TEST_CASE( "Column_Buckling_2D",
 //------------------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE( "Column_Buckling_3D",
-        "[moris],[example],[structure],[eigen]" )
+        "[moris],[example],[structure],[eigen],[EXA_Column_Buckling]" )
 {
     // define command line call
     int argc = 2;
@@ -290,6 +285,8 @@ TEST_CASE( "Column_Buckling_3D",
     // test case index
     uint tTestCase = par_size() == 1 ? 6 : 7;
 
+    // set all globals this test case or its deck consumes (rule R4)
+
     // interpolation order
     tOrder = "1";
 
@@ -301,6 +298,9 @@ TEST_CASE( "Column_Buckling_3D",
 
     // file name
     tOutputFileName = "Column_Buckling_" + tStressType + "_PolyOrd_" + tOrder + "_" + std::to_string( tDim ) + "D.exo";
+
+    // flag to print reference values
+    gPrintReferenceValues = false;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Column Buckling in %iD with interpolation order %s using %s stress on %i Processors.",
@@ -326,7 +326,7 @@ TEST_CASE( "Column_Buckling_3D",
 //-------------------------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE( "Column_Buckling_Immersed_2D",
-        "[moris],[example],[structure],[eigen]" )
+        "[moris],[example],[structure],[eigen],[EXA_Column_Buckling]" )
 {
     // define command line call
     int argc = 2;
@@ -339,6 +339,8 @@ TEST_CASE( "Column_Buckling_Immersed_2D",
     // test case index
     uint tTestCase = par_size() == 1 ? 8 : 9;
 
+    // set all globals this test case or its deck consumes (rule R4)
+
     // interpolation order
     tOrder = "1";
 
@@ -350,6 +352,9 @@ TEST_CASE( "Column_Buckling_Immersed_2D",
 
     // file name
     tOutputFileName = "Column_Buckling_Immersed_" + tStressType + "_PolyOrd_" + tOrder + "_" + std::to_string( tDim ) + "D.exo";
+
+    // flag to print reference values
+    gPrintReferenceValues = false;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Column Buckling in %iD with interpolation order %s using %s stress on %i Processors.",
@@ -374,7 +379,7 @@ TEST_CASE( "Column_Buckling_Immersed_2D",
 //-------------------------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE( "Column_Buckling_Immersed_3D",
-        "[moris],[example],[structure],[eigen]" )
+        "[moris],[example],[structure],[eigen],[EXA_Column_Buckling]" )
 {
     // define command line call
     int argc = 2;
@@ -387,6 +392,8 @@ TEST_CASE( "Column_Buckling_Immersed_3D",
     // test case index
     uint tTestCase = par_size() == 1 ? 10 : 11;
 
+    // set all globals this test case or its deck consumes (rule R4)
+
     // interpolation order
     tOrder = "1";
 
@@ -398,6 +405,9 @@ TEST_CASE( "Column_Buckling_Immersed_3D",
 
     // file name
     tOutputFileName = "Column_Buckling_Immersed_" + tStressType + "_PolyOrd_" + tOrder + "_" + std::to_string( tDim ) + "D.exo";
+
+    // flag to print reference values
+    gPrintReferenceValues = false;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Column Buckling in %iD with interpolation order %s using %s stress on %i Processors.",
@@ -420,3 +430,5 @@ TEST_CASE( "Column_Buckling_Immersed_3D",
     }
 }
 #endif
+
+}    // namespace exa_column_buckling
