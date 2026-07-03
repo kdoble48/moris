@@ -37,8 +37,11 @@ int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
 
+namespace exa_pre_defined_diamond
+{
+
 TEST_CASE( "pre_defined_diamond",
-        "[moris],[example],[mesh_generation],[pre_defined_diamond]" )
+        "[moris],[example],[mesh_generation],[pre_defined_diamond],[EXA_pre_defined_diamond]" )
 {
         // get the root path for MORIS
     std::string tMorisRoot = moris::get_base_moris_dir();
@@ -71,3 +74,5 @@ TEST_CASE( "pre_defined_diamond",
         // check_results( ... );
     }
 }
+
+}    // namespace exa_pre_defined_diamond
