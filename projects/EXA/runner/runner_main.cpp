@@ -15,7 +15,6 @@
 #include <catch.hpp>
 #include "cl_Communication_Manager.hpp"   // COM/src
 #include "cl_Logger.hpp"                  // MRS/IOS/src
-#include "cl_Performance_Reporter.hpp"    // MRS/IOS/src
 #include "banner.hpp"                     // COR/src
 
 moris::Comm_Manager gMorisComm;
@@ -50,9 +49,6 @@ int main( int argc, char* argv[] )
 
     // Run Tests
     int tRet = Catch::Session().run( argc, argv );
-
-    // emit the consolidated performance report (while MPI is still live)
-    gPerfReporter.finalize();
 
     // finalize MORIS global communication manager
     gMorisComm.finalize();
