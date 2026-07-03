@@ -35,7 +35,11 @@
 #include "linalg_typedefs.hpp"
 #include "op_move.hpp"
 
-#include "cl_Logger.hpp"    // MRS/IOS/src
+#include "cl_Logger.hpp"                  // MRS/IOS/src
+#include "cl_Performance_Reporter.hpp"    // MRS/IOS/src
+#include "cl_Profiler.hpp"                // MRS/CHR/src
+
+#include <memory>
 
 #include "cl_WRK_Workflow_Factory.hpp"
 #include "cl_WRK_Performer_Manager.hpp"
@@ -69,6 +73,12 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
     bool        tSoFileSpecified  = false;
     bool        tXmlFileSpecified = false;
 
+    // performance-report overrides provided on the command line
+    sint        tCliPerfLevel    = 0;
+    bool        tCliPerfLevelSet = false;
+    std::string tCliPerfFile     = "";
+    bool        tCliPerfFileSet  = false;
+
     // go through user arguments and look for flags
     for ( int k = 1; k < argc; ++k )
     {
@@ -82,6 +92,8 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
             MORIS_LOG( "Valid input arguments are:" );
             MORIS_LOG( "option       : --meshgen or -mg :  generate foreground and background meshes (for EXHUME project)" );
             MORIS_LOG( "option       : --pause   or -p  :  report process IDs and pause run upon user input (for debugging)" );
+            MORIS_LOG( "option       : --perf-level N   :  performance-report granularity (0=run total .. 3=full tree, <0 off)" );
+            MORIS_LOG( "option       : --perf-report F  :  path of the JSON performance report" );
             MORIS_LOG( "last argument: <filename>.so    :  objective file with MORIS input" );
             MORIS_LOG( "last argument: <filename>.xml   :  xml file with MORIS input" );
             MORIS_LOG( " " );
@@ -95,6 +107,28 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
         {
             tIsOnlyMeshing = true;
             MORIS_LOG( "Only mesh generation and output requested." );
+            continue;
+        }
+
+        // performance-report granularity override: --perf-level N
+        if ( tArgString == "--perf-level" )
+        {
+            if ( k + 1 < argc )
+            {
+                tCliPerfLevel    = std::atoi( argv[ ++k ] );
+                tCliPerfLevelSet = true;
+            }
+            continue;
+        }
+
+        // performance-report file override: --perf-report <path>
+        if ( tArgString == "--perf-report" )
+        {
+            if ( k + 1 < argc )
+            {
+                tCliPerfFile    = std::string( argv[ ++k ] );
+                tCliPerfFileSet = true;
+            }
             continue;
         }
 
@@ -195,6 +229,47 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
         MORIS_ERROR( tOPTParameterList.size() > 0,
                 "fn_WRK_Workflow_Main_Interface: OPT parameter not set but are required." );
 
+        // resolve the performance-report configuration: OPT parameter list, overridden
+        // by the MORIS_PERF_LEVEL environment variable, overridden by the --perf-level CLI flag.
+        // Guard with exists() so decks predating these parameters still run (get() would error).
+        sint        tPerfLevel = 1;
+        std::string tPerfFile  = "perf_report.json";
+
+        if ( tOPTParameterList( 0 )( 0 ).exists( "performance_report_level" ) )
+        {
+            tPerfLevel = tOPTParameterList( 0 )( 0 ).get< sint >( "performance_report_level" );
+        }
+        if ( tOPTParameterList( 0 )( 0 ).exists( "performance_report_file" ) )
+        {
+            tPerfFile = tOPTParameterList( 0 )( 0 ).get< std::string >( "performance_report_file" );
+        }
+
+        if ( const char* tEnvLevel = std::getenv( "MORIS_PERF_LEVEL" ) )
+        {
+            tPerfLevel = std::atoi( tEnvLevel );
+        }
+        if ( tCliPerfLevelSet )
+        {
+            tPerfLevel = tCliPerfLevel;
+        }
+        if ( tCliPerfFileSet )
+        {
+            tPerfFile = tCliPerfFile;
+        }
+
+        // a negative level disables the report entirely
+        if ( tPerfLevel >= 0 )
+        {
+            gPerfReporter.initialize( tPerfLevel, tPerfFile );
+        }
+
+        // at the deepest granularity, also capture a gperftools CPU profile (callgrind)
+        // of the whole run; a no-op unless MORIS is built with gperftools
+#ifdef WITHGPERFTOOLS
+        std::unique_ptr< moris::Profiler > tProfiler =
+                tPerfLevel >= 3 ? std::make_unique< moris::Profiler >( "/tmp/gprofmoris.log" ) : nullptr;
+#endif
+
         // Create performer manager
         wrk::Performer_Manager tPerformerManager( tLibrary );
 
@@ -221,6 +296,14 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
             // print out matrix of IQI values
             MORIS_LOG_SPEC( "IQI values", ios::stringify_log( tIQIVal ) );
         }
+
+        // finalize the gperftools CPU profile (writes the callgrind file)
+#ifdef WITHGPERFTOOLS
+        if ( tProfiler )
+        {
+            tProfiler->stop();
+        }
+#endif
     }
 
     // return success

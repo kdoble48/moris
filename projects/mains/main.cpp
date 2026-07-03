@@ -12,9 +12,10 @@
 #include <ios>
 #include <limits>
 
-#include "cl_Communication_Manager.hpp"    // COM/src
-#include "cl_Logger.hpp"                   // MRS/IOS/src
-#include "banner.hpp"                      // COR/src
+#include "cl_Communication_Manager.hpp"      // COM/src
+#include "cl_Logger.hpp"                     // MRS/IOS/src
+#include "cl_Performance_Reporter.hpp"       // MRS/IOS/src
+#include "banner.hpp"                        // COR/src
 #include <Kokkos_Core.hpp>
 
 moris::Comm_Manager gMorisComm;
@@ -86,6 +87,9 @@ int main( int argc, char* argv[] )
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
 
     // Kokkos::finalize_all();
+
+    // emit the consolidated performance report (while MPI is still live for cross-rank reduction)
+    gPerfReporter.finalize();
 
     // finalize MORIS global communication manager
     gMorisComm.finalize();

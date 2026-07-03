@@ -14,7 +14,8 @@ set(TEST_SOURCES
     cl_Logger.cpp
     fn_to_stdio.cpp
     UT_IOS_Parsing_Tool.cpp
-    UT_IOS_File_To_Array.cpp )
+    UT_IOS_File_To_Array.cpp
+    UT_IOS_Performance_Reporter.cpp )
 
 # List additional includes
 include_directories(${MORIS_DIR}/snippets/ios)

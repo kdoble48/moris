@@ -667,7 +667,9 @@ find_package(Threads)
 option(MORIS_USE_GPERFTOOLS "Use Google Profiling tools (check paths in CMakeLists.txt)." OFF)
 
 if (MORIS_USE_GPERFTOOLS)
-    set( MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -I/usr/include/gperftools/ -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free" )
+    # -DWITHGPERFTOOLS activates the gperftools code paths guarded by `#ifdef WITHGPERFTOOLS`
+    # (cl_Profiler CPU profiling and the performance reporter's tcmalloc memory sampling)
+    set( MORIS_CXX_FLAGS "${MORIS_CXX_FLAGS} -DWITHGPERFTOOLS -I/usr/include/gperftools/ -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free" )
 
     link_libraries("-Wl,--no-as-needed -lprofiler -Wl,--as-needed -ltcmalloc")
 endif()

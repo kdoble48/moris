@@ -33,6 +33,10 @@ CMakeCache.txt
 *.hdf5
 *.h5
 
+# exodus per-iteration series written by optimization runs (NAME.exo.e-s.0001[.nprocs.rank]);
+# NOT bare *.exo/*.e -- committed test fixtures use those extensions
+*.e-s.[0-9]*
+
 
 # Don't commit latex compiler output
 *.fls

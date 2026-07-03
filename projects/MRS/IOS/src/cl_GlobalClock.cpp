@@ -50,6 +50,9 @@ namespace moris
         // record starting time
         mTimeStamps.resize( 1, (real)std::clock() );
 
+        // record starting memory usage
+        mMemoryStamps.resize( 1, 0.0 );
+
         // record action data for new entry
         mActionData.resize( 1, std::unordered_map< std::string, real >() );
 
@@ -64,7 +67,8 @@ namespace moris
     GlobalClock::sign_in(
             const std::string& aEntityBase,
             const std::string& aEntityType,
-            const std::string& aEntityAction )
+            const std::string& aEntityAction,
+            real               aMemoryNowMb )
     {
         // increment indentation level
         mIndentationLevel++;
@@ -93,6 +97,9 @@ namespace moris
         // create time stamp for new entity
         mTimeStamps.push_back( (real)std::clock() );
 
+        // record memory usage at sign-in for new entity
+        mMemoryStamps.push_back( aMemoryNowMb );
+
         // create map for action data for new entry
         mActionData.push_back( std::unordered_map< std::string, real >() );
 
@@ -117,6 +124,9 @@ namespace moris
     {
         // remove time stamp from list of active entities
         mTimeStamps.pop_back();
+
+        // remove memory stamp from list of active entities
+        mMemoryStamps.pop_back();
 
         // remove iteration time stamp from list of active entities
         mIterationTimeStamps.pop_back();

@@ -19,6 +19,9 @@
 #ifdef MORIS_HAVE_GCMMA
 #include "optalggcmmacall.hpp"
 #include "mma.hpp"
+
+#include <algorithm>
+#include <cmath>
 #endif
 
 using namespace moris;
@@ -42,6 +45,9 @@ OptAlgGCMMA::OptAlgGCMMA( const Parameter_List& aParameterList )
     mRestartIndex         = aParameterList.get< moris::sint >( "restart_index" );
     mMaxIterationsInitial = aParameterList.get< moris::sint >( "max_its" );
     mMaxIterations        = mMaxIterationsInitial;
+    
+    MORIS_LOG_INFO( "GCMMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f",
+            mMaxIterations, mStepSize, mPenalty );
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -62,6 +68,9 @@ OptAlgGCMMA::solve(
 
     // running status has to be wait when starting a solve
     mRunning = opt::Task::wait;
+
+    // fresh solve (possibly after a restart): objective scale re-derives from the first gradient
+    mObjScale = 1.0;
 
     mCurrentOptAlgInd = aCurrentOptAlgInd;    // set index of current optimization algorithm
     mProblem          = aOptProb;             // set the member variable mProblem to aOptProb
@@ -189,6 +198,32 @@ opt_alg_gcmma_func_wrap(
         double&      aObjval,
         double*      aConval )
 {
+    // Guard: the TPL solver's internal asymptote arithmetic can overflow on degenerate
+    // evaluations (huge objective/gradient jumps from near-degenerate XFEM cuts) and hand
+    // back non-finite ADVs. Evaluating those would compute garbage criteria and trip the
+    // gradient-consistency assert. Route into the existing optimizer-restart mechanism
+    // instead: the problem re-initializes from the current design and the solve resumes.
+    for ( uint iADVIndex = 0; iADVIndex < aOptAlgGCMMA->mProblem->get_num_advs(); iADVIndex++ )
+    {
+        if ( !std::isfinite( aAdv[ iADVIndex ] ) )
+        {
+            MORIS_LOG_WARNING( "GCMMA produced a non-finite design vector; requesting optimizer restart." );
+
+            aOptAlgGCMMA->mProblem->request_restart();
+
+            // signal the TPL solver to exit its iteration loop
+            aIter = -aIter;
+
+            // return the last evaluated (finite) objective and constraints
+            aObjval = aOptAlgGCMMA->get_objectives()( 0 );
+
+            auto tLastConval = aOptAlgGCMMA->get_constraints().data();
+            std::copy( tLastConval, tLastConval + aOptAlgGCMMA->mProblem->get_num_constraints(), aConval );
+
+            return;
+        }
+    }
+
     // Update the ADV matrix
     Vector< real > tADVs( aOptAlgGCMMA->mProblem->get_num_advs() );
     for ( uint iADVIndex = 0; iADVIndex < tADVs.size(); iADVIndex++ )
@@ -202,8 +237,8 @@ opt_alg_gcmma_func_wrap(
     // Update for objectives and constraints
     aOptAlgGCMMA->compute_design_criteria( tADVs );
 
-    // Convert outputs from type MORIS
-    aObjval = aOptAlgGCMMA->get_objectives()( 0 );
+    // Convert outputs from type MORIS (objective in the solver's current uniform scale)
+    aObjval = aOptAlgGCMMA->mObjScale * aOptAlgGCMMA->get_objectives()( 0 );
 
     // Update the pointer of constraints
     auto tConval = aOptAlgGCMMA->get_constraints().data();
@@ -226,6 +261,24 @@ opt_alg_gcmma_grad_wrap(
         double**     aD_Con,
         int*         aActive )
 {
+    // Guard: companion to the func_wrap non-finite-ADV guard. A restart is already
+    // pending, so return zero gradients (the TPL solver exits before using them)
+    // instead of tripping the ADV-consistency assert in the problem.
+    for ( uint iADVIndex = 0; iADVIndex < aOptAlgGCMMA->mProblem->get_num_advs(); iADVIndex++ )
+    {
+        if ( !std::isfinite( aAdv[ iADVIndex ] ) )
+        {
+            std::fill( aD_Obj, aD_Obj + aOptAlgGCMMA->mProblem->get_num_advs(), 0.0 );
+
+            for ( moris::uint i = 0; i < aOptAlgGCMMA->mProblem->get_num_constraints(); ++i )
+            {
+                std::fill( aD_Con[ i ], aD_Con[ i ] + aOptAlgGCMMA->mProblem->get_num_advs(), 0.0 );
+            }
+
+            return;
+        }
+    }
+
     // Update the vector of active constraints flag
     aOptAlgGCMMA->mActive = Matrix< DDSMat >( *aActive, aOptAlgGCMMA->mProblem->get_num_constraints(), 1 );
 
@@ -242,7 +295,35 @@ opt_alg_gcmma_grad_wrap(
     // copy objective gradient
     auto tD_Obj = aOptAlgGCMMA->get_objective_gradients().data();
 
-    std::copy( tD_Obj, tD_Obj + aOptAlgGCMMA->mProblem->get_num_advs(), aD_Obj );
+    // Uniform objective scaling: engage only above the pathology threshold and quantize the
+    // scale to decades (see header). Preserves the descent direction exactly; keeps the TPL
+    // subproblem inside its proven operating range while leaving healthy regimes untouched.
+    {
+        moris::real tRawMax = 0.0;
+        for ( moris::uint i = 0; i < aOptAlgGCMMA->mProblem->get_num_advs(); ++i )
+        {
+            tRawMax = std::max( tRawMax, std::abs( tD_Obj[ i ] ) );
+        }
+
+        moris::real tNewScale = 1.0;
+        if ( tRawMax > OptAlgGCMMA::sObjGradEngage )
+        {
+            // smallest power of ten that brings tRawMax at or below the target
+            tNewScale = std::pow( 10.0, -std::ceil( std::log10( tRawMax / OptAlgGCMMA::sObjGradTarget ) ) );
+        }
+
+        if ( tNewScale != aOptAlgGCMMA->mObjScale )
+        {
+            MORIS_LOG_INFO( "GCMMA: objective scale -> %.1e (raw max|dObj/dADV| = %.4e).",
+                    tNewScale, tRawMax );
+        }
+        aOptAlgGCMMA->mObjScale = tNewScale;
+    }
+
+    for ( moris::uint i = 0; i < aOptAlgGCMMA->mProblem->get_num_advs(); ++i )
+    {
+        aD_Obj[ i ] = aOptAlgGCMMA->mObjScale * tD_Obj[ i ];
+    }
 
     // Get the constraint gradient as a MORIS Matrix
     Matrix< DDRMat > tD_Con = aOptAlgGCMMA->get_constraint_gradients();

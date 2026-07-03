@@ -616,6 +616,12 @@ namespace moris
 
         //------------------------------------------------------------------------------
 
+        // current process memory usage [MB] as a number; uses tcmalloc's allocated-bytes
+        // counter when MORIS is built with gperftools, otherwise physical RSS from /proc
+        real current_memory_mb();
+
+        //------------------------------------------------------------------------------
+
         // write logged info to formatted file
         template< class T >
         void

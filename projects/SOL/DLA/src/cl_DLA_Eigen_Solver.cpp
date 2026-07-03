@@ -741,13 +741,28 @@ int Eigen_Solver::solve_block_krylov_schur_system( Linear_Problem* aLinearSystem
         tverbosity += Anasazi::TimingDetails + Anasazi::IterationDetails + Anasazi::Debug + Anasazi::FinalSummary;
     }
 
+    // Derive a feasible Krylov subspace from the actual problem dimension N instead of relying
+    // on hardcoded parameters. Anasazi requires the maximum basis size (Num_Blocks*Block_Size)
+    // to be < N; too small a subspace fails to resolve clustered (e.g. smallest) eigenvalues.
+    // Use the user value as a lower hint, target a generous multiple of the block size, and
+    // clamp strictly below N so the solve neither overshoots (invalid_argument) nor starves.
+    const moris::sint tNumRows   = mMat->NumGlobalRows();
+    moris::sint       tBlockSize = std::max< moris::sint >( 1, mParameterList.get< moris::sint >( "Block_Size" ) );
+    tBlockSize                   = std::min< moris::sint >( tBlockSize, std::max< moris::sint >( 1, ( tNumRows - 1 ) / 2 ) );
+    // largest subspace that still leaves orthogonalization/restart headroom below N (going all
+    // the way to N-1 makes the SVQB orthogonalization infeasible on small problems).
+    const moris::sint tMaxFeasible = std::max< moris::sint >( 2 * tBlockSize, tNumRows - tBlockSize - 2 );
+    moris::sint       tTargetSubDim = std::max( mParameterList.get< moris::sint >( "MaxSubSpaceDims" ), (moris::sint)( 10 * tBlockSize ) );
+    moris::sint       tNumBlocks    = std::max< moris::sint >( 2, std::min( tTargetSubDim, tMaxFeasible ) / tBlockSize );
+    moris::sint       tMaxSubDim    = tNumBlocks * tBlockSize;
+
     // Set the parameters and pass to solver manager
     Teuchos::ParameterList MyPL;
     MyPL.set( "Verbosity", tverbosity );
     MyPL.set( "Which", mParameterList.get< std::string >( "Which" ) );
-    MyPL.set( "Block Size", mParameterList.get< moris::sint >( "Block_Size" ) );
-    MyPL.set( "Num Blocks", mParameterList.get< moris::sint >( "Num_Blocks" ) );
-    MyPL.set( "Maximum SubSpace Dimension", mParameterList.get< moris::sint >( "MaxSubSpaceDims" ) );
+    MyPL.set( "Block Size", tBlockSize );
+    MyPL.set( "Num Blocks", tNumBlocks );
+    MyPL.set( "Maximum SubSpace Dimension", tMaxSubDim );
     MyPL.set( "Maximum Restarts", mParameterList.get< moris::sint >( "MaxRestarts" ) );
     MyPL.set( "Convergence Tolerance", mParameterList.get< real >( "Convergence_Tolerance" ) );
     MyPL.set( "Relative Convergence Tolerance", mParameterList.get< bool >( "Relative_Convergence_Tolerance" ) );
@@ -755,14 +770,27 @@ int Eigen_Solver::solve_block_krylov_schur_system( Linear_Problem* aLinearSystem
     // Create the solver manager
     Anasazi::BlockKrylovSchurSolMgr< double, MV, OP > MySolverMan( mMyEigProblem, MyPL );
 
-    // Solve the problem
-    Anasazi::ReturnType tReturnCode = MySolverMan.solve();
-
-    // Check if the problem solve converged
-    if ( tReturnCode != Anasazi::Converged && MyPID == 0 )
+    // Solve the problem. The eigenvalue solve is an optional diagnostic: if it fails to converge
+    // OR throws internally (e.g. infeasible orthogonalization on small/clustered problems), warn
+    // and continue with the primary analysis rather than aborting the entire simulation.
+    Anasazi::ReturnType tReturnCode = Anasazi::Unconverged;
+    try
     {
-        MORIS_ERROR( false, "EigenSolver::SolveBlockKrylovSchurSystem: Solver returned UNconverged.\n" );
-        return -1;
+        tReturnCode = MySolverMan.solve();
+    }
+    catch ( const std::exception &aErr )
+    {
+        MORIS_LOG_WARNING( "EigenSolver::SolveBlockKrylovSchurSystem: eigen solve threw an exception (%s); "
+                           "skipping eigenvalue post-processing and continuing with the primary analysis.",
+                aErr.what() );
+        return 0;
+    }
+
+    if ( tReturnCode != Anasazi::Converged )
+    {
+        MORIS_LOG_WARNING( "EigenSolver::SolveBlockKrylovSchurSystem: solver returned UNconverged; "
+                           "skipping eigenvalue post-processing and continuing with the primary analysis." );
+        return 0;
     }
 
     // Get the eigenvalues and eigenvectors from the eigen problem

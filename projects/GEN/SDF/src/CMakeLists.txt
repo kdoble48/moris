@@ -19,6 +19,7 @@ set(HEADERS
     cl_SDF_Facet_Vertex.hpp
     cl_SDF_Facet.hpp
     cl_SDF_Field.hpp
+    cl_SDF_From_Interface.hpp
     cl_SDF_Generator.hpp
     cl_SDF_Line.hpp
     cl_SDF_Mesh.hpp
@@ -43,6 +44,7 @@ set(LIB_SOURCES
     cl_SDF_Facet_Vertex.cpp
     cl_SDF_Facet.cpp
     cl_SDF_Field.cpp
+    cl_SDF_From_Interface.cpp
     cl_SDF_Generator.cpp
     cl_SDF_Line.cpp
     cl_SDF_Mesh.cpp

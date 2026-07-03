@@ -22,6 +22,10 @@
 
 #include "fn_stringify_matrix.hpp"
 
+#include <algorithm>
+#include <vector>
+#include <cmath>
+
 namespace moris::opt
 {
 
@@ -38,6 +42,12 @@ namespace moris::opt
 
         // Parameters: restart file name
         mRestartFile = aParameterList.get< std::string >( "restart_file" );
+
+        // Parameters: gradient-explosion clip factor; <= 0 disables the clip
+        if ( aParameterList.exists( "grad_clip_factor" ) )
+        {
+            mGradClipFactor = aParameterList.get< real >( "grad_clip_factor" );
+        }
     }
 
     // -------------------------------------------------------------------------------------------------------------
@@ -62,6 +72,24 @@ namespace moris::opt
 
         // Log number of optimization variables
         MORIS_LOG_SPEC( "Number of optimization variables", mADVs.size() );
+
+        // Diagnostic: non-finite entries handed back by the interface poison the optimizer
+        // (NaN ADVs make every downstream consistency check fail). Detect them at the source.
+        if ( par_rank() == 0 )
+        {
+            uint tNanADVs    = 0;
+            uint tNanBounds  = 0;
+            for ( uint iADV = 0; iADV < mADVs.size(); iADV++ )
+            {
+                if ( !std::isfinite( mADVs( iADV ) ) ) tNanADVs++;
+                if ( !std::isfinite( mLowerBounds( iADV ) ) || !std::isfinite( mUpperBounds( iADV ) ) ) tNanBounds++;
+            }
+            if ( tNanADVs > 0 || tNanBounds > 0 )
+            {
+                MORIS_LOG_WARNING( "Problem::initialize - non-finite entries after interface initialize: %u ADVs, %u bounds (of %zu).",
+                        tNanADVs, tNanBounds, mADVs.size() );
+            }
+        }
 
         MORIS_ERROR( mADVs.size() == mLowerBounds.size() and mADVs.size() == mUpperBounds.size(),
                 "ADVs and its lower and upper bound vectors need to have same length.\n" );
@@ -260,6 +288,148 @@ namespace moris::opt
 
             MORIS_ASSERT( mConstraintGradient.n_rows() == mNumConstraints and mConstraintGradient.n_cols() == mADVs.size(),
                     "Problem::compute_design_criteria_gradients  - gradient of constraint matrix has incorrect size.\n." );
+
+            // ----- Gradient explosion detection and per-ADV clipping -----
+            real tObjGradNorm = norm( mObjectiveGradient );
+            real tConGradNorm = norm( mConstraintGradient );
+
+            bool tGradClipped = false;
+
+            // ----- Self-calibrating gradient-explosion clip (opt-in via grad_clip_factor) -----
+            // Small XFEM cut cells make a few dIQI/dADV entries explode by many orders of magnitude
+            // (dIQI/dPDV ~ 1/cell_volume as the interface nears a background node). The design
+            // gradient is bimodal: most B-spline coeffs are EXACTLY 0 (inactive, no interface in
+            // their support), a band is healthy active sensitivity, and a few explode. Clip each
+            // entry to mGradClipFactor x the MEDIAN of the NONZERO entries -- the active-band scale.
+            // This is (a) self-calibrating from the current gradient, so it needs no "previous
+            // healthy" baseline -- dense seedings explode from iteration 1 and never establish one,
+            // which is why a relative-jump test (ratio > threshold) never fired and the raw 1e8
+            // gradient froze the design; and (b) immune to the inactive-zero floor that made a
+            // P90-of-ALL-entries reference collapse to ~0 and crush the whole active gradient.
+            // The cap also flattens legitimately large sensitivities, so the clip is disabled
+            // unless explicitly requested (grad_clip_factor > 0).
+            if ( mGradClipFactor > 0.0 )
+            {
+                auto tActiveScale = []( const Matrix< DDRMat >& aGrad ) -> real {
+                    std::vector< real > tNz;
+                    tNz.reserve( aGrad.n_rows() * aGrad.n_cols() );
+                    for ( uint ii = 0; ii < aGrad.n_rows(); ++ii )
+                        for ( uint jj = 0; jj < aGrad.n_cols(); ++jj )
+                        {
+                            real tv = std::abs( aGrad( ii, jj ) );
+                            if ( tv > 0.0 ) tNz.push_back( tv );
+                        }
+                    if ( tNz.empty() ) return 0.0;
+                    uint tMid = tNz.size() / 2;
+                    std::nth_element( tNz.begin(), tNz.begin() + tMid, tNz.end() );
+                    return tNz[ tMid ];
+                };
+
+                real tObjClipVal = mGradClipFactor * tActiveScale( mObjectiveGradient );
+                real tConClipVal = mGradClipFactor * tActiveScale( mConstraintGradient );
+
+                // degenerate (all-zero) gradient: disable clipping for it
+                if ( !( tObjClipVal > 0.0 ) ) tObjClipVal = 1.0e30;
+                if ( !( tConClipVal > 0.0 ) ) tConClipVal = 1.0e30;
+
+                uint tObjClipCount = 0;
+                uint tConClipCount = 0;
+
+                for ( uint j = 0; j < mADVs.size(); j++ )
+                {
+                    for ( uint i = 0; i < mObjectiveGradient.n_rows(); i++ )
+                    {
+                        if ( std::abs( mObjectiveGradient( i, j ) ) > tObjClipVal )
+                        {
+                            real tSign                  = ( mObjectiveGradient( i, j ) > 0.0 ) ? 1.0 : -1.0;
+                            mObjectiveGradient( i, j )  = tSign * tObjClipVal;
+                            tObjClipCount++;
+                        }
+                    }
+                    for ( uint i = 0; i < mConstraintGradient.n_rows(); i++ )
+                    {
+                        if ( std::abs( mConstraintGradient( i, j ) ) > tConClipVal )
+                        {
+                            real tSign                  = ( mConstraintGradient( i, j ) > 0.0 ) ? 1.0 : -1.0;
+                            mConstraintGradient( i, j ) = tSign * tConClipVal;
+                            tConClipCount++;
+                        }
+                    }
+                }
+
+                tGradClipped = ( tObjClipCount + tConClipCount ) > 0;
+
+                if ( tGradClipped )
+                {
+                    MORIS_LOG_WARNING(
+                            "Gradient clip: %u obj + %u con entries clipped (clip_val = %.4e / %.4e, "
+                            "raw obj_norm = %.4e).",
+                            tObjClipCount,
+                            tConClipCount,
+                            tObjClipVal,
+                            tConClipVal,
+                            tObjGradNorm );
+                }
+            }
+
+            // ----- Gradient diagnostics logging -----
+            real tObjGradMax = 0.0;
+            real tConGradMax = 0.0;
+            {
+                uint tAtLower = 0;
+                uint tAtUpper = 0;
+
+                for ( uint j = 0; j < mADVs.size(); j++ )
+                {
+                    // Max absolute gradient entry
+                    for ( uint i = 0; i < mObjectiveGradient.n_rows(); i++ )
+                    {
+                        tObjGradMax = std::max( tObjGradMax, std::abs( mObjectiveGradient( i, j ) ) );
+                    }
+                    for ( uint i = 0; i < mConstraintGradient.n_rows(); i++ )
+                    {
+                        tConGradMax = std::max( tConGradMax, std::abs( mConstraintGradient( i, j ) ) );
+                    }
+
+                    // Bound saturation (ADV within 1e-10 of bound)
+                    if ( std::abs( mADVs( j ) - mLowerBounds( j ) ) < 1.0e-10 )
+                    {
+                        tAtLower++;
+                    }
+                    if ( std::abs( mADVs( j ) - mUpperBounds( j ) ) < 1.0e-10 )
+                    {
+                        tAtUpper++;
+                    }
+                }
+
+                MORIS_LOG_INFO(
+                    "GradDebug: obj_norm=%.4e  con_norm=%.4e  obj_max=%.4e  con_max=%.4e  at_lower=%u  at_upper=%u  n_advs=%zu",
+                    tObjGradNorm,
+                    tConGradNorm,
+                    tObjGradMax,
+                    tConGradMax,
+                    tAtLower,
+                    tAtUpper,
+                    mADVs.size() );
+            }
+
+            // Update the reference gradient for next-iteration explosion detection. CRITICAL:
+            // when clipping fired this iteration, do NOT adopt the (artificially shrunk) clipped
+            // norm as the reference. Doing so makes the clip threshold (mPrevObjGradNorm/sqrt(N))
+            // spiral toward zero over successive explosions, eventually clipping the *healthy*
+            // optimization gradient to ~0 and freezing the design at its initial topology. Keep the
+            // last healthy reference instead, so the clip caps explosive (small-cut-cell) ADVs at
+            // the healthy gradient scale while letting the legitimate gradient drive the design.
+            if ( !tGradClipped )
+            {
+                mPrevObjectiveGradient  = mObjectiveGradient;
+                mPrevConstraintGradient = mConstraintGradient;
+                mPrevObjGradNorm        = norm( mObjectiveGradient );
+                mPrevConGradNorm        = norm( mConstraintGradient );
+                mPrevObjGradMax         = tObjGradMax;    // healthy per-entry scale for absolute clip
+                mPrevConGradMax         = tConGradMax;
+            }
+            mHasPrevGradients = true;
         }
     }
 
