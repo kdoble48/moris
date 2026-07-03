@@ -17,26 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-// text case index
-uint gCaseIndex;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void check_results()
+namespace exa_thick_pressure_vessel
+{
+
+void check_results()
 {
     std::string tExoFileName =
             "Pressure_Vessel_3D_Case_" + std::to_string( gCaseIndex ) + ".exo";
@@ -222,21 +218,20 @@ extern "C" void check_results()
 //---------------------------------------------------------------
 
 TEST_CASE( "Pressure_Vessel_3D_Linear",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Thick_Pressure_Vessel]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gCaseIndex            = par_size() == 1 ? 0 : 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Pressure_Vessel_3D.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 1;
-
-    // set case index
-    gCaseIndex = par_size() == 1 ? 0 : 1;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Pressure_Vessel_3D: Interpolation order 1 - %i Processors.", par_size() );
@@ -281,21 +276,20 @@ TEST_CASE( "Pressure_Vessel_3D_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE( "Pressure_Vessel_3D_Immersed_Linear",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Thick_Pressure_Vessel]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gCaseIndex            = par_size() == 1 ? 2 : 3;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Pressure_Vessel_3D_Immersed.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 1;
-
-    // set case index
-    gCaseIndex = par_size() == 1 ? 2 : 3;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Pressure_Vessel_3D_Immersed: Interpolation order 1 - %i Processors.", par_size() );
@@ -340,16 +334,18 @@ TEST_CASE( "Pressure_Vessel_3D_Immersed_Linear",
 //---------------------------------------------------------------
 
 TEST_CASE( "Pressure_Vessel_3D_Immersed_Quadratic",
-        "[moris],[example],[structure],[quadratic]" )
+        "[moris],[example],[structure],[quadratic],[EXA_Thick_Pressure_Vessel]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 2;
+    gCaseIndex            = 4;
+    gPrintReferenceValues = false;
+
     // this test only runs in parallel; is skipped for serial runs
     if ( par_size() < 4 )
     {
         return;
     }
-
-    // set case index
-    gCaseIndex = 4;
 
     // define command line call
     int argc = 2;
@@ -358,9 +354,6 @@ TEST_CASE( "Pressure_Vessel_3D_Immersed_Quadratic",
     char tString2[] = "./Pressure_Vessel_3D_Immersed.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 2;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Pressure_Vessel_3D_Immersed: Interpolation order 2 - %i Processors.", par_size() );
@@ -394,3 +387,5 @@ TEST_CASE( "Pressure_Vessel_3D_Immersed_Quadratic",
         }
     }
 }
+
+}    // namespace exa_thick_pressure_vessel

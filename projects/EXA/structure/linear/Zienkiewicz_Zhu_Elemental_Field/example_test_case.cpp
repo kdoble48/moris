@@ -14,16 +14,23 @@
 #include "cl_Logger.hpp"    // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_zienkiewicz_zhu_elemental_field
+{
 
 TEST_CASE( "Zienkiewicz_Zhu_Elemental_Field",
-        "[moris],[example],[Zienkiewicz_Zhu_Elemental_Field]" )
+        "[moris],[example],[Zienkiewicz_Zhu_Elemental_Field],[EXA_Zienkiewicz_Zhu_Elemental_Field]" )
 {
     if ( par_size() == 1 )
     {
@@ -83,3 +90,5 @@ TEST_CASE( "Zienkiewicz_Zhu_Elemental_Field",
         }
     }
 }
+
+}    // namespace exa_zienkiewicz_zhu_elemental_field

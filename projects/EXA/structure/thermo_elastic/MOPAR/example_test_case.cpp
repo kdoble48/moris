@@ -17,23 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_mopar
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -194,8 +193,12 @@ check_results(
 }
 
 TEST_CASE( "AxisymmetricProblem",
-        "[moris],[example],[structure],[thermo_elastic],[MOPAR]" )
+        "[moris],[example],[structure],[thermo_elastic],[MOPAR],[EXA_MOPAR]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 0;    // legacy file-scope zero-init carried over; not consumed by deck or checks
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -223,3 +226,5 @@ TEST_CASE( "AxisymmetricProblem",
         }
     }
 }
+
+}    // namespace exa_mopar
