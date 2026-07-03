@@ -17,23 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_thermoelastic_varying_order
+{
+
+void
 check_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 {
     if ( gPrintReferenceValues )
@@ -88,7 +87,7 @@ check_results( moris::mtk::Exodus_IO_Helper &aExoIO, uint aNodeId )
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -119,18 +118,19 @@ check_results_serial()
 //---------------------------------------------------------------
 
 TEST_CASE( "Thermoelastic_Bar_Linear_Disp_Quadratic_Diff",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Thermoelastic_Varying_Order]" )
 {
     // define command line call
     int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
 
     char tString1[] = "";
     char tString2[] = "./Bar_Lin_Disp_Quad_Diff.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 1;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Bar2D: Displacement Interpolation order 1 - Diffusion Interpolation order 2 - %i Processors.", par_size() );
@@ -157,3 +157,5 @@ TEST_CASE( "Thermoelastic_Bar_Linear_Disp_Quadratic_Diff",
 }
 
 //---------------------------------------------------------------
+
+}    // namespace exa_thermoelastic_varying_order

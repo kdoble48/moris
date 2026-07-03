@@ -17,18 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
-using namespace moris;
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
 
-// flag to print reference values
-bool gPrintReferenceValues = false;
+using namespace moris;
 
 //---------------------------------------------------------------
 
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_homogenization_3d
+{
+
+void
 check_linear_results(
         moris::mtk::Exodus_IO_Helper& aExoIO,
         uint                          aInnerNodeId,
@@ -69,7 +73,7 @@ check_linear_results(
 
 //---------------------------------------------------------------
 
-extern "C" void
+void
 check_linear_results_serial()
 {
     // open and query exodus output file (set verbose to true to get basic mesh information)
@@ -107,10 +111,13 @@ check_linear_results_serial()
 //---------------------------------------------------------------
 
 TEST_CASE( "Homogenization_3D",
-        "[moris],[example],[structure],[homogenization]" )
+        "[moris],[example],[structure],[homogenization],[EXA_Homogenization_3D]" )
 {
     // temporary
     gLogger.initialize( "Log.log" );
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gPrintReferenceValues = false;
 
     // define command line call
     int argc = 2;
@@ -140,3 +147,5 @@ TEST_CASE( "Homogenization_3D",
         }
     }
 }
+
+}    // namespace exa_homogenization_3d

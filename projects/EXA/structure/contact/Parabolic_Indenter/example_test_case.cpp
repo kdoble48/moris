@@ -17,26 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gInterpolationOrder;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-// text case index
-uint gCaseIndex;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void check_results()
+namespace exa_parabolic_indenter
+{
+
+void check_results()
 {
     std::string tExoFileName =
             "Parabolic_Indenter_Linear_Case_" + std::to_string( gCaseIndex ) + ".e-s.0000";
@@ -161,8 +157,13 @@ extern "C" void check_results()
 //---------------------------------------------------------------
 
 TEST_CASE( "Parabolic_Indenter_Linear",
-        "[moris],[example],[structure],[linear]" )
+        "[moris],[example],[structure],[linear],[EXA_Parabolic_Indenter]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gInterpolationOrder   = 1;
+    gCaseIndex            = 0;
+    gPrintReferenceValues = false;
+
 #ifdef MORIS_HAVE_ARBORX
     // check that run is serial; parallel not implemented yet
     MORIS_ERROR( par_size() == 1, "Contact not implemented for parallel computation yet" );
@@ -174,12 +175,6 @@ TEST_CASE( "Parabolic_Indenter_Linear",
     char tString2[] = "./Parabolic_Indenter_Linear.so";
 
     char *argv[ 2 ] = { tString1, tString2 };
-
-    // set interpolation order
-    gInterpolationOrder = 1;
-
-    // set case index
-    gCaseIndex = 0;
 
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing Parabolic_Indenter_Linear: Interpolation order 1 - %i Processors.", par_size() );
@@ -197,3 +192,5 @@ TEST_CASE( "Parabolic_Indenter_Linear",
     MORIS_LOG_INFO( " " );
 #endif
 }
+
+}    // namespace exa_parabolic_indenter

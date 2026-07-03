@@ -17,29 +17,22 @@
 #include "cl_Matrix.hpp"
 #include "fn_norm.hpp"
 
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+
 using namespace moris;
 
 //---------------------------------------------------------------
 
-// global variable for interpolation order
-uint gOrder;
-
-// global variable for eigen-algorithm
-std::string gPrecSolver;
-
-// global test-case index
-uint gTestCaseIndex;
-
-// flag to print reference values
-bool gPrintReferenceValues = false;
-
-//---------------------------------------------------------------
-
+// defined at global scope in WRK - must be declared outside the example namespace
 int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
 
-extern "C" void
+namespace exa_cantilever_eigen
+{
+
+void
 check_results(
         const std::string& aExoFileName,
         uint               aTestCaseIndex )
@@ -159,8 +152,14 @@ check_results(
 //-------------------------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE( "Cantilever_Eigen_Pardiso",
-        "[moris],[example],[structure],[Pardiso]" )
+        "[moris],[example],[structure],[Pardiso],[EXA_Cantilever_Eigen]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gOrder                = 1;                   // interpolation order
+    gPrecSolver           = "Amesos_Pardiso";    // eigen algorithm
+    gTestCaseIndex        = 0;
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -169,18 +168,9 @@ TEST_CASE( "Cantilever_Eigen_Pardiso",
 
     char* argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing EigenProblem: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set eigen algorithm
-    gPrecSolver = "Amesos_Pardiso";
-
-    // set test-case index
-    gTestCaseIndex = 0;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -195,8 +185,14 @@ TEST_CASE( "Cantilever_Eigen_Pardiso",
 //------------------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE( "Cantilever_Eigen_Umfpack",
-        "[moris],[example],[structure],[Umfpack]" )
+        "[moris],[example],[structure],[Umfpack],[EXA_Cantilever_Eigen]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gOrder                = 1;                   // interpolation order
+    gPrecSolver           = "Amesos_Umfpack";    // eigen algorithm
+    gTestCaseIndex        = 1;
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -205,18 +201,9 @@ TEST_CASE( "Cantilever_Eigen_Umfpack",
 
     char* argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing EigenProblem: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set eigen algorithm
-    gPrecSolver = "Amesos_Umfpack";
-
-    // set test-case index
-    gTestCaseIndex = 1;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -230,8 +217,14 @@ TEST_CASE( "Cantilever_Eigen_Umfpack",
 
 #ifdef MORIS_HAVE_SLEPC
 TEST_CASE( "Cantilever_Eigen_Slepc",
-        "[moris],[example],[structure],[slepc]" )
+        "[moris],[example],[structure],[slepc],[EXA_Cantilever_Eigen]" )
 {
+    // set all globals this test case or its deck consumes (rule R4)
+    gOrder                = 1;          // interpolation order
+    gPrecSolver           = "Slepc";    // eigen algorithm
+    gTestCaseIndex        = 2;
+    gPrintReferenceValues = false;
+
     // define command line call
     int argc = 2;
 
@@ -240,18 +233,9 @@ TEST_CASE( "Cantilever_Eigen_Slepc",
 
     char* argv[ 2 ] = { tString1, tString2 };
 
-    // set interpolation order
-    gOrder = 1;
-
     MORIS_LOG_INFO( " " );
     MORIS_LOG_INFO( "Executing EigenProblem: Interpolation order 1 - %i Processors.", par_size() );
     MORIS_LOG_INFO( " " );
-
-    // set eigen algorithm
-    gPrecSolver = "Slepc";
-
-    // set test-case index
-    gTestCaseIndex = 2;
 
     // call to performance manager main interface
     int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
@@ -263,3 +247,5 @@ TEST_CASE( "Cantilever_Eigen_Slepc",
     check_results( "Cantilever_Eigen_Slepc.exo", gTestCaseIndex );
 }
 #endif
+
+}    // namespace exa_cantilever_eigen
