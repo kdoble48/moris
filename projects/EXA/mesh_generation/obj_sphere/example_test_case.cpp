@@ -37,8 +37,11 @@ int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
 
+namespace exa_obj_sphere
+{
+
 TEST_CASE( "obj_sphere",
-        "[moris],[example],[mesh_generation],[obj_sphere]" )
+        "[moris],[example],[mesh_generation],[obj_sphere],[EXA_obj_sphere]" )
 {
     // get the root path for MORIS
     std::string tMorisRoot = moris::get_base_moris_dir();
@@ -74,3 +77,5 @@ TEST_CASE( "obj_sphere",
         // check_results( ... );
     }
 }
+
+}    // namespace exa_obj_sphere

@@ -37,8 +37,11 @@ int fn_WRK_Workflow_Main_Interface( int argc, char* argv[] );
 
 //---------------------------------------------------------------
 
+namespace exa_image_bear
+{
+
 TEST_CASE( "image_bear",
-        "[moris],[example],[mesh_generation],[image_bear]" )
+        "[moris],[example],[mesh_generation],[image_bear],[EXA_image_bear]" )
 {
     // get the root path for MORIS
     std::string tMorisRoot = moris::get_base_moris_dir();
@@ -74,3 +77,5 @@ TEST_CASE( "image_bear",
         // check_results( ... );
     }
 }
+
+}    // namespace exa_image_bear

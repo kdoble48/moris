@@ -21,7 +21,7 @@
 # EXA_RUNNER_SOURCES global property (consumed by projects/EXA/runner/).
 
 function(moris_add_example)
-    set(options NO_PROCS_SUFFIX)
+    set(options NO_PROCS_SUFFIX NO_INPUTS)
     set(oneValueArgs NAME TEST_BASE)
     set(multiValueArgs PROCS SOURCES INPUTS EXTRA_SO_INCLUDES)
     cmake_parse_arguments(EXA "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -32,7 +32,9 @@ function(moris_add_example)
     if(NOT EXA_SOURCES)
         set(EXA_SOURCES example_test_case.cpp)
     endif()
-    if(NOT DEFINED EXA_INPUTS)
+    if(EXA_NO_INPUTS)
+        set(EXA_INPUTS)    # deck-less example (e.g. --meshgen XML input)
+    elseif(NOT DEFINED EXA_INPUTS)
         set(EXA_INPUTS ${EXA_TEST_BASE})
     endif()
 
