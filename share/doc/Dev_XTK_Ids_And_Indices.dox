@@ -67,19 +67,19 @@ of the file (pvtools: <tt>pvkit.load(..., fix_ids=True)</tt> /
 default IOSS reader and for anything keyed on global ids (Find Data by GlobalID,
 id labeling, re-export).
 
-@section IdsIndicesConflation Known conflation in Cut_Integration_Mesh
+@section IdsIndicesConflation Historical conflation in Cut_Integration_Mesh (fixed)
 
-\c Cut_Integration_Mesh::get_glb_entity_id_from_entity_loc_index() currently returns
+Historically, \c Cut_Integration_Mesh::get_glb_entity_id_from_entity_loc_index() returned
 <tt>get_index()</tt> — the local index — not <tt>get_id()</tt>, while the inverse query
-\c get_loc_entity_ind_from_entity_glb_id() is keyed by the <em>real</em> ids
-(\c mIntegrationVertexIdToIndexMap / \c mIntegrationCellIdToIndexMap). The round trip
-id &rarr; index &rarr; id is therefore inconsistent, and in parallel the index-as-id
-answer collides across processors (it only "works" serially because indices and 0-based
-ids are nearly interchangeable there). \c vis::Visualization_Mesh implements the same
-query correctly (returns <tt>get_id()</tt>).
+\c get_loc_entity_ind_from_entity_glb_id() was keyed by the <em>real</em> ids. The round
+trip id &rarr; index &rarr; id was therefore inconsistent, and in parallel the index-as-id
+answer collided across processors (it only "worked" serially because indices and 0-based
+ids are nearly interchangeable there).
 
-Changing the XTK query to return <tt>get_id()</tt> is a known TODO: audit callers first —
-code built against the current behavior may rely on receiving indices.
+This was fixed upstream (kkmaute/moris commit f1539681c, merged 2026-07): the query now
+returns <tt>get_id()</tt>, consistent with \c vis::Visualization_Mesh. Code written
+against the old behavior that relied on receiving indices from this query should use
+<tt>get_index()</tt> / the index-based accessors directly.
 
 */
 
