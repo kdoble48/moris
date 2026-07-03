@@ -8,7 +8,7 @@
  *
  * Single definition site for the deck-visible globals (see EXA_Globals.hpp).
  * Values here are meaningless on purpose: every TEST_CASE sets what it uses
- * (rule R4, share/doc/EXA_RUNNER_RFC.md).
+ * (rule R4, doc/internal/EXA_RUNNER_RFC.md).
  */
 
 #include "EXA_Globals.hpp"

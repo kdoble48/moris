@@ -14,7 +14,7 @@
 #     [EXTRA_SO_INCLUDES <dirs> ...] # for leaves whose SO_INCLUDES deviate from the standard block
 # )
 #
-# Replaces the legacy per-leaf example boilerplate (see share/doc/EXA_RUNNER_RFC.md).
+# Replaces the legacy per-leaf example boilerplate (see doc/internal/EXA_RUNNER_RFC.md).
 # Preserves, byte-for-byte, the dynamic_link_input() targets, their output
 # names/locations, and the ctest names/PROCS of the legacy pattern. The leaf's
 # test-case TU(s) are contributed to the shared EXA-test runner via the

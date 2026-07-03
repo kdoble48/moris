@@ -12,7 +12,7 @@
 #include "cl_Logger.hpp"    // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 
-#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see share/doc/EXA_RUNNER_RFC.md)
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
 
 using namespace moris;
 

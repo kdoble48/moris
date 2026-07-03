@@ -20,7 +20,7 @@
 
 #include "HDF5_Tools.hpp"
 
-#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see share/doc/EXA_RUNNER_RFC.md)
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
 
 using namespace moris;
 
@@ -113,7 +113,7 @@ check_linear_results_serial()
 
 // Renamed from "Field_example_write" (copy-paste artifact) - the shared EXA runner
 // forbids duplicate Catch2 test names; thermal/diffusion/Field_Example owns the
-// genuine "Field_example_write" case (approved rename, share/doc/EXA_RUNNER_RFC.md par. 2.3c).
+// genuine "Field_example_write" case (approved rename, doc/internal/EXA_RUNNER_RFC.md par. 2.3c).
 TEST_CASE( "Beam_Temperature_Field_write",
         "[moris],[example],[structure],[Plate_Temperature_Field_Write],[EXA_Beam_Temperature_Field]" )
 {
