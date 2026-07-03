@@ -20,7 +20,14 @@ list(APPEND MORIS_SOURCE_DIRS ${HMR})
 
 # Include libraries needed by HMR
 set(HMR_TPL_DEPENDENCIES
-    ""
+    # transferred from the deleted vestigial STK_Depends.cmake, which
+    # appended these into HMR's list as a side effect; HMR (hierarchical
+    # mesh + STK-backed paths) compiles/links against them
+    "boost"
+    ${ACML_LAPACK_MKL_OPENBLAS}
+    ${ARMADILLO_EIGEN}
+    "superlu"
+    "trilinos"
     )
 
 # Make sure needed moris libraries are built

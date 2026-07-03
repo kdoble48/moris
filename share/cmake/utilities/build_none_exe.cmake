@@ -50,8 +50,6 @@ set(BUILD_OPT OFF CACHE BOOL "Build the optimization executable." FORCE)
 
 set(BUILD_SDF OFF CACHE BOOL "Build the SDF executable." FORCE)
 
-set(BUILD_STK OFF CACHE BOOL "Build the STK executable." FORCE)
-
 # set(BUILD_TIN OFF CACHE BOOL "Build the TIN executable." FORCE)
 
 set(BUILD_TSA OFF CACHE BOOL "Build the TSA executable." FORCE)

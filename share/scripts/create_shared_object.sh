@@ -127,7 +127,7 @@ mv "$MORISROOT/projects/mains/input_file.cpp" "$TMPDIR/."
 
 ln -s "$workdir/$cppfile.cpp" "$MORISROOT/projects/mains/input_file.cpp"
 
-rm -f "MORISROOT/$builddir/lib/input_file.so"
+rm -f "$MORISROOT/$builddir/lib/input_file.so"
 
 touch "$MORISROOT/projects/mains/input_file.cpp"
 

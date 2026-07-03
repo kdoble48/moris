@@ -104,6 +104,9 @@ function(moris_add_example)
                 COMMAND ${MORIS_EXECUTE_COMMAND} -n ${PROCS} ${VALGRIND} ${VALGRIND_OPTIONS_EXA}
                         $<TARGET_FILE:EXA-test> "[EXA_${EXA_NAME}]"
                 WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            # explicit label: directory-property inheritance does not reach
+            # the deep EXA leaves; enables `ctest -L EXA` / `ctest -LE EXA`
+            set_tests_properties(${_test_name} PROPERTIES LABELS "EXA")
         endforeach()
     endif()
 endfunction()
