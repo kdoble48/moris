@@ -1,0 +1,7 @@
+results/
+visualizations/
+logs/
+*.exo
+*.e-s.*
+Parameter_Receipt.xml
+xtk_temp*
