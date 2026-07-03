@@ -23,7 +23,7 @@
    RFC's single-runner design, not from turning examples off.
 - **Author:** cmake-expert (advisory; read-only — all patches below are drafts for an implementer)
 - **Scope:** `moris/projects/EXA/**` build restructuring only. The `dynamic_link_input()` input-`.so` machinery, `MORIS_USE_EXAMPLES` gating, and all ctest registration names are explicitly preserved.
-- **Related:** `moris/CMAKE_AUDIT.md` §"EXA link cost" (2025-09-28), `moris/CMAKE_REVIEW.md` (2026-07-01), baseline `$MORIS_RUNS_DIR/benchmarks/build_metrics/baseline_build_opt_2026-07-01.json`
+- **Related:** `moris/CMAKE_AUDIT.md` §"EXA link cost" (2025-09-28), `moris/share/doc/CMAKE_REVIEW.md` (2026-07-01), baseline `$MORIS_RUNS_DIR/benchmarks/build_metrics/baseline_build_opt_2026-07-01.json`
 
 ---
 

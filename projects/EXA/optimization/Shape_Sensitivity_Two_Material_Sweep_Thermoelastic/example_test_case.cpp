@@ -17,7 +17,7 @@
 #include "fn_norm.hpp"
 #include "cl_MTK_Exodus_IO_Helper.hpp"    // MTK/src
 
-#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see EXA_RUNNER_RFC.md)
+#include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see share/doc/EXA_RUNNER_RFC.md)
 
 using namespace moris;
 

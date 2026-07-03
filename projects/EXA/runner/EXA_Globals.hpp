@@ -12,7 +12,7 @@
  * Do NOT namespace, rename, or make static.
  *
  * Every TEST_CASE must explicitly set each global it or its deck consumes
- * (rule R4, EXA_RUNNER_RFC.md) - never rely on zero/file-scope initialization.
+ * (rule R4, share/doc/EXA_RUNNER_RFC.md) - never rely on zero/file-scope initialization.
  *
  * Regenerate the union with:
  *   grep -rhP '^\s*extern\s+(?!"C")' projects/EXA --include='*.cpp' \
