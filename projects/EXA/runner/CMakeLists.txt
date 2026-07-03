@@ -4,7 +4,7 @@
 #
 #------------------------------------------------------------------------------------
 #
-# Consolidated EXA runner (see EXA_RUNNER_RFC.md): one executable containing the
+# Consolidated EXA runner (see share/doc/EXA_RUNNER_RFC.md): one executable containing the
 # test cases of every migrated example leaf. Leaves register their TUs via the
 # EXA_RUNNER_SOURCES global property (moris_add_example.cmake); this directory
 # must be added LAST in projects/EXA/CMakeLists.txt.

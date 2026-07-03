@@ -6,7 +6,7 @@
  *
  * runner_main.cpp
  *
- * Single entry point for the consolidated EXA-test runner (see EXA_RUNNER_RFC.md).
+ * Single entry point for the consolidated EXA-test runner (see share/doc/EXA_RUNNER_RFC.md).
  * Each ctest entry invokes this binary with a Catch2 tag spec ("[EXA_<Example>]")
  * from that example's working directory, where its input .so lives.
  */
