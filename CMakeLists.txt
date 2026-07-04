@@ -215,6 +215,9 @@ option(MORIS_HAVE_SNOPT
 option(MORIS_HAVE_LBFGS
     "Build MORIS with support for LBFGS." ON )
 
+option(MORIS_HAVE_ROL
+    "Build MORIS with support for the Trilinos ROL optimizer." ON )
+
 option(MORIS_HAVE_ARBORX
     "Build MORIS with support for ArborX." ON )
     
@@ -847,6 +850,14 @@ endif()
 
 if (MORIS_HAVE_LBFGS)
     list(APPEND MORIS_DEFINITIONS "-DMORIS_HAVE_LBFGS")
+endif()
+
+# -------------------------------------------------------------------------
+# ROL ---------------------------------------------------------------------
+# -------------------------------------------------------------------------
+
+if (MORIS_HAVE_ROL)
+    list(APPEND MORIS_DEFINITIONS "-DMORIS_HAVE_ROL")
 endif()
 
 # -------------------------------------------------------------------------

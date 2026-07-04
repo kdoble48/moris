@@ -35,7 +35,12 @@ endif()
 if(${MORIS_HAVE_LBFGS})
     list(APPEND OPT_TPL_DEPENDENCIES "lbfgsb")
 endif()
-    
+
+# Include trilinos (provides ROL) if the ROL optimizer is used
+if(${MORIS_HAVE_ROL})
+    list(APPEND OPT_TPL_DEPENDENCIES "trilinos")
+endif()
+
 
 # Make sure needed moris libraries are built
 include(${MORIS_DEPENDS_DIR}/LINALG_Depends.cmake)

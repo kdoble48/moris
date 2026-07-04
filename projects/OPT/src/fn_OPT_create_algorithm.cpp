@@ -14,6 +14,7 @@
 #include "cl_OPT_Algorithm_SQP.hpp"
 #include "cl_OPT_Algorithm_LBFGS.hpp"
 #include "cl_OPT_Algorithm_Sweep.hpp"
+#include "cl_OPT_Algorithm_ROL.hpp"
 
 namespace moris::opt
 {
@@ -40,6 +41,10 @@ namespace moris::opt
         else if ( tAlgorithmName == "sweep" )
         {
             return std::make_shared< Algorithm_Sweep >( aAlgorithmParameterList );
+        }
+        else if ( tAlgorithmName == "rol" )
+        {
+            return std::make_shared< Algorithm_ROL >( aAlgorithmParameterList );
         }
         else
         {
