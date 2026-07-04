@@ -20,7 +20,8 @@ namespace moris::opt
         MMA,
         LBFGS,
         SQP,
-        SWEEP
+        SWEEP,
+        ROL
     };
 }
 
@@ -310,6 +311,48 @@ namespace moris::prm
         return tParameterList;
     }
 
+    //--------------------------------------------------------------------------------------------------------------
+
+    inline Parameter_List
+    create_rol_parameter_list()
+    {
+        // Trilinos ROL (Rapid Optimization Library) trust-region optimizer -- the algorithm family
+        // Sandia's Plato uses. Curated keys map onto ROL's Teuchos ParameterList (see rol_solve);
+        // set "xml_file" to a ROL parameter XML (e.g. Plato's rol_inputs.xml) to bypass these keys.
+        Parameter_List tParameterList( "ROL" );
+
+        tParameterList.insert( "algorithm", "rol" );    // Algorithm name, don't change
+        tParameterList.insert( "restart_index", 0 );    // Restart iteration index
+        tParameterList.insert( "max_its", 100 );        // Maximum number of (outer) iterations
+
+        // Step / trust-region / Lin-More configuration
+        tParameterList.insert( "step_type", "Trust Region" );          // "Trust Region" or "Augmented Lagrangian"
+        tParameterList.insert( "subproblem_model", "Lin-More" );       // trust-region subproblem model
+        tParameterList.insert( "subproblem_solver", "Truncated CG" );  // trust-region subproblem solver
+        tParameterList.insert( "initial_tr_radius", 10.0 );            // initial trust-region radius
+        tParameterList.insert( "max_tr_radius", 5.0e3 );               // maximum trust-region radius
+
+        // Hessian approximation (secant)
+        tParameterList.insert( "secant_type", "Limited-Memory BFGS" );    // Hessian approximation type
+        tParameterList.insert( "secant_storage", 10 );                    // secant history length
+
+        // Augmented-Lagrangian outer loop (used when general constraints are present)
+        tParameterList.insert( "use_augmented_lagrangian", true );      // wrap constraints in an AL outer loop
+        tParameterList.insert( "subproblem_iteration_limit", 25 );      // inner (TR) subproblem iteration cap per AL outer step
+        tParameterList.insert( "al_initial_penalty", 10.0 );           // AL initial penalty parameter
+        tParameterList.insert( "al_penalty_growth", 100.0 );           // AL penalty growth factor
+
+        // Status-test tolerances
+        tParameterList.insert( "gradient_tol", 1.0e-10 );      // gradient (optimality) tolerance
+        tParameterList.insert( "constraint_tol", 1.0e-10 );    // constraint (feasibility) tolerance
+        tParameterList.insert( "step_tol", 1.0e-14 );          // step tolerance
+
+        // Optional full ROL ParameterList XML; empty -> build the list from the curated keys above
+        tParameterList.insert( "xml_file", "" );
+
+        return tParameterList;
+    }
+
     /**
      * Creates an optimization algorithm parameter list depending on the optimziation algorithm type given.
      *
@@ -330,6 +373,8 @@ namespace moris::prm
                 return create_sqp_parameter_list();
             case opt::Optimization_Algorithm_Type::SWEEP:
                 return create_sweep_parameter_list();
+            case opt::Optimization_Algorithm_Type::ROL:
+                return create_rol_parameter_list();
             default:
                 MORIS_ERROR( false, "Unknown optimization algorithm type provided." );
                 return Parameter_List( "Error" );

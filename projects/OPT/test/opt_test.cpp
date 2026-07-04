@@ -10,6 +10,9 @@
 
 #include <catch.hpp>
 
+#include <fstream>
+#include <cstdio>
+
 #include "fn_PRM_OPT_Parameters.hpp"
 #include "cl_OPT_Manager.hpp"
 #include "fn_OPT_create_interface.hpp"
@@ -417,6 +420,196 @@ namespace moris::opt
                 {
                     REQUIRE( std::abs( iADV - 1.0 ) < 1E-4 );
                 }
+            }
+        }
+#endif
+
+        // ---------------------------------------------------------------------------------------------------------
+
+#ifdef MORIS_HAVE_ROL
+        // Trilinos ROL trust-region (Lin-More) bridge, BOUND-CONSTRAINED. With
+        // use_augmented_lagrangian = false the general constraints are ignored (like the LBFGS
+        // case above); the bound-constrained Rosenbrock minimum is (1,1).
+        SECTION( "ROL bound-constrained" )
+        {
+            // Set up default parameter lists
+            Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+            Parameter_List tAlgorithmParameterList = moris::prm::create_rol_parameter_list();
+
+            tAlgorithmParameterList.set( "use_augmented_lagrangian", false );
+            tAlgorithmParameterList.set( "max_its", 200 );
+            tAlgorithmParameterList.set( "initial_tr_radius", 1.0 );
+            tAlgorithmParameterList.set( "gradient_tol", 1.0e-12 );
+
+            // Create interface
+            std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                    &initialize_rosenbrock,
+                    &get_criteria_rosenbrock,
+                    &get_dcriteria_dadv_rosenbrock );
+
+            // Create Problem
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &get_constraint_types_rosenbrock,
+                    &compute_objectives_rosenbrock,
+                    &compute_constraints_rosenbrock,
+                    &compute_dobjective_dadv_rosenbrock,
+                    &compute_dobjective_dcriteria_rosenbrock,
+                    &compute_dconstraint_dadv_rosenbrock,
+                    &compute_dconstraint_dcriteria_rosenbrock );
+
+            // Create manager
+            Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+            tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+            Manager tManager( tAlgorithms, tProblem );
+
+            // Solve optimization problem
+            tManager.perform();
+
+            // Check Solution
+            if ( par_rank() == 0 )
+            {
+                REQUIRE( std::abs( tManager.get_objectives()( 0 ) ) < 1E-6 );    // check value of objective
+                Vector< real > tADVs = tManager.get_advs();
+                for ( auto iADV : tADVs )
+                {
+                    REQUIRE( std::abs( iADV - 1.0 ) < 1E-3 );
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
+        // ROL with the AUGMENTED-LAGRANGIAN outer loop over the two (inequality) Rosenbrock
+        // constraints. Both constraints are active (= 0) at the unconstrained minimum (1,1), which
+        // is therefore also the constrained minimizer -- so the AL path must land at (1,1) too.
+        SECTION( "ROL augmented Lagrangian" )
+        {
+            // Set up default parameter lists
+            Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+            Parameter_List tAlgorithmParameterList = moris::prm::create_rol_parameter_list();
+
+            tAlgorithmParameterList.set( "max_its", 100 );
+            tAlgorithmParameterList.set( "initial_tr_radius", 1.0 );
+
+            // Create interface
+            std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                    &initialize_rosenbrock,
+                    &get_criteria_rosenbrock,
+                    &get_dcriteria_dadv_rosenbrock );
+
+            // Create Problem
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &get_constraint_types_rosenbrock,
+                    &compute_objectives_rosenbrock,
+                    &compute_constraints_rosenbrock,
+                    &compute_dobjective_dadv_rosenbrock,
+                    &compute_dobjective_dcriteria_rosenbrock,
+                    &compute_dconstraint_dadv_rosenbrock,
+                    &compute_dconstraint_dcriteria_rosenbrock );
+
+            // Create manager
+            Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+            tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+            Manager tManager( tAlgorithms, tProblem );
+
+            // Solve optimization problem
+            tManager.perform();
+
+            // Check Solution
+            if ( par_rank() == 0 )
+            {
+                REQUIRE( std::abs( tManager.get_objectives()( 0 ) ) < 1E-4 );    // check value of objective
+                Vector< real > tADVs = tManager.get_advs();
+                for ( auto iADV : tADVs )
+                {
+                    REQUIRE( std::abs( iADV - 1.0 ) < 1E-2 );
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
+        // ROL driven by a full ROL/Teuchos ParameterList XML (the "xml_file" escape hatch, e.g.
+        // Plato's rol_inputs.xml). Confirms the passthrough path parses the XML and drives ROL;
+        // bound-constrained so the XML "Trust Region" step matches (constraints off).
+        SECTION( "ROL xml passthrough" )
+        {
+            // Write a minimal ROL parameter XML (rank 0 writes; the solver runs on rank 0)
+            const std::string tXmlPath = "./rol_passthrough_test.xml";
+            if ( par_rank() == 0 )
+            {
+                std::ofstream tXml( tXmlPath );
+                tXml << "<ParameterList>\n"
+                     << "  <ParameterList name=\"Step\">\n"
+                     << "    <Parameter name=\"Type\" type=\"string\" value=\"Trust Region\"/>\n"
+                     << "    <ParameterList name=\"Trust Region\">\n"
+                     << "      <Parameter name=\"Subproblem Model\" type=\"string\" value=\"Lin-More\"/>\n"
+                     << "      <Parameter name=\"Subproblem Solver\" type=\"string\" value=\"Truncated CG\"/>\n"
+                     << "      <Parameter name=\"Initial Radius\" type=\"double\" value=\"1.0\"/>\n"
+                     << "    </ParameterList>\n"
+                     << "  </ParameterList>\n"
+                     << "  <ParameterList name=\"General\">\n"
+                     << "    <ParameterList name=\"Secant\">\n"
+                     << "      <Parameter name=\"Type\" type=\"string\" value=\"Limited-Memory BFGS\"/>\n"
+                     << "      <Parameter name=\"Use as Hessian\" type=\"bool\" value=\"true\"/>\n"
+                     << "    </ParameterList>\n"
+                     << "  </ParameterList>\n"
+                     << "  <ParameterList name=\"Status Test\">\n"
+                     << "    <Parameter name=\"Iteration Limit\" type=\"int\" value=\"200\"/>\n"
+                     << "    <Parameter name=\"Gradient Tolerance\" type=\"double\" value=\"1.0e-12\"/>\n"
+                     << "  </ParameterList>\n"
+                     << "</ParameterList>\n";
+            }
+            barrier();
+
+            // Set up default parameter lists
+            Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+            Parameter_List tAlgorithmParameterList = moris::prm::create_rol_parameter_list();
+
+            tAlgorithmParameterList.set( "use_augmented_lagrangian", false );
+            tAlgorithmParameterList.set( "xml_file", tXmlPath );
+
+            // Create interface
+            std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                    &initialize_rosenbrock,
+                    &get_criteria_rosenbrock,
+                    &get_dcriteria_dadv_rosenbrock );
+
+            // Create Problem
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &get_constraint_types_rosenbrock,
+                    &compute_objectives_rosenbrock,
+                    &compute_constraints_rosenbrock,
+                    &compute_dobjective_dadv_rosenbrock,
+                    &compute_dobjective_dcriteria_rosenbrock,
+                    &compute_dconstraint_dadv_rosenbrock,
+                    &compute_dconstraint_dcriteria_rosenbrock );
+
+            // Create manager
+            Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+            tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+            Manager tManager( tAlgorithms, tProblem );
+
+            // Solve optimization problem
+            tManager.perform();
+
+            // Check Solution
+            if ( par_rank() == 0 )
+            {
+                REQUIRE( std::abs( tManager.get_objectives()( 0 ) ) < 1E-6 );    // check value of objective
+                Vector< real > tADVs = tManager.get_advs();
+                for ( auto iADV : tADVs )
+                {
+                    REQUIRE( std::abs( iADV - 1.0 ) < 1E-3 );
+                }
+
+                std::remove( tXmlPath.c_str() );
             }
         }
 #endif
