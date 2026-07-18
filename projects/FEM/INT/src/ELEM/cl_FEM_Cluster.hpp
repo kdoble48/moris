@@ -78,6 +78,26 @@ namespace moris::fem
         // flag to easily differentiate between ACTUAL FEM and VIS clusters for debugging
         bool mIsVisCluster = false;
 
+        // moment-fitted cut-cell quadrature (per-cluster custom rule, feature-flagged, default OFF)
+        enum class Moment_Fitting_State
+        {
+            UNTRIED,     // not yet attempted for this cluster
+            ACTIVE,      // fitted rule available - used instead of the tessellated loop
+            FALLBACK,    // fit not applicable or rejected - keep the tessellated rule
+        };
+
+        Moment_Fitting_State mMomentFittingState = Moment_Fitting_State::UNTRIED;
+
+        // host IG element through which the fitted rule is evaluated
+        moris_index mMomentFitHostElement = -1;
+
+        // fitted space-time rule in the host element's parametric frame
+        // ( points: (dim+1) x nGP, weights: 1 x nGP; weights are divided by the host
+        // element's parametric det J so that the element's standard w * detJ product
+        // reproduces the fitted material measure times the IP-to-physical det J )
+        Matrix< DDRMat > mMomentFitIntegPoints;
+        Matrix< DDRMat > mMomentFitIntegWeights;
+
         friend class Element_Bulk;
         friend class Element_Sideset;
         friend class Element_Double_Sideset;
@@ -458,6 +478,31 @@ namespace moris::fem
          * compute elements to be considered/ignored for residual and IQI computation
          */
         void determine_elements_for_residual_and_iqi_computation();
+
+        //------------------------------------------------------------------------------
+        /**
+         * check whether a moment-fitted quadrature rule is used for this cluster;
+         * computes the rule lazily on first call (feature-flagged, default OFF);
+         * on any failure the cluster silently keeps the tessellated rule
+         * @return true if the fitted rule is active
+         */
+        bool use_moment_fitted_rule();
+
+        //------------------------------------------------------------------------------
+        /**
+         * fit the per-cluster quadrature rule (candidates = the cluster's existing
+         * tessellation Gauss points; moments from the tessellation; NNLS pruning)
+         * and convert it to the host element's parametric frame
+         */
+        void compute_moment_fitted_rule();
+
+        //------------------------------------------------------------------------------
+        /**
+         * evaluate one cluster computation through the fitted rule: installs the
+         * rule override on the set, evaluates the host element only, restores
+         * @param[ in ] aElementComputation member function of fem::Element to call
+         */
+        void compute_with_moment_fitted_rule( void ( fem::Element::*aElementComputation )() );
 
         //------------------------------------------------------------------------------
         /*

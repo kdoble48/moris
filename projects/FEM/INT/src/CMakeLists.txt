@@ -61,6 +61,7 @@ set(HEADERS
     ELEM/cl_FEM_Element_Factory.hpp
     ELEM/cl_FEM_ElementProxy.hpp
     ELEM/cl_FEM_Element.hpp
+    ELEM/fn_FEM_Moment_Fitting.hpp
 
     ELEM/cl_FEM_Element_Bulk.hpp
     ELEM/cl_FEM_Element_Sideset.hpp
@@ -308,6 +309,7 @@ set(LIB_SOURCES
     ELEM/cl_FEM_Element_Time_Final_Sideset.cpp
     ELEM/cl_FEM_Element_Time_Boundary.cpp
     ELEM/cl_FEM_Interpolation_Element.cpp
+    ELEM/fn_FEM_Moment_Fitting.cpp
 
     IP/cl_FEM_Geometry_Interpolator.cpp
     IP/cl_FEM_Field_Interpolator.cpp
