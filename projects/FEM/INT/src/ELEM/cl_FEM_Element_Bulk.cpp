@@ -372,6 +372,10 @@ namespace moris::fem
         Matrix< DDSMat > tGeoLocalAssembly;
         this->init_ig_geometry_interpolator( tGeoLocalAssembly );
 
+        // check whether sensitivity analysis is evaluated analytically or by FD;
+        // for FD the geometry part is hoisted out of the integration point loop
+        bool tIsAnalyticalSA = mSet->is_analytical_sensitivity_analysis();
+
         // loop over integration points
         uint tNumIntegPoints = mSet->get_number_of_integration_points();
 
@@ -410,9 +414,41 @@ namespace moris::fem
                 tReqIWG->set_nodal_weak_bcs(
                         mCluster->mInterpolationElement->get_weak_bcs() );
 
-                // compute dRdp at evaluation point
-                Vector< Matrix< IndexMat > > tVertexIndices( 0 );
-                ( this->*m_compute_dRdp )( tReqIWG, tWStar, tGeoLocalAssembly, tVertexIndices );
+                if ( tIsAnalyticalSA )
+                {
+                    // compute dRdp at evaluation point
+                    Vector< Matrix< IndexMat > > tVertexIndices( 0 );
+                    ( this->*m_compute_dRdp )( tReqIWG, tWStar, tGeoLocalAssembly, tVertexIndices );
+                }
+                else
+                {
+                    // compute material part of dRdp by FD at evaluation point;
+                    // the geometry part is evaluated element-wise below
+                    tReqIWG->compute_dRdp_FD_material( tWStar, mSAFDPerturbation, mSAFDScheme );
+                }
+            }
+        }
+
+        // compute geometry part of dRdp by FD element-wise: the perturbed
+        // configurations are GP independent, the GP sweep happens inside
+        if ( !tIsAnalyticalSA && mSet->get_geo_pdv_assembly_flag() )
+        {
+            // loop over the IWGs
+            for ( uint iIWG = 0; iIWG < tNumIWGs; iIWG++ )
+            {
+                // get requested IWG
+                const std::shared_ptr< IWG >& tReqIWG =
+                        mSet->get_requested_IWGs()( iIWG );
+
+                // FIXME set nodal weak BCs
+                tReqIWG->set_nodal_weak_bcs(
+                        mCluster->mInterpolationElement->get_weak_bcs() );
+
+                // compute geometry part of dRdp by FD for the whole element
+                tReqIWG->compute_dRdp_FD_geometry_elementwise_bulk(
+                        mSAFDPerturbation,
+                        mSAFDScheme,
+                        tGeoLocalAssembly );
             }
         }
     }
@@ -499,6 +535,10 @@ namespace moris::fem
         Matrix< DDSMat > tGeoLocalAssembly;
         this->init_ig_geometry_interpolator( tGeoLocalAssembly );
 
+        // check whether sensitivity analysis is evaluated analytically or by FD;
+        // for FD the geometry part is hoisted out of the integration point loop
+        bool tIsAnalyticalSA = mSet->is_analytical_sensitivity_analysis();
+
         // loop over integration points
         uint tNumIntegPoints = mSet->get_number_of_integration_points();
 
@@ -533,9 +573,37 @@ namespace moris::fem
                 // reset IWG
                 tReqIQI->reset_eval_flags();
 
-                // compute dQIdp at evaluation point
-                Vector< Matrix< IndexMat > > tVertexIndices( 0 );
-                ( this->*m_compute_dQIdp )( tReqIQI, tWStar, tGeoLocalAssembly, tVertexIndices );
+                if ( tIsAnalyticalSA )
+                {
+                    // compute dQIdp at evaluation point
+                    Vector< Matrix< IndexMat > > tVertexIndices( 0 );
+                    ( this->*m_compute_dQIdp )( tReqIQI, tWStar, tGeoLocalAssembly, tVertexIndices );
+                }
+                else
+                {
+                    // compute material part of dQIdp by FD at evaluation point;
+                    // the geometry part is evaluated element-wise below
+                    tReqIQI->compute_dQIdp_FD_material( tWStar, mSAFDPerturbation, mSAFDScheme );
+                }
+            }
+        }
+
+        // compute geometry part of dQIdp by FD element-wise: the perturbed
+        // configurations are GP independent, the GP sweep happens inside
+        if ( !tIsAnalyticalSA && mSet->get_geo_pdv_assembly_flag() )
+        {
+            // loop over the IQIs
+            for ( uint iIQI = 0; iIQI < tNumIQIs; iIQI++ )
+            {
+                // get requested IQI
+                const std::shared_ptr< IQI >& tReqIQI =
+                        mSet->get_requested_IQIs()( iIQI );
+
+                // compute geometry part of dQIdp by FD for the whole element
+                tReqIQI->compute_dQIdp_FD_geometry_elementwise_bulk(
+                        mSAFDPerturbation,
+                        mSAFDScheme,
+                        tGeoLocalAssembly );
             }
         }
     }
@@ -563,6 +631,10 @@ namespace moris::fem
         // set physical and parametric space and time coefficients for IG element
         Matrix< DDSMat > tGeoLocalAssembly;
         this->init_ig_geometry_interpolator( tGeoLocalAssembly );
+
+        // check whether sensitivity analysis is evaluated analytically or by FD;
+        // for FD the geometry part is hoisted out of the integration point loop
+        bool tIsAnalyticalSA = mSet->is_analytical_sensitivity_analysis();
 
         // loop over integration points
         uint tNumIntegPoints = mSet->get_number_of_integration_points();
@@ -603,9 +675,18 @@ namespace moris::fem
                 tReqIWG->set_nodal_weak_bcs(
                         mCluster->mInterpolationElement->get_weak_bcs() );
 
-                // compute dRdp at evaluation point
-                Vector< Matrix< IndexMat > > tVertexIndices( 0 );
-                ( this->*m_compute_dRdp )( tReqIWG, tWStar, tGeoLocalAssembly, tVertexIndices );
+                if ( tIsAnalyticalSA )
+                {
+                    // compute dRdp at evaluation point
+                    Vector< Matrix< IndexMat > > tVertexIndices( 0 );
+                    ( this->*m_compute_dRdp )( tReqIWG, tWStar, tGeoLocalAssembly, tVertexIndices );
+                }
+                else
+                {
+                    // compute material part of dRdp by FD at evaluation point;
+                    // the geometry part is evaluated element-wise below
+                    tReqIWG->compute_dRdp_FD_material( tWStar, mSAFDPerturbation, mSAFDScheme );
+                }
             }
 
             // loop over the IQIs
@@ -618,9 +699,55 @@ namespace moris::fem
                 // reset IQI
                 tReqIQI->reset_eval_flags();
 
-                // compute dQIdp at evaluation point
-                Vector< Matrix< IndexMat > > tVertexIndices( 0 );
-                ( this->*m_compute_dQIdp )( tReqIQI, tWStar, tGeoLocalAssembly, tVertexIndices );
+                if ( tIsAnalyticalSA )
+                {
+                    // compute dQIdp at evaluation point
+                    Vector< Matrix< IndexMat > > tVertexIndices( 0 );
+                    ( this->*m_compute_dQIdp )( tReqIQI, tWStar, tGeoLocalAssembly, tVertexIndices );
+                }
+                else
+                {
+                    // compute material part of dQIdp by FD at evaluation point;
+                    // the geometry part is evaluated element-wise below
+                    tReqIQI->compute_dQIdp_FD_material( tWStar, mSAFDPerturbation, mSAFDScheme );
+                }
+            }
+        }
+
+        // compute geometry parts of dRdp and dQIdp by FD element-wise: the
+        // perturbed configurations are GP independent, the GP sweep happens inside
+        if ( !tIsAnalyticalSA && mSet->get_geo_pdv_assembly_flag() )
+        {
+            // loop over the IWGs
+            for ( uint iIWG = 0; iIWG < tNumIWGs; iIWG++ )
+            {
+                // get requested IWG
+                const std::shared_ptr< IWG >& tReqIWG =
+                        mSet->get_requested_IWGs()( iIWG );
+
+                // FIXME set nodal weak BCs
+                tReqIWG->set_nodal_weak_bcs(
+                        mCluster->mInterpolationElement->get_weak_bcs() );
+
+                // compute geometry part of dRdp by FD for the whole element
+                tReqIWG->compute_dRdp_FD_geometry_elementwise_bulk(
+                        mSAFDPerturbation,
+                        mSAFDScheme,
+                        tGeoLocalAssembly );
+            }
+
+            // loop over the IQIs
+            for ( uint iIQI = 0; iIQI < tNumIQIs; iIQI++ )
+            {
+                // get requested IQI
+                const std::shared_ptr< IQI >& tReqIQI =
+                        mSet->get_requested_IQIs()( iIQI );
+
+                // compute geometry part of dQIdp by FD for the whole element
+                tReqIQI->compute_dQIdp_FD_geometry_elementwise_bulk(
+                        mSAFDPerturbation,
+                        mSAFDScheme,
+                        tGeoLocalAssembly );
             }
         }
     }
