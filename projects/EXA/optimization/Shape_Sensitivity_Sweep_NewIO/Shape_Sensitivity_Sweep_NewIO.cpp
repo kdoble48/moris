@@ -11,10 +11,12 @@
  * written in the MORISInputDeck style (see doc/internal/DECK_API_RFC.md).
  *
  * Compared to the legacy twin (416 lines): no extern "C" module functions, no
- * Func_Const / Output_Criterion (builtins), 4 OPT callbacks instead of 7 (the
- * constraint types come from the 'constraint_types' parameter and the explicit
- * ADV gradients from the built-in zero defaults) registered in-process with
- * internal linkage, and the FEM block emitted by the linear-elastic preset.
+ * Func_Const / Output_Criterion (builtins), ZERO OPT callback functions — the
+ * objective and constraint are criteria expressions (values evaluated on the
+ * tree, criteria gradients by reverse-mode differentiation, GEN IQI_types and
+ * constraint types derived automatically), the mesh-set strings are generated
+ * by the typed vocabulary, and the FEM block is emitted by the linear-elastic
+ * preset.
  */
 
 #include <string>
@@ -23,48 +25,25 @@
 #include "linalg_typedefs.hpp"
 #include "parameters.hpp"
 #include "cl_Input_Deck.hpp"
+#include "cl_Input_Deck_Vocabulary.hpp"
 #include "fn_FEM_Presets.hpp"
 
 namespace
 {
     using namespace moris;
 
-    const std::string tMeshSets = "HMR_dummy_n_p1,HMR_dummy_c_p1";
-    const std::string tDBCSets  = "iside_b0_1_b1_3";
-    const std::string tNBCSets  = "iside_b0_1_b1_0";
+    // bulk phase 1 = material; phases 3 / 0 border the Dirichlet / Neumann interfaces
+    const deck::Phase tMaterial( 1 );
+
+    const std::string tMeshSets = tMaterial.bulk();                                     // HMR_dummy_n_p1,HMR_dummy_c_p1
+    const std::string tDBCSets  = deck::interface( tMaterial, deck::Phase( 3 ) );       // iside_b0_1_b1_3
+    const std::string tNBCSets  = deck::interface( tMaterial, deck::Phase( 0 ) );       // iside_b0_1_b1_0
 
     // FD in adjoint
     const real tFEMFdEpsilon = 1.0e-7;
 
     // FD step size in sweep
     const std::string tFDsweep = "1.0e-7";
-
-    //------------------------------------------------------------------------------
-    // OPT callbacks — internal linkage; resolved through the in-process registry
-
-    Matrix< DDRMat >
-    compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
-    {
-        return { { aCriteria( 0 ) } };
-    }
-
-    Matrix< DDRMat >
-    compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
-    {
-        return { { aCriteria( 1 ) } };
-    }
-
-    Matrix< DDRMat >
-    compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
-    {
-        return { { 1.0, 0.0 } };
-    }
-
-    Matrix< DDRMat >
-    compute_dconstraint_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
-    {
-        return { { 0.0, 1.0 } };
-    }
 }    // namespace
 
 //------------------------------------------------------------------------------
@@ -77,7 +56,6 @@ MORIS_DECK( aDeck )
     auto& tOpt = aDeck.opt();
     tOpt.set( "is_optimization_problem", true );
     tOpt.set( "problem", "user_defined" );
-    tOpt.set( "constraint_types", "1" );    // replaces get_constraint_types()
     // NOTE: no 'library' parameter — the loaded deck is handed through to OPT
 
     tOpt( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::SWEEP );
@@ -89,10 +67,10 @@ MORIS_DECK( aDeck )
     tOpt.set( "finite_difference_type", "all" );
     tOpt.set( "finite_difference_epsilons", tFDsweep );
 
-    aDeck.register_function( "compute_objectives", &compute_objectives );
-    aDeck.register_function( "compute_constraints", &compute_constraints );
-    aDeck.register_function( "compute_dobjective_dcriteria", &compute_dobjective_dcriteria );
-    aDeck.register_function( "compute_dconstraint_dcriteria", &compute_dconstraint_dcriteria );
+    // objective and constraint as criteria expressions: values, criteria gradients,
+    // GEN IQI_types order, and constraint types are all derived from the trees
+    aDeck.objective( deck::criterion( "IQIBulkStrainEnergy" ) );
+    aDeck.constraint( deck::criterion( "IQIBulkVolume" ) <= 0.0 );
 
     // ---- HMR: background mesh ----------------------------------------------------
     auto& tHmr = aDeck.hmr();
@@ -121,9 +99,9 @@ MORIS_DECK( aDeck )
     tXtk.set( "exodus_output_XTK_ig_mesh", true );
     tXtk.set( "high_to_low_dbl_side_sets", true );
 
-    // ---- GEN: two design lines; criteria = (strain energy, volume) --------------
+    // ---- GEN: two design lines -----------------------------------------------
+    // (IQI_types is written automatically from the objective/constraint expressions)
     auto& tGen = aDeck.gen();
-    tGen.set( "IQI_types", "IQIBulkStrainEnergy", "IQIBulkVolume" );
 
     // vertical line (x-position and normal are design variables)
     tGen( GEN::GEOMETRIES ).add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::LINE ) );

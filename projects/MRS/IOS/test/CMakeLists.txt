@@ -16,7 +16,8 @@ set(TEST_SOURCES
     UT_IOS_Parsing_Tool.cpp
     UT_IOS_File_To_Array.cpp
     UT_IOS_Performance_Reporter.cpp
-    UT_IOS_Library_IO_Deck_Semantics.cpp )
+    UT_IOS_Library_IO_Deck_Semantics.cpp
+    UT_IOS_Input_Deck_Typed_Layer.cpp )
 
 # Fixture input-deck shared objects for the Library_IO deck-semantics tests.
 # Like real input decks they are NOT linked against any moris libraries; their moris

@@ -24,6 +24,8 @@ set(HEADERS
         fn_Library_Builtin_Functions.hpp
         cl_Function_Registry.hpp
         cl_Input_Deck.hpp
+        cl_Input_Deck_Expressions.hpp
+        cl_Input_Deck_Vocabulary.hpp
         cl_Library_IO.hpp
         cl_Library_IO_Meshgen.hpp
         cl_Library_IO_Standard.hpp

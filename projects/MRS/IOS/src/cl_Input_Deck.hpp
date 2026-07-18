@@ -15,6 +15,9 @@
 #include "cl_Library_Enums.hpp"
 #include "cl_Module_Parameter_Lists.hpp"
 #include "cl_Function_Registry.hpp"
+#include "cl_Input_Deck_Expressions.hpp"
+#include "cl_Matrix.hpp"
+#include "linalg_typedefs.hpp"
 #include "cl_Vector.hpp"
 
 namespace moris
@@ -44,6 +47,11 @@ namespace moris
         Vector< Module_Parameter_Lists >&                        mParameterLists;
         Function_Registry&                                       mRegistry;
         std::array< bool, (size_t)( Module_Type::END_ENUM ) > mTouched{};
+
+        // declared optimization expressions (materialized by finalize_expressions)
+        deck::Expression           mObjective;
+        Vector< deck::Constraint > mConstraints;
+        Vector< std::string >      mCriteriaOrder;
 
       public:
         /**
@@ -108,6 +116,43 @@ namespace moris
         }
 
         /**
+         * Declares the optimization objective as an expression over named criteria,
+         * e.g.  aDeck.objective( deck::criterion( "IQIBulkStrainEnergy" ) / tSE0 );
+         *
+         * Replaces the compute_objectives / compute_dobjective_dcriteria /
+         * compute_dobjective_dadv callbacks; the criteria order (GEN IQI_types) is
+         * assigned by the collector in first-appearance order, and the criteria
+         * gradient is derived from the expression by reverse-mode differentiation.
+         */
+        void
+        objective( const deck::Expression& aExpression )
+        {
+            MORIS_ERROR( !mObjective.is_valid(),
+                    "Input_Deck::objective() - the objective has already been declared." );
+            MORIS_ERROR( aExpression.is_valid(),
+                    "Input_Deck::objective() - empty expression." );
+
+            mObjective = aExpression;
+            aExpression.collect_criteria( mCriteriaOrder );
+        }
+
+        /**
+         * Adds an optimization constraint, e.g.
+         *   aDeck.constraint( deck::criterion( "IQIBulkVolume" ) / tMaxMass - 1.0 <= 0.0 );
+         * Constraint order must list equality constraints before inequality ones
+         * (MORIS convention, checked by the OPT problem).
+         */
+        void
+        constraint( const deck::Constraint& aConstraint )
+        {
+            MORIS_ERROR( aConstraint.mExpression.is_valid(),
+                    "Input_Deck::constraint() - empty expression." );
+
+            mConstraints.push_back( aConstraint );
+            aConstraint.mExpression.collect_criteria( mCriteriaOrder );
+        }
+
+        /**
          * Whether a module was touched by the deck function.
          *
          * @param aModule Module type
@@ -127,6 +172,91 @@ namespace moris
         touch( Module_Type aModule )
         {
             mTouched[ (size_t)aModule ] = true;
+        }
+
+        /**
+         * Materializes declared objective/constraint expressions. Called by the
+         * loader after the deck function returns (before untouched modules are
+         * cleared): writes GEN IQI_types in collection order (contract C1), the OPT
+         * constraint_types parameter, and registers the four OPT evaluation
+         * callbacks (values by tree evaluation, criteria gradients by reverse-mode
+         * differentiation) in the function registry. No-op if no objective was
+         * declared.
+         */
+        void
+        finalize_expressions()
+        {
+            if ( !mObjective.is_valid() )
+            {
+                MORIS_ERROR( mConstraints.empty(),
+                        "Input_Deck - constraints were declared but no objective; declare one with aDeck.objective()." );
+                return;
+            }
+
+            // criteria order -> GEN IQI_types (touches GEN: criteria are GEN-tracked IQIs)
+            this->module( Module_Type::GEN )( 0 ).set( "IQI_types", mCriteriaOrder );
+
+            // constraint types -> OPT parameter (consumed by Problem_User_Defined)
+            std::string tConstraintTypes;
+            for ( uint iConstraint = 0; iConstraint < mConstraints.size(); iConstraint++ )
+            {
+                tConstraintTypes += ( iConstraint > 0 ? "," : "" ) + std::to_string( mConstraints( iConstraint ).mType );
+            }
+            this->module( Module_Type::OPT )( 0 ).set( "constraint_types", tConstraintTypes );
+
+            // shared final name -> index map for the evaluation lambdas
+            auto tIndexOf = std::make_shared< std::map< std::string, uint > >();
+            for ( uint iCriterion = 0; iCriterion < mCriteriaOrder.size(); iCriterion++ )
+            {
+                ( *tIndexOf )[ mCriteriaOrder( iCriterion ) ] = iCriterion;
+            }
+
+            using Callback = Matrix< DDRMat >( const Vector< real >&, const Vector< real >& );
+
+            deck::Expression           tObjective   = mObjective;
+            Vector< deck::Constraint > tConstraints = mConstraints;
+
+            mRegistry.register_functional< Callback >( "compute_objectives",
+                    [ tObjective, tIndexOf ]( const Vector< real >&, const Vector< real >& aCriteria ) {
+                        return Matrix< DDRMat >{ { tObjective.evaluate( aCriteria, *tIndexOf ) } };
+                    } );
+
+            mRegistry.register_functional< Callback >( "compute_dobjective_dcriteria",
+                    [ tObjective, tIndexOf ]( const Vector< real >&, const Vector< real >& aCriteria ) {
+                        Vector< real > tGradient( aCriteria.size(), 0.0 );
+                        tObjective.accumulate_gradient( aCriteria, *tIndexOf, tGradient );
+                        Matrix< DDRMat > tResult( 1, aCriteria.size(), 0.0 );
+                        for ( uint iCriterion = 0; iCriterion < aCriteria.size(); iCriterion++ )
+                        {
+                            tResult( 0, iCriterion ) = tGradient( iCriterion );
+                        }
+                        return tResult;
+                    } );
+
+            mRegistry.register_functional< Callback >( "compute_constraints",
+                    [ tConstraints, tIndexOf ]( const Vector< real >&, const Vector< real >& aCriteria ) {
+                        Matrix< DDRMat > tResult( tConstraints.size(), 1, 0.0 );
+                        for ( uint iConstraint = 0; iConstraint < tConstraints.size(); iConstraint++ )
+                        {
+                            tResult( iConstraint ) = tConstraints( iConstraint ).mExpression.evaluate( aCriteria, *tIndexOf );
+                        }
+                        return tResult;
+                    } );
+
+            mRegistry.register_functional< Callback >( "compute_dconstraint_dcriteria",
+                    [ tConstraints, tIndexOf ]( const Vector< real >&, const Vector< real >& aCriteria ) {
+                        Matrix< DDRMat > tResult( tConstraints.size(), aCriteria.size(), 0.0 );
+                        for ( uint iConstraint = 0; iConstraint < tConstraints.size(); iConstraint++ )
+                        {
+                            Vector< real > tGradient( aCriteria.size(), 0.0 );
+                            tConstraints( iConstraint ).mExpression.accumulate_gradient( aCriteria, *tIndexOf, tGradient );
+                            for ( uint iCriterion = 0; iCriterion < aCriteria.size(); iCriterion++ )
+                            {
+                                tResult( iConstraint, iCriterion ) = tGradient( iCriterion );
+                            }
+                        }
+                        return tResult;
+                    } );
         }
     };
 

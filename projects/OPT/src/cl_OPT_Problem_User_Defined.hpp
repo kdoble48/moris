@@ -123,6 +123,11 @@ namespace moris::opt
         Matrix< DDRMat > compute_dconstraint_dcriteria() override;
 
       private:
+        // Keeps the input library (and thus the dlopen'd deck .so) alive for as long
+        // as this problem exists: the stored callbacks reference deck code/objects.
+        // Declared FIRST so it is destroyed LAST (after the std::function members).
+        std::shared_ptr< Library_IO > mLibrary;
+
         /**
          * Installs built-in defaults for any callback the deck did not define:
          * - get_constraint_types: taken from the OPT 'constraint_types' parameter

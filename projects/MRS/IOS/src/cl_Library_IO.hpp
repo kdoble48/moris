@@ -284,6 +284,26 @@ namespace moris
         }
 
         /**
+         * Looks up a type-erased std::function registered by a single-entry-point deck
+         * (e.g. the criteria-expression callbacks). Registry-only — no dlsym, no
+         * builtins; returns an empty function when the name is not registered.
+         *
+         * @tparam Signature Function signature, e.g. int( real )
+         * @param aFunctionName Callable name
+         * @return The callable, or an empty std::function
+         */
+        template< typename Signature >
+        std::function< Signature >
+        load_functional( const std::string& aFunctionName )
+        {
+            MORIS_ERROR( mLibraryIsFinalized,
+                    "Library_IO::load_functional() - "
+                    "Accessing a function from the Library before it has been finalized." );
+
+            return mRegistry.lookup_functional< Signature >( aFunctionName );
+        }
+
+        /**
          * Checks all parameters by running external validations. Called during finalize().
          */
         void check_parameters();

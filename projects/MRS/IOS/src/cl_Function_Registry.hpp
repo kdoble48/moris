@@ -10,7 +10,9 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <typeindex>
 #include <typeinfo>
@@ -96,13 +98,110 @@ namespace moris
         }
 
         /**
+         * Registers a type-erased std::function under a name (capturing lambdas
+         * allowed — used by the criteria-expression machinery). Same duplicate rules
+         * as register_function().
+         *
+         * @tparam Signature Function signature, e.g. int( real )
+         * @param aName Name the callable will be referenced by
+         * @param aFunction Callable
+         */
+        template< typename Signature >
+        void
+        register_functional( const std::string& aName, std::function< Signature > aFunction )
+        {
+            MORIS_ERROR( static_cast< bool >( aFunction ),
+                    "Function_Registry::register_functional() - empty function registered for '%s'.",
+                    aName.c_str() );
+
+            MORIS_ERROR( mEntries.find( aName ) == mEntries.end(),
+                    "Function_Registry::register_functional() - a function pointer named '%s' is already registered.",
+                    aName.c_str() );
+
+            bool tInserted = mFunctionals
+                                     .emplace( aName,
+                                             std::pair< std::shared_ptr< Functional_Holder >, std::type_index >(
+                                                     std::make_shared< Functional_Holder_Impl< Signature > >( std::move( aFunction ) ),
+                                                     std::type_index( typeid( Signature ) ) ) )
+                                     .second;
+
+            MORIS_ERROR( tInserted,
+                    "Function_Registry::register_functional() - a functional named '%s' is already registered.",
+                    aName.c_str() );
+        }
+
+        /**
+         * Looks up a type-erased std::function by name. Returns an empty function if
+         * the name is not registered; errors on a signature mismatch.
+         *
+         * @tparam Signature Function signature expected by the caller
+         * @param aName Callable name
+         * @return The callable, or an empty std::function
+         */
+        template< typename Signature >
+        std::function< Signature >
+        lookup_functional( const std::string& aName ) const
+        {
+            auto tIterator = mFunctionals.find( aName );
+            if ( tIterator == mFunctionals.end() )
+            {
+                return nullptr;
+            }
+
+            MORIS_ERROR( tIterator->second.second == std::type_index( typeid( Signature ) ),
+                    "Function_Registry::lookup_functional() - the callable '%s' is registered with signature '%s' "
+                    "but was requested as '%s'.",
+                    aName.c_str(),
+                    tIterator->second.second.name(),
+                    typeid( Signature ).name() );
+
+            return static_cast< Functional_Holder_Impl< Signature >* >( tIterator->second.first.get() )->mFunction;
+        }
+
+        /**
          * @return Number of registered callbacks
          */
         size_t
         size() const
         {
-            return mEntries.size();
+            return mEntries.size() + mFunctionals.size();
         }
+
+        /**
+         * Drops all registered callbacks. MUST be called before dlclosing the deck
+         * shared object: registered functionals capture objects allocated by deck
+         * code, and destroying them after the .so is unmapped jumps into unmapped
+         * deleter code.
+         */
+        void
+        clear()
+        {
+            mEntries.clear();
+            mFunctionals.clear();
+        }
+
+      private:
+        // Type-erased functional storage. Intentionally NOT std::any: several test
+        // translation units '#define private public' before including moris headers,
+        // and std::any's access-sensitive internals break under that macro. This
+        // plain all-public holder has no such internals.
+        struct Functional_Holder
+        {
+            virtual ~Functional_Holder() = default;
+        };
+
+        template< typename Signature >
+        struct Functional_Holder_Impl : Functional_Holder
+        {
+            std::function< Signature > mFunction;
+
+            explicit Functional_Holder_Impl( std::function< Signature > aFunction )
+                    : mFunction( std::move( aFunction ) )
+            {
+            }
+        };
+
+        std::map< std::string, std::pair< std::shared_ptr< Functional_Holder >, std::type_index > > mFunctionals;
     };
 
 }    // namespace moris

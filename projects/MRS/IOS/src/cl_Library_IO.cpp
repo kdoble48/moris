@@ -45,6 +45,10 @@ namespace moris
 
     Library_IO::~Library_IO()
     {
+        // drop registered callbacks BEFORE unmapping the deck .so: functionals may
+        // capture objects whose deleters live in deck code (see Function_Registry::clear)
+        mRegistry.clear();
+
         // close handle to shared object library if it has been opened
         if ( mSoLibIsInitialized )
         {
@@ -314,6 +318,10 @@ namespace moris
             // and let the deck configure itself
             Input_Deck tInputDeck( mParameterLists, mRegistry );
             tInputDeckFunc( tInputDeck );
+
+            // materialize any declared objective/constraint expressions (writes GEN
+            // IQI_types + OPT constraint_types and registers the evaluation callbacks)
+            tInputDeck.finalize_expressions();
 
             // OPT is mandatory for workflow selection; activate it even if untouched
             tInputDeck.touch( Module_Type::OPT );

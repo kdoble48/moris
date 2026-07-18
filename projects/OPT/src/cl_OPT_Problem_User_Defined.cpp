@@ -37,16 +37,32 @@ namespace moris::opt
             tLibrary->finalize();
         }
 
-        // Set user-defined functions. The objective and constraint evaluations are
-        // required; the gradient callbacks and get_constraint_types are optional and
-        // receive built-in defaults (see install_default_functions) when absent.
+        // keep the library (and deck .so) alive as long as this problem holds callbacks into it
+        mLibrary = tLibrary;
+
+        // Set user-defined functions. Resolution order per callback: in-process
+        // functional (criteria-expression API) > function symbol/pointer. The
+        // objective and constraint evaluations are required; the gradient callbacks
+        // and get_constraint_types are optional and receive built-in defaults (see
+        // install_default_functions) when absent.
+        using Callback_Signature = Matrix< DDRMat >( const Vector< real >&, const Vector< real >& );
+
+        auto tLoadCallback = [ &tLibrary ]( const std::string& aName, bool aRequired ) -> Objective_Constraint_Functional {
+            Objective_Constraint_Functional tCallback = tLibrary->load_functional< Callback_Signature >( aName );
+            if ( !tCallback )
+            {
+                tCallback = tLibrary->load_function< Objective_Constraint_Function >( aName, aRequired );
+            }
+            return tCallback;
+        };
+
         get_constraint_types_user_defined          = tLibrary->load_function< Constraint_Types_Function >( "get_constraint_types", false );
-        compute_objectives_user_defined            = tLibrary->load_function< Objective_Constraint_Function >( "compute_objectives" );
-        compute_constraints_user_defined           = tLibrary->load_function< Objective_Constraint_Function >( "compute_constraints" );
-        compute_dobjective_dadv_user_defined       = tLibrary->load_function< Objective_Constraint_Function >( "compute_dobjective_dadv", false );
-        compute_dobjective_dcriteria_user_defined  = tLibrary->load_function< Objective_Constraint_Function >( "compute_dobjective_dcriteria", false );
-        compute_dconstraint_dadv_user_defined      = tLibrary->load_function< Objective_Constraint_Function >( "compute_dconstraint_dadv", false );
-        compute_dconstraint_dcriteria_user_defined = tLibrary->load_function< Objective_Constraint_Function >( "compute_dconstraint_dcriteria", false );
+        compute_objectives_user_defined            = tLoadCallback( "compute_objectives", true );
+        compute_constraints_user_defined           = tLoadCallback( "compute_constraints", true );
+        compute_dobjective_dadv_user_defined       = tLoadCallback( "compute_dobjective_dadv", false );
+        compute_dobjective_dcriteria_user_defined  = tLoadCallback( "compute_dobjective_dcriteria", false );
+        compute_dconstraint_dadv_user_defined      = tLoadCallback( "compute_dconstraint_dadv", false );
+        compute_dconstraint_dcriteria_user_defined = tLoadCallback( "compute_dconstraint_dcriteria", false );
 
         this->install_default_functions( aParameterList );
     }
