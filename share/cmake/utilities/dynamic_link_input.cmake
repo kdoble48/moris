@@ -34,7 +34,10 @@ set(SO_LIB_REQS
 
 add_library(${target_name} SHARED ${cpp_name})
 
-target_include_directories(${target_name} PRIVATE ${SO_INCLUDES})    
+# MPI headers: deck sources reach <mpi.h> via cl_Logger.hpp, and input .so targets
+# are compiled with the plain compiler (not the MPI wrapper), so the include dir
+# must be explicit
+target_include_directories(${target_name} PRIVATE ${SO_INCLUDES} ${MPI_CXX_HEADER_DIR})
 
 target_link_libraries(${target_name} ${SO_LIB_REQS})
 

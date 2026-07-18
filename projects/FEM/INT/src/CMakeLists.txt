@@ -41,6 +41,7 @@ set_property(GLOBAL PROPERTY INT_SRC_LIST "${INT_INTERNAL_INCLUDES}")
 set(HEADERS
 
     CORE/cl_FEM_Set.hpp
+    CORE/fn_FEM_Presets.hpp
     CORE/cl_FEM_NodeProxy.hpp
     CORE/cl_FEM_Node_Base.hpp
     CORE/cl_FEM_Node.hpp

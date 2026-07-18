@@ -41,6 +41,7 @@ set(TEST_SOURCES
     UT_FEM_IWG.cpp
     
     UT_FEM_CM.cpp
+    UT_FEM_Presets.cpp
     UT_FEM_CM_Diff_Lin_Iso.cpp
     UT_FEM_CM_Diff_PC.cpp
     UT_FEM_CM_Diff_Lin_Iso_Turbulence.cpp

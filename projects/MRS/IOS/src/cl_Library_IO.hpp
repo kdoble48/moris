@@ -20,6 +20,8 @@
 
 #include "cl_Library_Enums.hpp"
 #include "cl_Vector.hpp"
+#include "fn_Library_Builtin_Functions.hpp"
+#include "cl_Function_Registry.hpp"
 
 #include "parameters.hpp"
 
@@ -61,6 +63,10 @@ namespace moris
 
         // storage for the parameters for the various Modules
         Vector< Module_Parameter_Lists > mParameterLists;
+
+        // registry of user callbacks registered by a single-entry-point deck
+        // (MORISInputDeck); consulted by load_function() before dlsym
+        Function_Registry mRegistry;
 
         // XML parser for output
         std::unique_ptr< XML_Parser > mXmlWriter;
@@ -129,6 +135,19 @@ namespace moris
          */
         virtual std::string
         get_path( File_Type aFileType ) const;
+
+        // -----------------------------------------------------------------------------
+
+        /**
+         * @brief Check whether a file path names the shared object this library has loaded.
+         * Relative paths are resolved against the working directory, matching how the
+         * library resolved its own input file.
+         *
+         * @param aFilePath path to compare, absolute or relative
+         * @return true if a .so is loaded and aFilePath resolves to it
+         */
+        bool
+        uses_shared_object_file( const std::string& aFilePath );
 
         // -----------------------------------------------------------------------------
 
@@ -243,11 +262,25 @@ namespace moris
                     "Trying to load parameters for %s directly from shared object library. Use 'get_parameters_for_module()' instead.",
                     aFunctionName.c_str() );
 
+            // callbacks registered by a single-entry-point deck take precedence
+            Function_Type tRegisteredFunction = mRegistry.lookup< Function_Type >( aFunctionName );
+            if ( tRegisteredFunction != nullptr )
+            {
+                return tRegisteredFunction;
+            }
+
             // get a handle to the library handle
             void* tLibraryHandle = this->get_shared_object_library_handle();
 
             // get the pointer to the user-defined function
             Function_Type aUserFunction = reinterpret_cast< Function_Type >( dlsym( tLibraryHandle, aFunctionName.c_str() ) );
+
+            // if the deck does not define this function, fall back to a built-in
+            // implementation if one exists for this name (deck-defined symbols win)
+            if ( aUserFunction == nullptr )
+            {
+                aUserFunction = reinterpret_cast< Function_Type >( get_builtin_deck_function( aFunctionName ) );
+            }
 
             // depending on the flag throw an error
             if ( aThrowError )
@@ -261,6 +294,26 @@ namespace moris
 
             // return function handle
             return aUserFunction;
+        }
+
+        /**
+         * Looks up a type-erased std::function registered by a single-entry-point deck
+         * (e.g. the criteria-expression callbacks). Registry-only — no dlsym, no
+         * builtins; returns an empty function when the name is not registered.
+         *
+         * @tparam Signature Function signature, e.g. int( real )
+         * @param aFunctionName Callable name
+         * @return The callable, or an empty std::function
+         */
+        template< typename Signature >
+        std::function< Signature >
+        load_functional( const std::string& aFunctionName )
+        {
+            MORIS_ERROR( mLibraryIsFinalized,
+                    "Library_IO::load_functional() - "
+                    "Accessing a function from the Library before it has been finalized." );
+
+            return mRegistry.lookup_functional< Signature >( aFunctionName );
         }
 
         /**

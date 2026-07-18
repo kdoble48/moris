@@ -26,14 +26,16 @@ namespace moris::opt
 
     Manager::Manager(
             const Module_Parameter_Lists&              aParameterLists,
-            const Vector< std::shared_ptr< Criteria_Interface > >& aInterfaces )
+            const Vector< std::shared_ptr< Criteria_Interface > >& aInterfaces,
+            std::shared_ptr< Library_IO >                          aLibrary )
             : Manager(
                       aParameterLists( 2 ),
                       create_problem(
                               aParameterLists( 0 )( 0 ),
                               create_interface(
                                       aParameterLists( 1 ),
-                                      aInterfaces ) ) )
+                                      aInterfaces ),
+                              std::move( aLibrary ) ) )
     {
     }
 

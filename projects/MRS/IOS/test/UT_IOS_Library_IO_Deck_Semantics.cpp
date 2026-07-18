@@ -1,0 +1,347 @@
+/*
+ * Copyright (c) 2022 University of Colorado
+ * Licensed under the MIT license. See LICENSE.txt file in the MORIS root for details.
+ *
+ *------------------------------------------------------------------------------------
+ *
+ * UT_IOS_Library_IO_Deck_Semantics.cpp
+ *
+ * Safety-net tests pinning the CURRENT input-deck loading contract of Library_IO
+ * before any deck-API redesign work. These tests document behavior as-is; several
+ * pinned behaviors are surprising (and candidates for later change), but any change
+ * to them must be deliberate and show up as a diff to this file.
+ *
+ * Pinned contract:
+ *  (a) a MISSING <MODULE>ParameterList symbol CLEARS that module's parameter lists
+ *  (b) a PRESENT-BUT-EMPTY <MODULE>ParameterList function KEEPS the fn_PRM defaults
+ *  (c) load_function(): finalize-gate, throw/no-throw on missing symbols, and the
+ *      guard against loading *ParameterList symbols as user functions
+ *  (d) finalize(): .so applied first, then XML on top; the library locks afterwards;
+ *      XML presence RESETS modules that are absent from the XML file to defaults
+ *      (including modules the .so had set or cleared)
+ *
+ * Uses the fixture deck fixtures/deck_semantics_fixture.cpp, compiled to a shared
+ * object by CMake and passed in via the IOS_DECK_FIXTURE_SO compile definition.
+ */
+
+#include <catch.hpp>
+
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+#include "cl_Library_IO_Standard.hpp"
+#include "cl_Communication_Tools.hpp"
+#include "cl_Matrix.hpp"
+#include "linalg_typedefs.hpp"
+#include "parameters.hpp"
+
+#ifndef IOS_DECK_FIXTURE_SO
+#error "IOS_DECK_FIXTURE_SO must be defined by CMake (path to the fixture deck .so)"
+#endif
+#ifndef IOS_DECK_V2_FIXTURE_SO
+#error "IOS_DECK_V2_FIXTURE_SO must be defined by CMake (path to the entry-point fixture .so)"
+#endif
+#ifndef IOS_DECK_MIXED_FIXTURE_SO
+#error "IOS_DECK_MIXED_FIXTURE_SO must be defined by CMake (path to the mixed-style fixture .so)"
+#endif
+
+namespace moris
+{
+    //------------------------------------------------------------------------------------------------------------------
+
+    // signature of the fixture's user callback
+    typedef int ( *Fixture_User_Function )();
+
+    // ABI signatures of the built-in deck callbacks (see fn_Library_Builtin_Functions.cpp)
+    typedef void ( *Builtin_Property_Function )( Matrix< DDRMat >&, Vector< Matrix< DDRMat > >&, void* );
+    typedef bool ( *Builtin_Criterion_Function )( void* );
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: missing vs empty module symbols", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+        tLibrary.finalize( "" );
+
+        SECTION( "present-and-mutating function: .so parameters are applied on top of defaults" )
+        {
+            Module_Parameter_Lists tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+
+            // the ctor seeds exactly one optimization-problem parameter list, no algorithms
+            REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() == 1 );
+            CHECK( tOptParams( OPT::ALGORITHMS ).size() == 0 );
+
+            // the fixture flipped this from its default (false)
+            CHECK( tOptParams( OPT::OPTIMIZATION_PROBLEMS )( 0 ).get< bool >( "is_optimization_problem" ) == true );
+        }
+
+        SECTION( "present-but-empty function: fn_PRM defaults are preserved" )
+        {
+            Module_Parameter_Lists tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+
+            REQUIRE( tHmrParams( HMR::GENERAL ).size() == 1 );
+            CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );
+        }
+
+        SECTION( "missing symbol: the module's parameter lists are cleared" )
+        {
+            // NOTE: this is the documented trap — omitting a symbol DISABLES the module,
+            // while an empty function keeps it enabled with defaults (section above)
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::GEN ).size() == 0 );
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::FEM ).size() == 0 );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: load_function resolution", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+
+        SECTION( "loading a function before finalize() throws" )
+        {
+            REQUIRE_THROWS( tLibrary.load_function< Fixture_User_Function >( "Deck_Fixture_User_Function" ) );
+        }
+
+        SECTION( "after finalize(): existing symbols resolve, missing symbols throw or return nullptr" )
+        {
+            tLibrary.finalize( "" );
+
+            // an existing user callback resolves and is callable
+            Fixture_User_Function tFunc = tLibrary.load_function< Fixture_User_Function >( "Deck_Fixture_User_Function" );
+            REQUIRE( tFunc != nullptr );
+            CHECK( tFunc() == 42 );
+
+            // a missing symbol throws by default ...
+            REQUIRE_THROWS( tLibrary.load_function< Fixture_User_Function >( "This_Function_Does_Not_Exist" ) );
+
+            // ... and returns nullptr when aThrowError = false
+            CHECK( tLibrary.load_function< Fixture_User_Function >( "This_Function_Does_Not_Exist", false ) == nullptr );
+
+            // *ParameterList symbols may not be loaded as user functions
+            REQUIRE_THROWS( tLibrary.load_function< Parameter_Function >( "OPTParameterList" ) );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: builtin fallback functions", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+        tLibrary.finalize( "" );
+
+        SECTION( "Func_Const resolves to the builtin when the deck does not define it" )
+        {
+            Builtin_Property_Function tFunc = tLibrary.load_function< Builtin_Property_Function >( "Func_Const" );
+            REQUIRE( tFunc != nullptr );
+
+            Matrix< DDRMat >           tPropMatrix;
+            Vector< Matrix< DDRMat > > tParameters;
+            tParameters.push_back( Matrix< DDRMat >{ { 3.14 }, { 2.71 } } );
+
+            tFunc( tPropMatrix, tParameters, nullptr );
+
+            REQUIRE( tPropMatrix.numel() == 2 );
+            CHECK( tPropMatrix( 0 ) == 3.14 );
+            CHECK( tPropMatrix( 1 ) == 2.71 );
+        }
+
+        SECTION( "a deck-defined symbol wins over the builtin (Output_Criterion)" )
+        {
+            Builtin_Criterion_Function tCriterion = tLibrary.load_function< Builtin_Criterion_Function >( "Output_Criterion" );
+            REQUIRE( tCriterion != nullptr );
+
+            // the fixture's deck version deliberately returns false; the builtin returns true
+            CHECK( tCriterion( nullptr ) == false );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: uses_shared_object_file identifies the loaded deck", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        // OPT consults this to decide whether the 'library' parameter names the deck
+        // itself (reuse the loaded library) or a DIFFERENT .so (legacy escape hatch:
+        // load that file instead)
+        SECTION( "no .so loaded: nothing matches" )
+        {
+            Library_IO_Standard tLibrary;
+            CHECK_FALSE( tLibrary.uses_shared_object_file( IOS_DECK_FIXTURE_SO ) );
+        }
+
+        SECTION( "loaded deck: its own path matches, other paths and empty do not" )
+        {
+            Library_IO_Standard tLibrary;
+            tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+
+            CHECK( tLibrary.uses_shared_object_file( IOS_DECK_FIXTURE_SO ) );
+            CHECK_FALSE( tLibrary.uses_shared_object_file( IOS_DECK_V2_FIXTURE_SO ) );
+            CHECK_FALSE( tLibrary.uses_shared_object_file( "" ) );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: finalize order and locking", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        SECTION( "finalize() locks the library against further inputs" )
+        {
+            Library_IO_Standard tLibrary;
+            tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+            tLibrary.finalize( "" );
+
+            REQUIRE_THROWS( tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE ) );
+        }
+
+        SECTION( "finalize( path ) writes a parameter receipt" )
+        {
+            std::filesystem::path tReceiptPath =
+                    std::filesystem::temp_directory_path()
+                    / ( "ios_deck_semantics_receipt_" + std::to_string( par_rank() ) + ".xml" );
+            std::filesystem::remove( tReceiptPath );
+
+            Library_IO_Standard tLibrary;
+            tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+            tLibrary.finalize( tReceiptPath.string() );
+
+            CHECK( std::filesystem::exists( tReceiptPath ) );
+            std::filesystem::remove( tReceiptPath );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: single-entry-point deck (MORISInputDeck)", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_V2_FIXTURE_SO, File_Type::SO_FILE );
+        tLibrary.finalize( "" );
+
+        SECTION( "touched modules keep defaults, mutations are applied, untouched modules are disabled" )
+        {
+            // OPT: touched and mutated
+            Module_Parameter_Lists tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+            REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() == 1 );
+            CHECK( tOptParams( OPT::OPTIMIZATION_PROBLEMS )( 0 ).get< bool >( "is_optimization_problem" ) == true );
+
+            // HMR: touched without modification — defaults preserved
+            Module_Parameter_Lists tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+            REQUIRE( tHmrParams( HMR::GENERAL ).size() == 1 );
+            CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );
+
+            // untouched modules are disabled
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::GEN ).size() == 0 );
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::FEM ).size() == 0 );
+        }
+
+        SECTION( "registered callbacks resolve without extern \"C\" symbols" )
+        {
+            // the fixture registers this function with INTERNAL linkage — it is not a
+            // dlsym-able symbol, only the registry can resolve it
+            Fixture_User_Function tFunc = tLibrary.load_function< Fixture_User_Function >( "Registered_User_Function" );
+            REQUIRE( tFunc != nullptr );
+            CHECK( tFunc() == 77 );
+        }
+
+        SECTION( "a registered callback wins over the builtin (Func_Const)" )
+        {
+            Builtin_Property_Function tFunc = tLibrary.load_function< Builtin_Property_Function >( "Func_Const" );
+            REQUIRE( tFunc != nullptr );
+
+            Matrix< DDRMat >           tPropMatrix;
+            Vector< Matrix< DDRMat > > tParameters;
+            tParameters.push_back( Matrix< DDRMat >{ { 3.0 }, { 5.0 } } );
+
+            tFunc( tPropMatrix, tParameters, nullptr );
+
+            // the fixture's registered version doubles the values; the builtin copies them
+            REQUIRE( tPropMatrix.numel() == 2 );
+            CHECK( tPropMatrix( 0 ) == 6.0 );
+            CHECK( tPropMatrix( 1 ) == 10.0 );
+        }
+
+        SECTION( "requesting a registered callback with the wrong signature throws" )
+        {
+            REQUIRE_THROWS( tLibrary.load_function< Builtin_Criterion_Function >( "Registered_User_Function" ) );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: mixing deck styles is rejected", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        // the mixed fixture exports both MORISInputDeck and OPTParameterList
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_MIXED_FIXTURE_SO, File_Type::SO_FILE );
+
+        REQUIRE_THROWS( tLibrary.finalize( "" ) );
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: XML input semantics on top of a .so", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        // per-rank file to avoid concurrent writes under mpirun
+        std::filesystem::path tXmlPath =
+                std::filesystem::temp_directory_path()
+                / ( "ios_deck_semantics_override_" + std::to_string( par_rank() ) + ".xml" );
+
+        // XML overriding a single HMR parameter; no other modules are mentioned
+        {
+            std::ofstream tXmlFile( tXmlPath );
+            tXmlFile << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        "<ParameterLists>\n"
+                        "    <HMR>\n"
+                        "        <GENERAL>\n"
+                        "            <General>\n"
+                        "                <refinement_buffer>3</refinement_buffer>\n"
+                        "            </General>\n"
+                        "        </GENERAL>\n"
+                        "    </HMR>\n"
+                        "</ParameterLists>\n";
+        }
+
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+        tLibrary.load_parameter_list( tXmlPath.string(), File_Type::XML_FILE );
+        tLibrary.finalize( "" );
+
+        SECTION( "XML values are applied after (on top of) the .so pass — but APPENDED behind a fresh default" )
+        {
+            // NOTE: pinned as-is. The XML pass builds a fresh Module_Parameter_Lists (whose
+            // constructor seeds one default list per submodule) and APPENDS the XML-parsed
+            // list to it. The XML-set value therefore lands at index 1, behind an untouched
+            // default at index 0 — consumers that read index 0 never see XML values.
+            Module_Parameter_Lists tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+
+            REQUIRE( tHmrParams( HMR::GENERAL ).size() == 2 );
+            CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );    // ctor-seeded default
+            CHECK( tHmrParams( HMR::GENERAL )( 1 ).get< uint >( "refinement_buffer" ) == 3 );    // XML-parsed list
+        }
+
+        SECTION( "modules absent from the XML are RESET to defaults, discarding .so values" )
+        {
+            // NOTE: pinned as-is. The XML pass rebuilds every module that is not named in
+            // the XML file from defaults — so the value set by the .so's OPTParameterList
+            // is LOST, and the GEN module the .so pass had cleared is re-created with
+            // default parameter lists. This makes .so + XML composition module-granular,
+            // not key-granular. Deliberately surprising; candidates for redesign.
+            Module_Parameter_Lists tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+
+            REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() >= 1 );
+            CHECK( tOptParams( OPT::OPTIMIZATION_PROBLEMS )( 0 ).get< bool >( "is_optimization_problem" ) == false );
+
+            // GEN was cleared by the .so pass (missing symbol) but is re-created by the XML pass
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::GEN ).size() > 0 );
+        }
+
+        std::filesystem::remove( tXmlPath );
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+}    // namespace moris

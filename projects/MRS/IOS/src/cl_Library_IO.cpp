@@ -10,7 +10,10 @@
 
 #include "cl_Library_IO.hpp"
 #include "cl_Library_Enums.hpp"
+#include "cl_Input_Deck.hpp"
+#include "fn_Library_Interlink_Checks.hpp"
 #include "cl_XML_Parser.hpp"
+#include <cstdlib>
 #include <cctype>
 #include <cstddef>
 #include <iterator>
@@ -44,6 +47,10 @@ namespace moris
 
     Library_IO::~Library_IO()
     {
+        // drop registered callbacks BEFORE unmapping the deck .so: functionals may
+        // capture objects whose deleters live in deck code (see Function_Registry::clear)
+        mRegistry.clear();
+
         // close handle to shared object library if it has been opened
         if ( mSoLibIsInitialized )
         {
@@ -179,6 +186,16 @@ namespace moris
 
     //------------------------------------------------------------------------------------------------------------------
 
+    bool
+    Library_IO::uses_shared_object_file( const std::string& aFilePath )
+    {
+        return mSoLibIsInitialized
+            && !aFilePath.empty()
+            && this->convert_to_absolute_file_path( aFilePath ) == mSoFilePath;
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
     void
     Library_IO::load_parameter_list(
             const std::string& aFileName,
@@ -274,6 +291,23 @@ namespace moris
         // check the parameters for validity
         this->check_parameters();
 
+        // cross-module deck-consistency findings: warnings by default, promoted to an
+        // error when MORIS_STRICT_INPUT=1 is set in the environment
+        Vector< std::string > tFindings = collect_deck_interlink_findings( mParameterLists );
+        if ( tFindings.size() > 0 )
+        {
+            for ( const std::string& iFinding : tFindings )
+            {
+                MORIS_LOG( "Deck consistency: %s", iFinding.c_str() );
+            }
+
+            const char* tStrictInput = std::getenv( "MORIS_STRICT_INPUT" );
+            MORIS_ERROR( tStrictInput == nullptr || std::string( tStrictInput ) != "1",
+                    "Library_IO::finalize() - %u deck-consistency finding(s) (listed above); "
+                    "MORIS_STRICT_INPUT=1 promotes them to this error.",
+                    (unsigned int)tFindings.size() );
+        }
+
         // mark this library as finalized and lock it from modification
         mLibraryIsFinalized = true;
 
@@ -289,7 +323,62 @@ namespace moris
         // check that an .so file has been initialized
         MORIS_ERROR( mSoLibIsInitialized, "Library_IO::load_parameters_from_shared_object_library() - No .so file has been loaded." );
 
-        // go through the various parameter list names and see if they exist in the provided .so file
+        // single-entry-point deck API (see doc/internal/DECK_API_RFC.md): if the deck
+        // exports "MORISInputDeck", use it instead of the legacy per-module symbols
+        Input_Deck_Function tInputDeckFunc = reinterpret_cast< Input_Deck_Function >( dlsym( mLibraryHandle, "MORISInputDeck" ) );
+
+        if ( tInputDeckFunc != nullptr )
+        {
+            // mixing the two deck styles in one .so is a hard error: the legacy symbols
+            // would silently be ignored, so fail loudly instead
+            for ( uint iParamListType = 0; iParamListType < (uint)( Module_Type::END_ENUM ); iParamListType++ )
+            {
+                std::string tLegacyName = get_name_for_parameter_list_type( (Module_Type)iParamListType );
+
+                MORIS_ERROR( dlsym( mLibraryHandle, tLegacyName.c_str() ) == nullptr,
+                        "Library_IO - the input deck exports both 'MORISInputDeck' and the legacy "
+                        "'%s' symbol. A deck must use exactly one input style.",
+                        tLegacyName.c_str() );
+            }
+
+            MORIS_LOG( "Single-entry-point deck detected (MORISInputDeck)." );
+
+            // build the deck object over this library's parameter lists and registry,
+            // and let the deck configure itself
+            Input_Deck tInputDeck( mParameterLists, mRegistry );
+            tInputDeckFunc( tInputDeck );
+
+            // materialize any declared objective/constraint expressions (writes GEN
+            // IQI_types + OPT constraint_types and registers the evaluation callbacks)
+            tInputDeck.finalize_expressions();
+
+            // OPT is mandatory for workflow selection; activate it even if untouched
+            tInputDeck.touch( Module_Type::OPT );
+
+            // untouched modules are disabled — the explicit equivalent of a missing
+            // legacy symbol (touch = enable with defaults, untouched = disabled)
+            for ( uint iParamListType = 0; iParamListType < (uint)( Module_Type::END_ENUM ); iParamListType++ )
+            {
+                Module_Type tParamListType = (Module_Type)iParamListType;
+
+                if ( !tInputDeck.is_touched( tParamListType ) )
+                {
+                    MORIS_LOG( "Module %s not configured by MORISInputDeck; the module is disabled.",
+                            convert_parameter_list_enum_to_string( tParamListType ).c_str() );
+
+                    mParameterLists( iParamListType ).clear();
+                }
+                else if ( !is_module_supported( tParamListType ) )
+                {
+                    MORIS_LOG( "Parameters for %s are irrelevant for the chosen workflow and will be ignored.",
+                            convert_parameter_list_enum_to_string( tParamListType ).c_str() );
+                }
+            }
+
+            return;
+        }
+
+        // legacy path: go through the various parameter list names and see if they exist in the provided .so file
         for ( uint iParamListType = 0; iParamListType < (uint)( Module_Type::END_ENUM ); iParamListType++ )
         {
             // get the current enum
@@ -320,6 +409,14 @@ namespace moris
             }
             else
             {
+                // NOTE: a missing <MODULE>ParameterList symbol DISABLES the module (its
+                // parameter lists are cleared), while a present-but-empty function keeps
+                // the module enabled with its defaults. Log this so a misspelled symbol
+                // name does not silently disable a module.
+                MORIS_LOG( "No %s symbol in .so file; the %s module is disabled.",
+                        tParamListFuncName.c_str(),
+                        convert_parameter_list_enum_to_string( tParamListType ).c_str() );
+
                 mParameterLists( iParamListType ).clear();
             }
         }    // end for: parameter list types that could be specified
