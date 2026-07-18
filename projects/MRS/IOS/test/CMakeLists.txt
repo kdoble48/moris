@@ -25,6 +25,7 @@ set(TEST_SOURCES
 # set mirrors the deck-.so convention of dynamic_link_input()/moris_add_example.
 set(IOS_FIXTURE_INCLUDES
     ${CMAKE_BINARY_DIR}/generated
+    ${MPI_CXX_HEADER_DIR}    # cl_Logger.hpp includes <mpi.h>; the compiler is not the MPI wrapper
     ${MORIS_PACKAGE_DIR}/PRM/src
     ${MORIS_PACKAGE_DIR}/PRM/ENM/src
     ${MORIS_PACKAGE_DIR}/COM/src
