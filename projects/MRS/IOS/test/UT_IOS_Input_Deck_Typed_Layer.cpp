@@ -17,6 +17,8 @@
 
 #include "cl_Input_Deck_Vocabulary.hpp"
 #include "cl_Input_Deck_Expressions.hpp"
+#include "fn_Library_Interlink_Checks.hpp"
+#include "parameters.hpp"
 #include "cl_Vector.hpp"
 
 namespace moris
@@ -118,6 +120,87 @@ namespace moris
             REQUIRE( tOrder.size() == 2 );
             CHECK( tOrder( 0 ) == "Per" );
             CHECK( tOrder( 1 ) == "SE" );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "deck interlink findings", "[IOS],[deck_semantics],[interlinks]" )
+    {
+        // build a minimal in-memory deck: one property, one SP, one IWG referencing both
+        Vector< Module_Parameter_Lists > tAll;
+        for ( uint iModule = 0; iModule < (uint)Module_Type::END_ENUM; iModule++ )
+        {
+            tAll.push_back( Module_Parameter_Lists( (Module_Type)iModule ) );
+        }
+
+        Module_Parameter_Lists& tFem = tAll( (uint)Module_Type::FEM );
+
+        tFem( FEM::PROPERTIES ).add_parameter_list();
+        tFem.set( "property_name", "PropYoungs" );
+
+        tFem( FEM::STABILIZATION ).add_parameter_list();
+        tFem.set( "stabilization_name", "SPNitscheDirichlet" );
+        tFem.set( "leader_properties", "PropYoungs,Material" );
+
+        tFem( FEM::IWG ).add_parameter_list();
+        tFem.set( "IWG_name", "IWGDirichlet" );
+        tFem.set( "leader_properties", "PropYoungs,Dirichlet" );
+        tFem.set( "stabilization_parameters", "SPNitscheDirichlet,DirichletNitsche" );
+
+        tFem( FEM::IQI ).add_parameter_list();
+        tFem.set( "IQI_name", "IQIBulkStrainEnergy" );
+
+        SECTION( "a consistent deck has no findings" )
+        {
+            CHECK( collect_deck_interlink_findings( tAll ).size() == 0 );
+        }
+
+        SECTION( "a misspelled SP reference is found, with a did-you-mean suggestion" )
+        {
+            // parameters lock once set, so the broken reference goes on a fresh IWG
+            tFem( FEM::IWG ).add_parameter_list();
+            tFem.set( "IWG_name", "IWGTraction" );
+            tFem.set( "stabilization_parameters", "SPNitcheDirichlet,DirichletNitsche" );
+
+            Vector< std::string > tFindings = collect_deck_interlink_findings( tAll );
+            REQUIRE( tFindings.size() == 1 );
+            CHECK( tFindings( 0 ).find( "SPNitcheDirichlet" ) != std::string::npos );
+            CHECK( tFindings( 0 ).find( "did you mean 'SPNitscheDirichlet'" ) != std::string::npos );
+        }
+
+        SECTION( "GEN IQI_types referencing an unknown IQI is found" )
+        {
+            tAll( (uint)Module_Type::GEN )( 0 )( 0 ).set( "IQI_types", Vector< std::string >{ "IQIBulkStrainEnergy", "IQIBulkVolume" } );
+
+            Vector< std::string > tFindings = collect_deck_interlink_findings( tAll );
+            REQUIRE( tFindings.size() == 1 );
+            CHECK( tFindings( 0 ).find( "IQIBulkVolume" ) != std::string::npos );
+        }
+
+        SECTION( "ghost sets without XTK ghost_stab are found" )
+        {
+            tFem( FEM::IWG )( 0 ).set( "mesh_set_names", "ghost_p1" );
+
+            Vector< std::string > tFindings = collect_deck_interlink_findings( tAll );
+            REQUIRE( tFindings.size() == 1 );
+            CHECK( tFindings( 0 ).find( "ghost_stab" ) != std::string::npos );
+
+            // enabling ghost stabilization clears the finding
+            tAll( (uint)Module_Type::XTK )( 0 )( 0 ).set( "ghost_stab", true );
+            CHECK( collect_deck_interlink_findings( tAll ).size() == 0 );
+        }
+
+        SECTION( "VIS list-length mismatches are found" )
+        {
+            Module_Parameter_Lists& tVis = tAll( (uint)Module_Type::VIS );
+            tVis( 0 )( 0 ).set( "Field_Names", "UX,UY" );
+            tVis( 0 )( 0 ).set( "Field_Type", "NODAL" );
+            tVis( 0 )( 0 ).set( "IQI_Names", "IQIBulkStrainEnergy" );
+
+            Vector< std::string > tFindings = collect_deck_interlink_findings( tAll );
+            REQUIRE( tFindings.size() == 1 );
+            CHECK( tFindings( 0 ).find( "matching lengths" ) != std::string::npos );
         }
     }
 

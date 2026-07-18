@@ -11,7 +11,9 @@
 #include "cl_Library_IO.hpp"
 #include "cl_Library_Enums.hpp"
 #include "cl_Input_Deck.hpp"
+#include "fn_Library_Interlink_Checks.hpp"
 #include "cl_XML_Parser.hpp"
+#include <cstdlib>
 #include <cctype>
 #include <cstddef>
 #include <iterator>
@@ -278,6 +280,23 @@ namespace moris
 
         // check the parameters for validity
         this->check_parameters();
+
+        // cross-module deck-consistency findings: warnings by default, promoted to an
+        // error when MORIS_STRICT_INPUT=1 is set in the environment
+        Vector< std::string > tFindings = collect_deck_interlink_findings( mParameterLists );
+        if ( tFindings.size() > 0 )
+        {
+            for ( const std::string& iFinding : tFindings )
+            {
+                MORIS_LOG( "Deck consistency: %s", iFinding.c_str() );
+            }
+
+            const char* tStrictInput = std::getenv( "MORIS_STRICT_INPUT" );
+            MORIS_ERROR( tStrictInput == nullptr || std::string( tStrictInput ) != "1",
+                    "Library_IO::finalize() - %u deck-consistency finding(s) (listed above); "
+                    "MORIS_STRICT_INPUT=1 promotes them to this error.",
+                    (unsigned int)tFindings.size() );
+        }
 
         // mark this library as finalized and lock it from modification
         mLibraryIsFinalized = true;
