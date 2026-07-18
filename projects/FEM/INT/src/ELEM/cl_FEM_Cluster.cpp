@@ -14,16 +14,22 @@
 #include "cl_FEM_Element.hpp"                       //FEM/INT/src
 #include "cl_FEM_Cluster.hpp"                       //FEM/INT/src
 #include "cl_FEM_Field_Interpolator_Manager.hpp"    //FEM/INT/src
+#include "cl_FEM_Model.hpp"                         //FEM/INT/src
+#include "fn_FEM_Moment_Fitting.hpp"                //FEM/INT/src
 
 #include "cl_MSI_Equation_Model.hpp"
 
 #include "cl_MTK_PointPairs.hpp"
+#include "cl_MTK_Integration_Rule.hpp"    //MTK/src
+#include "cl_Communication_Tools.hpp"     //COM/src
 #include "fn_norm.hpp"
 #include "fn_sort.hpp"
 #include "fn_sum.hpp"
 #include <algorithm>
 #include <cl_FEM_Element_Nonconformal_Sideset.hpp>
 #include <cl_MTK_Nonconformal_Side_Cluster.hpp>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 
 namespace moris::fem
@@ -400,11 +406,341 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
+    bool
+    Cluster::use_moment_fitted_rule()
+    {
+        // compute the rule lazily on first request
+        if ( mMomentFittingState == Moment_Fitting_State::UNTRIED )
+        {
+            // default to the tessellated rule
+            mMomentFittingState = Moment_Fitting_State::FALLBACK;
+
+            // moment fitting applies to non-trivial (cut) bulk cell clusters with
+            // simplex tessellation only; VIS clusters keep the tessellated rule
+            if ( mElementType == fem::Element_Type::BULK &&                         //
+                    !mIsVisCluster &&                                               //
+                    mMeshCluster != nullptr &&                                      //
+                    !mMeshCluster->is_trivial() &&                                  //
+                    ( mSet->get_IG_geometry_type() == mtk::Geometry_Type::TET ||    //
+                            mSet->get_IG_geometry_type() == mtk::Geometry_Type::TRI )
+                    &&                                             //
+                    mSet->get_fem_model() != nullptr &&            //
+                    mSet->get_fem_model()->mUseMomentFitting &&    //
+                    mElements.size() > 0 )
+            {
+                this->compute_moment_fitted_rule();
+            }
+        }
+
+        return mMomentFittingState == Moment_Fitting_State::ACTIVE;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Cluster::compute_moment_fitted_rule()
+    {
+        fem::FEM_Model *tFemModel = mSet->get_fem_model();
+
+        const uint tDegree = tFemModel->mMomentFittingDegree;
+
+        // simplex geometry of the tessellation (TET in 3D, TRI in 2D)
+        const mtk::Geometry_Type tSimplexGeometry = mSet->get_IG_geometry_type();
+
+        const bool tIs3D = ( tSimplexGeometry == mtk::Geometry_Type::TET );
+
+        const uint tDim         = tIs3D ? 3 : 2;
+        const uint tNumVertices = tIs3D ? 4 : 3;
+
+        // degree-d exact simplex rule for the moments
+        // (exactness of these maps is verified in UT_FEM_Moment_Fitting)
+        mtk::Integration_Order tMomentOrder;
+        if ( tIs3D )
+        {
+            switch ( tDegree )
+            {
+                case 0:
+                case 1:
+                    tMomentOrder = mtk::Integration_Order::TET_1;
+                    break;
+                case 2:
+                    tMomentOrder = mtk::Integration_Order::TET_4;
+                    break;
+                case 3:
+                    tMomentOrder = mtk::Integration_Order::TET_5;
+                    break;
+                case 4:
+                    tMomentOrder = mtk::Integration_Order::TET_11;
+                    break;
+                case 5:
+                    tMomentOrder = mtk::Integration_Order::TET_15;
+                    break;
+                case 6:
+                    tMomentOrder = mtk::Integration_Order::TET_35;
+                    break;
+                case 7:
+                case 8:
+                    tMomentOrder = mtk::Integration_Order::TET_56;
+                    break;
+                default:
+                {
+                    MORIS_LOG_INFO( "Cluster::compute_moment_fitted_rule - degree %u not supported, keeping tessellated rule", tDegree );
+                    return;
+                }
+            }
+        }
+        else
+        {
+            switch ( tDegree )
+            {
+                case 0:
+                case 1:
+                    tMomentOrder = mtk::Integration_Order::TRI_1;
+                    break;
+                case 2:
+                    tMomentOrder = mtk::Integration_Order::TRI_3;
+                    break;
+                case 3:
+                    tMomentOrder = mtk::Integration_Order::TRI_4;
+                    break;
+                case 4:
+                    tMomentOrder = mtk::Integration_Order::TRI_6;
+                    break;
+                case 5:
+                    tMomentOrder = mtk::Integration_Order::TRI_7;
+                    break;
+                case 6:
+                    tMomentOrder = mtk::Integration_Order::TRI_12;
+                    break;
+                case 7:
+                    tMomentOrder = mtk::Integration_Order::TRI_13;
+                    break;
+                case 8:
+                    tMomentOrder = mtk::Integration_Order::TRI_16;
+                    break;
+                default:
+                {
+                    MORIS_LOG_INFO( "Cluster::compute_moment_fitted_rule - degree %u not supported, keeping tessellated rule", tDegree );
+                    return;
+                }
+            }
+        }
+
+        mtk::Integration_Rule tMomentRule(
+                tSimplexGeometry,
+                mtk::Integration_Type::GAUSS,
+                tMomentOrder,
+                mtk::Geometry_Type::POINT,
+                mtk::Integration_Type::GAUSS,
+                mtk::Integration_Order::POINT );
+
+        mtk::Integrator tMomentIntegrator( tMomentRule );
+
+        // assemble the fit input: candidates are the set's existing space rule on
+        // each tessellation simplex, moments come from the degree-exact rule
+        moment_fitting::Fit_Input tInput;
+        tInput.mDegree           = tDegree;
+        tInput.mRelTol           = tFemModel->mMomentFittingTol;
+        tInput.mCandSpacePoints  = mSet->get_space_integration_points();
+        tInput.mCandSpaceWeights = mSet->get_space_integration_weights();
+        tInput.mMomSpacePoints   = tMomentIntegrator.get_space_points();
+        tInput.mMomSpaceWeights  = tMomentIntegrator.get_space_weights();
+
+        const uint tNumElems = mElements.size();
+        tInput.mCellParamCoords.resize( tNumElems );
+
+        for ( uint iElem = 0; iElem < tNumElems; iElem++ )
+        {
+            tInput.mCellParamCoords( iElem ) =
+                    this->get_primary_cell_local_coords_on_side_wrt_interp_cell( iElem );
+
+            // only linear simplices are supported
+            if ( tInput.mCellParamCoords( iElem ).n_rows() != tNumVertices ||    //
+                    tInput.mCellParamCoords( iElem ).n_cols() != tDim )
+            {
+                return;
+            }
+        }
+
+        // fit the rule; on rejection the cluster keeps the tessellated rule
+        moment_fitting::Fit_Result tFit = moment_fitting::fit_cluster_rule( tInput );
+
+        if ( !tFit.mSuccess )
+        {
+            return;
+        }
+
+        // select the host element: the simplex with the largest parametric det J
+        Matrix< DDRMat > tMap, tOrigin;
+        real             tDetJ     = 0.0;
+        moris_index      tHost     = -1;
+        real             tHostDetJ = 0.0;
+
+        for ( uint iElem = 0; iElem < tNumElems; iElem++ )
+        {
+            moment_fitting::simplex_affine_map( tInput.mCellParamCoords( iElem ), tMap, tOrigin, tDetJ );
+            if ( tDetJ > tHostDetJ )
+            {
+                tHostDetJ = tDetJ;
+                tHost     = iElem;
+            }
+        }
+
+        if ( tHost < 0 )
+        {
+            return;
+        }
+
+        // recompute the host map and invert it: zeta = M^-1 ( xi - origin )
+        moment_fitting::simplex_affine_map( tInput.mCellParamCoords( tHost ), tMap, tOrigin, tDetJ );
+
+        Matrix< DDRMat > tInvMap( tDim, tDim );
+
+        if ( tIs3D )
+        {
+            const real tDet6 = 6.0 * tDetJ;
+
+            tInvMap( 0, 0 ) = ( tMap( 1, 1 ) * tMap( 2, 2 ) - tMap( 1, 2 ) * tMap( 2, 1 ) ) / tDet6;
+            tInvMap( 0, 1 ) = ( tMap( 0, 2 ) * tMap( 2, 1 ) - tMap( 0, 1 ) * tMap( 2, 2 ) ) / tDet6;
+            tInvMap( 0, 2 ) = ( tMap( 0, 1 ) * tMap( 1, 2 ) - tMap( 0, 2 ) * tMap( 1, 1 ) ) / tDet6;
+            tInvMap( 1, 0 ) = ( tMap( 1, 2 ) * tMap( 2, 0 ) - tMap( 1, 0 ) * tMap( 2, 2 ) ) / tDet6;
+            tInvMap( 1, 1 ) = ( tMap( 0, 0 ) * tMap( 2, 2 ) - tMap( 0, 2 ) * tMap( 2, 0 ) ) / tDet6;
+            tInvMap( 1, 2 ) = ( tMap( 0, 2 ) * tMap( 1, 0 ) - tMap( 0, 0 ) * tMap( 1, 2 ) ) / tDet6;
+            tInvMap( 2, 0 ) = ( tMap( 1, 0 ) * tMap( 2, 1 ) - tMap( 1, 1 ) * tMap( 2, 0 ) ) / tDet6;
+            tInvMap( 2, 1 ) = ( tMap( 0, 1 ) * tMap( 2, 0 ) - tMap( 0, 0 ) * tMap( 2, 1 ) ) / tDet6;
+            tInvMap( 2, 2 ) = ( tMap( 0, 0 ) * tMap( 1, 1 ) - tMap( 0, 1 ) * tMap( 1, 0 ) ) / tDet6;
+        }
+        else
+        {
+            const real tDet2 = 2.0 * tDetJ;
+
+            tInvMap( 0, 0 ) = tMap( 1, 1 ) / tDet2;
+            tInvMap( 0, 1 ) = -tMap( 0, 1 ) / tDet2;
+            tInvMap( 1, 0 ) = -tMap( 1, 0 ) / tDet2;
+            tInvMap( 1, 1 ) = tMap( 0, 0 ) / tDet2;
+        }
+
+        // tensorize the fitted space rule with the set's time rule in the host frame;
+        // dividing by the host's parametric det J makes the element's standard
+        // w * det J product reproduce w_fit * det J( IP -> physical )
+        //
+        // note: points from other simplices of the cluster lie OUTSIDE the host;
+        // the linear simplex parametric map extends affinely, so values/detJ are
+        // exact, but the (known-overstrict, "fixme"-marked for TRI/TET) [-1,1]
+        // bounds assert in Geometry_Interpolator::set_space_time fires in DEBUG
+        // builds - the feature is opt-build only until that assert is relaxed
+        const Matrix< DDRMat > &tTimePoints  = mSet->get_time_integration_points();
+        const Matrix< DDRMat > &tTimeWeights = mSet->get_time_integration_weights();
+
+        const uint tNumFit  = tFit.mWeights.numel();
+        const uint tNumTime = tTimeWeights.numel();
+
+        if ( tNumTime == 0 )
+        {
+            return;
+        }
+
+        mMomentFitIntegPoints.set_size( tDim + 1, tNumFit * tNumTime );
+        mMomentFitIntegWeights.set_size( 1, tNumFit * tNumTime );
+
+        for ( uint iT = 0; iT < tNumTime; iT++ )
+        {
+            for ( uint iQ = 0; iQ < tNumFit; iQ++ )
+            {
+                const uint tCol = iT * tNumFit + iQ;
+
+                for ( uint iD = 0; iD < tDim; iD++ )
+                {
+                    real tZeta = 0.0;
+                    for ( uint iE = 0; iE < tDim; iE++ )
+                    {
+                        tZeta += tInvMap( iD, iE ) * ( tFit.mPoints( iE, iQ ) - tOrigin( iE ) );
+                    }
+                    mMomentFitIntegPoints( iD, tCol ) = tZeta;
+                }
+
+                mMomentFitIntegPoints( tDim, tCol ) = tTimePoints( iT );
+
+                mMomentFitIntegWeights( tCol ) =
+                        tFit.mWeights( iQ ) / tDetJ * tTimeWeights( iT );
+            }
+        }
+
+        mMomentFitHostElement = tHost;
+        mMomentFittingState   = Moment_Fitting_State::ACTIVE;
+
+        // env-gated rule dump for offline verification (parent coordinates)
+        const char *tDumpPath = std::getenv( "MORIS_MOMENT_FITTING_DUMP" );
+        if ( tDumpPath != nullptr )
+        {
+            std::ofstream tFile(
+                    std::string( tDumpPath ) + "." + std::to_string( par_rank() ),
+                    std::ios::app );
+
+            tFile.precision( 17 );
+
+            tFile << "CLUSTER " << mMeshCluster->get_interpolation_cell().get_id()
+                  << " ntets " << tNumElems
+                  << " ncand " << tFit.mNumCandidates
+                  << " nret " << tNumFit
+                  << " resid " << tFit.mResidual
+                  << " vol " << tFit.mMaterialVolume
+                  << " degree " << tDegree << "\n";
+
+            for ( uint iElem = 0; iElem < tNumElems; iElem++ )
+            {
+                const Matrix< DDRMat > &tCell = tInput.mCellParamCoords( iElem );
+                tFile << ( tIs3D ? "TET" : "TRI" );
+                for ( uint iV = 0; iV < tNumVertices; iV++ )
+                {
+                    for ( uint iD = 0; iD < tDim; iD++ )
+                    {
+                        tFile << " " << tCell( iV, iD );
+                    }
+                }
+                tFile << "\n";
+            }
+
+            for ( uint iQ = 0; iQ < tNumFit; iQ++ )
+            {
+                tFile << "PT";
+                for ( uint iD = 0; iD < tDim; iD++ )
+                {
+                    tFile << " " << tFit.mPoints( iD, iQ );
+                }
+                tFile << " " << tFit.mWeights( iQ ) << "\n";
+            }
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Cluster::compute_with_moment_fitted_rule( void ( fem::Element::*aElementComputation )() )
+    {
+        // install the fitted rule on the set, evaluate the single host element
+        // (points live in the host element's parametric frame), restore
+        mSet->set_integration_rule_override( mMomentFitIntegPoints, mMomentFitIntegWeights );
+
+        ( mElements( mMomentFitHostElement )->*aElementComputation )();
+
+        mSet->clear_integration_rule_override();
+    }
+
+    //------------------------------------------------------------------------------
+
     void
     Cluster::compute_jacobian()
     {
         // reset cluster measures
         this->reset_cluster_measure();
+
+        // moment-fitted cut-cell quadrature: single host element with the fitted rule
+        if ( this->use_moment_fitted_rule() )
+        {
+            this->compute_with_moment_fitted_rule( &fem::Element::compute_jacobian );
+            return;
+        }
 
         // loop over the IG elements
         for ( uint iElem = 0; iElem < mElements.size(); iElem++ )
@@ -426,6 +762,13 @@ namespace moris::fem
         // reset cluster measures
         this->reset_cluster_measure();
 
+        // moment-fitted cut-cell quadrature: single host element with the fitted rule
+        if ( this->use_moment_fitted_rule() )
+        {
+            this->compute_with_moment_fitted_rule( &fem::Element::compute_residual );
+            return;
+        }
+
         // loop over the IG elements
         for ( uint iElem = 0; iElem < mElements.size(); iElem++ )
         {
@@ -446,6 +789,19 @@ namespace moris::fem
         // reset cluster measures
         this->reset_cluster_measure();
 
+        // moment-fitted cut-cell quadrature: single host element with the fitted rule;
+        // only for the forward and adjoint paths - the direct-sensitivity path
+        // (dRdp inside the element) keeps the tessellated rule, since the fitted
+        // weights are not re-fitted under the element-level geometry perturbations
+        if ( this->use_moment_fitted_rule() &&                            //
+                mSet->get_equation_model() != nullptr &&                  //
+                ( mSet->get_equation_model()->is_forward_analysis() ||    //
+                        mSet->get_equation_model()->is_adjoint_sensitivity_analysis() ) )
+        {
+            this->compute_with_moment_fitted_rule( &fem::Element::compute_jacobian_and_residual );
+            return;
+        }
+
         // loop over the IG elements
         for ( uint iElem = 0; iElem < mElements.size(); iElem++ )
         {
@@ -463,6 +819,11 @@ namespace moris::fem
     void
     Cluster::compute_dRdp()
     {
+        // note: the sensitivity paths (dRdp, dQIdp) deliberately keep the tessellated
+        // rule even when moment fitting is active - the element-level FD geometry
+        // perturbations do not re-fit the weights, so the tessellated rule is the
+        // consistent choice for the quadrature geometry dependence
+
         // reset cluster measures
         this->reset_cluster_measure();
 
@@ -535,6 +896,13 @@ namespace moris::fem
         // reset cluster measures
         this->reset_cluster_measure();
 
+        // moment-fitted cut-cell quadrature: single host element with the fitted rule
+        if ( this->use_moment_fitted_rule() )
+        {
+            this->compute_with_moment_fitted_rule( &fem::Element::compute_dQIdu );
+            return;
+        }
+
         // loop over the IG elements
         for ( uint iElem = 0; iElem < mElements.size(); iElem++ )
         {
@@ -554,6 +922,13 @@ namespace moris::fem
     {
         // reset cluster measures
         this->reset_cluster_measure();
+
+        // moment-fitted cut-cell quadrature: single host element with the fitted rule
+        if ( this->use_moment_fitted_rule() )
+        {
+            this->compute_with_moment_fitted_rule( &fem::Element::compute_QI );
+            return;
+        }
 
         // loop over the IG elements
         for ( uint iElem = 0; iElem < mElements.size(); iElem++ )

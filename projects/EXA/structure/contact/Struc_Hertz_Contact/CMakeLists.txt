@@ -4,8 +4,9 @@
 #
 #------------------------------------------------------------------------------------
 #
-message(STATUS "Added structures - contact example sub-directory")
-
-add_subdirectory(Parabolic_Indenter)
-
-add_subdirectory(Struc_Hertz_Contact)
+moris_add_example(
+    NAME       Struc_Hertz_Contact
+    TEST_BASE  Struc_Hertz_Contact
+    PROCS      1
+    INPUTS     Struc_Hertz_Contact
+)

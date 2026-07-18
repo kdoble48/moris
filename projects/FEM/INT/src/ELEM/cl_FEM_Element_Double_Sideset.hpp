@@ -138,6 +138,27 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
 
+        /**
+         * @brief OUTPUT-ONLY hook: re-map the follower field interpolator onto the current
+         * (deformed) follower surface before an IQI is sampled for visualization.
+         *
+         * @details For a plain (conformal) double sideset the leader/follower integration points
+         * already coincide, so this is a no-op. The nonconformal sideset overrides it to re-fire the
+         * contact ray in the current configuration (mirroring the IWG residual/Jacobian remap), so
+         * that nonconformal output quantities such as the contact gap are evaluated against the true
+         * deformed follower surface rather than the frozen reference-config VIS pairing.
+         *
+         * Must be called AFTER the leader/follower interpolators have been positioned at the current
+         * quadrature/nodal point. It is deliberately NOT invoked from the residual/Jacobian assembly
+         * path (assembly uses the solver's stored, remapped pairs).
+         */
+        virtual void remap_follower_for_output() const
+        {
+            // no-op for conformal double sidesets
+        }
+
+        //------------------------------------------------------------------------------
+
       protected:
         /**
          * initialize the geometry interpolator for the IG leader and follower element

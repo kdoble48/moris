@@ -510,6 +510,9 @@ namespace moris::fem
         {
             this->initialize_quadrature_point( iGP );
 
+            // OUTPUT-ONLY: re-map the follower onto the current deformed surface (no-op unless nonconformal)
+            this->remap_follower_for_output();
+
             // compute detJ of integration domain
             real const tDetJ = mSet->get_field_interpolator_manager()->get_IG_geometry_interpolator()->det_J();
 
@@ -601,6 +604,9 @@ namespace moris::fem
         for ( uint iGP = 0; iGP < tNumIntegPoints; iGP++ )
         {
             this->initialize_quadrature_point( iGP );
+
+            // OUTPUT-ONLY: re-map the follower onto the current deformed surface (no-op unless nonconformal)
+            this->remap_follower_for_output();
 
             // compute detJ of integration domain
             real const tDetJ = mSet->get_field_interpolator_manager()->get_IG_geometry_interpolator()->det_J();

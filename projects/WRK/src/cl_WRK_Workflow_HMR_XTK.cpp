@@ -487,21 +487,48 @@ namespace moris::wrk
                     // Skipped on iterations where the basis size changed (remesh handled elsewhere).
                     if ( tSDFField != nullptr && tEveryStep )
                     {
-                        Matrix< DDRMat > const& tCoeffs = tReinitPerformer->get_coefficients();
-                        if ( tCoeffs.n_rows() == aNewADVs.size() && aNewADVs.size() > 0 )
+                        // KNOWN LIMITATION (2026-06): this every-step in-place apply modifies the
+                        // design vector BETWEEN the criteria and gradient evaluations, which trips
+                        // Problem::compute_design_criteria_gradients' consistency assert
+                        // (mADVNormTolerance) after a few hundred iterations. The slice-write below
+                        // is correct (reinit applies, PDVs preserved, converges near baseline) but
+                        // the in-place/no-restart timing is not. The consistency-safe path is
+                        // scheduled-restart mode (every_step=false): apply the SAME slice-write in
+                        // Workflow_HMR_XTK::initialize() so the restart recomputes criteria+gradients
+                        // at the redistanced design. See runs/studies/sdf_reinit_sweep/FINDINGS.md.
+                        //
+                        // Write the redistanced level-set coefficients into ONLY that geometry's
+                        // slice of the global ADV vector, identified by its determining ADV ids.
+                        // This preserves every other design's ADVs and ALL PDVs (no FEM-coupled
+                        // DENSITY-PDV desync -- unlike distribute_advs, which rebuilds GEN and
+                        // segfaults the PDV host on the no-restart path), and removes the broken
+                        // requirement that the single-field coefficient count equal the whole
+                        // composite ADV vector. The next optimizer iteration's normal set_advs()
+                        // re-syncs all fields and PDVs consistently.
+                        Matrix< DDRMat > const& tCoeffs   = tReinitPerformer->get_coefficients();
+                        Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
+                                ->get_design_determining_adv_ids( tReinitPerformer->get_adv_field_name() );
+
+                        if ( tLSAdvIds.size() == tCoeffs.n_rows() && tCoeffs.n_rows() > 0 )
                         {
-                            for ( uint iADV = 0; iADV < tCoeffs.n_rows(); ++iADV )
+                            uint tWritten = 0;
+                            for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
                             {
-                                aNewADVs( iADV ) = tCoeffs( iADV );
+                                sint tAdvId = tLSAdvIds( iC );
+                                if ( tAdvId >= 0 && tAdvId < (sint)aNewADVs.size() )
+                                {
+                                    aNewADVs( tAdvId ) = tCoeffs( iC );
+                                    ++tWritten;
+                                }
                             }
                             mSDFInitialized = true;
-                            MORIS_LOG_INFO( "SDF redistanced in-place every step (no restart): %u coeffs%s",
-                                    (uint)tCoeffs.n_rows(), tDoSmooth ? ", smoothed" : "" );
+                            MORIS_LOG_INFO( "SDF redistanced in-place every step (no restart): wrote %u of %u level-set coeffs into the %u-ADV vector slice%s",
+                                    tWritten, (uint)tCoeffs.n_rows(), (uint)aNewADVs.size(), tDoSmooth ? ", smoothed" : "" );
                         }
                         else
                         {
-                            MORIS_LOG_INFO( "SDF redistance skipped this step: coeff count %u != ADV count %u (mesh changed)",
-                                    (uint)tCoeffs.n_rows(), (uint)aNewADVs.size() );
+                            MORIS_LOG_INFO( "SDF redistance skipped this step: %u level-set ADV ids vs %u coeffs (mesh changed)",
+                                    (uint)tLSAdvIds.size(), (uint)tCoeffs.n_rows() );
                         }
                         // no NaN, no restart -- fall through to FEM with the redistanced design
                     }

@@ -163,6 +163,28 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    Vector< sint >
+    Geometry_Engine::get_design_determining_adv_ids( const std::string& aDesignName )
+    {
+        for ( uint tGeometryIndex = 0; tGeometryIndex < mGeometries.size(); tGeometryIndex++ )
+        {
+            if ( mGeometries( tGeometryIndex )->get_name() == aDesignName )
+            {
+                return mGeometries( tGeometryIndex )->get_field()->get_coefficient_adv_ids();
+            }
+        }
+        for ( uint tPropertyIndex = 0; tPropertyIndex < mProperties.size(); tPropertyIndex++ )
+        {
+            if ( mProperties( tPropertyIndex )->get_name() == aDesignName )
+            {
+                return mProperties( tPropertyIndex )->get_field()->get_coefficient_adv_ids();
+            }
+        }
+        return Vector< sint >( 0 );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Vector< real >&
     Geometry_Engine::get_advs()
     {

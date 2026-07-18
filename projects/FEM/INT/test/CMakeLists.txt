@@ -34,11 +34,13 @@ set(TEST_SOURCES
     cl_FEM_Integration_Mesh_Test.cpp
     cl_FEM_Integration_Mesh_Test2.cpp
     cl_FEM_Double_Sided_Sideset_Test.cpp
+    UT_FEM_Element_Nonconformal_Sideset_Gap.cpp
     cl_FEM_Element_HJ_Test.cpp
     UT_FEM_Set.cpp
     #UT_FEM_Element.cpp
     UT_FEM_Property.cpp
     UT_FEM_IWG.cpp
+    UT_FEM_Moment_Fitting.cpp
     
     UT_FEM_CM.cpp
     UT_FEM_CM_Diff_Lin_Iso.cpp
@@ -137,6 +139,7 @@ set(TEST_SOURCES
     
     UT_FEM_IQI_Dof.cpp
     UT_FEM_IQI_Strain_Energy.cpp
+    UT_FEM_IQI_Cylindrical_Stress.cpp
     UT_FEM_IQI_Power_Dissipation.cpp
     UT_FEM_IQI_Power_Dissipation_Bulk.cpp
     UT_FEM_IQI_Max_Damage.cpp
