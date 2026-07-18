@@ -7,3 +7,5 @@
 message(STATUS "Added structures - contact example sub-directory")
 
 add_subdirectory(Parabolic_Indenter)
+add_subdirectory(Struc_Contact_Patch_Test)
+add_subdirectory(Struc_Hertz_Contact)
