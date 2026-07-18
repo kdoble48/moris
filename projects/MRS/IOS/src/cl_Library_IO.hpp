@@ -138,6 +138,19 @@ namespace moris
 
         // -----------------------------------------------------------------------------
 
+        /**
+         * @brief Check whether a file path names the shared object this library has loaded.
+         * Relative paths are resolved against the working directory, matching how the
+         * library resolved its own input file.
+         *
+         * @param aFilePath path to compare, absolute or relative
+         * @return true if a .so is loaded and aFilePath resolves to it
+         */
+        bool
+        uses_shared_object_file( const std::string& aFilePath );
+
+        // -----------------------------------------------------------------------------
+
         Vector< Module_Parameter_Lists >&
         get_parameter_lists()
         {

@@ -27,12 +27,21 @@ namespace moris::opt
         // Use the already-loaded input library when provided (avoids re-opening the
         // deck .so and preserves in-process registered callbacks); otherwise fall back
         // to loading the .so named by the 'library' parameter
-        std::shared_ptr< Library_IO > tLibrary = std::move( aLibrary );
+        std::shared_ptr< Library_IO > tLibrary    = std::move( aLibrary );
+        std::string                   tLibraryName = aParameterList.get< std::string >( "library" );
+
+        // legacy escape hatch: 'library' may point the OPT callbacks at a DIFFERENT .so
+        // than the deck itself — reuse the input library only when the parameter is
+        // empty or names the deck's own file
+        if ( tLibrary != nullptr && !tLibraryName.empty() && !tLibrary->uses_shared_object_file( tLibraryName ) )
+        {
+            tLibrary = nullptr;
+        }
+
         if ( tLibrary == nullptr )
         {
             moris::Library_Factory tLibraryFactory;
-            tLibrary                 = tLibraryFactory.create_Library( Library_Type::STANDARD );
-            std::string tLibraryName = aParameterList.get< std::string >( "library" );
+            tLibrary = tLibraryFactory.create_Library( Library_Type::STANDARD );
             tLibrary->load_parameter_list( tLibraryName, File_Type::SO_FILE );
             tLibrary->finalize();
         }

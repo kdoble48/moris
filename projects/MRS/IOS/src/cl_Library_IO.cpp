@@ -186,6 +186,16 @@ namespace moris
 
     //------------------------------------------------------------------------------------------------------------------
 
+    bool
+    Library_IO::uses_shared_object_file( const std::string& aFilePath )
+    {
+        return mSoLibIsInitialized
+            && !aFilePath.empty()
+            && this->convert_to_absolute_file_path( aFilePath ) == mSoFilePath;
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
     void
     Library_IO::load_parameter_list(
             const std::string& aFileName,

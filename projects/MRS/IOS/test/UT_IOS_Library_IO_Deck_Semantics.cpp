@@ -162,6 +162,30 @@ namespace moris
 
     //------------------------------------------------------------------------------------------------------------------
 
+    TEST_CASE( "Library_IO deck semantics: uses_shared_object_file identifies the loaded deck", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        // OPT consults this to decide whether the 'library' parameter names the deck
+        // itself (reuse the loaded library) or a DIFFERENT .so (legacy escape hatch:
+        // load that file instead)
+        SECTION( "no .so loaded: nothing matches" )
+        {
+            Library_IO_Standard tLibrary;
+            CHECK_FALSE( tLibrary.uses_shared_object_file( IOS_DECK_FIXTURE_SO ) );
+        }
+
+        SECTION( "loaded deck: its own path matches, other paths and empty do not" )
+        {
+            Library_IO_Standard tLibrary;
+            tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+
+            CHECK( tLibrary.uses_shared_object_file( IOS_DECK_FIXTURE_SO ) );
+            CHECK_FALSE( tLibrary.uses_shared_object_file( IOS_DECK_V2_FIXTURE_SO ) );
+            CHECK_FALSE( tLibrary.uses_shared_object_file( "" ) );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
     TEST_CASE( "Library_IO deck semantics: finalize order and locking", "[IOS],[Library_IO],[deck_semantics]" )
     {
         SECTION( "finalize() locks the library against further inputs" )
