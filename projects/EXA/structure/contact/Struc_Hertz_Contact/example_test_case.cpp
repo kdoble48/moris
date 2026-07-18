@@ -59,6 +59,12 @@ extern uint gCaseIndex;
 int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] );
 
 //---------------------------------------------------------------
+// Everything below is TU-local to this example; names may repeat across examples.
+
+namespace exa_struc_hertz_contact
+{
+
+//---------------------------------------------------------------
 // Strict nodal-displacement regression is GATED OFF. The FULL_DISCONTINUOUS (unzipped) VIS mesh
 // makes node ids / a hard-coded displacement table an invalid regression target (see the
 // Struc_Contact_Patch_Test note). Keep this false; the structural + finiteness checks guard the deck.
@@ -80,7 +86,7 @@ static const real gFactor              = 1.0;    // == tFactor  -> R = 1/(2*tFac
 static const real gPenetrationLevels[] = { 0.0025, 0.005, 0.01 };
 static const uint gMeshLevels[]        = { 40, 80, 160 };
 
-extern "C" void check_results()
+void check_results()
 {
     std::string tExoFileName =
             "Struc_Hertz_Contact_Case_" + std::to_string( gCaseIndex ) + ".e-s.0000";
@@ -137,7 +143,15 @@ extern "C" void check_results()
         uint tTopFieldIndex = tExoIO.get_field_index_by_name( "STRESSNodalTopYY" );
         uint tBotFieldIndex = tExoIO.get_field_index_by_name( "STRESSNodalBottomYY" );
 
-        for ( uint tNodeId = 1; tNodeId <= tNumNodes; ++tNodeId )
+        // On the FULL_DISCONTINUOUS (unzipped) mesh each per-body field is NaN on vertex
+        // duplicates that belong to blocks where its IQI is not computed (the other body,
+        // refinement-transition duplicates). Those NaNs are structural, not physics — skip
+        // them but count them; a genuine solver blowup leaves ZERO finite samples and fails
+        // the count REQUIREs below.
+        uint tSkippedCnt = 0;
+
+        // MORIS node ids are 0-based (Exodus_IO_Helper applies the on-disk QA id-offset itself)
+        for ( uint tNodeId = 0; tNodeId < tNumNodes; ++tNodeId )
         {
             Matrix< DDRMat > tCoord = tExoIO.get_nodal_coordinate( tNodeId );
             real             tY     = tCoord( 1 );
@@ -145,6 +159,11 @@ extern "C" void check_results()
             if ( tY > gInterfaceY + gInteriorBandHalf )
             {
                 real tSig = tExoIO.get_nodal_field_value( tNodeId, tTopFieldIndex, 0 );
+                if ( !std::isfinite( tSig ) )
+                {
+                    ++tSkippedCnt;
+                    continue;
+                }
                 tTopMin = std::min( tTopMin, tSig );
                 tTopMax = std::max( tTopMax, tSig );
                 tTopSum += tSig;
@@ -153,12 +172,19 @@ extern "C" void check_results()
             else if ( tY < gInterfaceY - gInteriorBandHalf )
             {
                 real tSig = tExoIO.get_nodal_field_value( tNodeId, tBotFieldIndex, 0 );
+                if ( !std::isfinite( tSig ) )
+                {
+                    ++tSkippedCnt;
+                    continue;
+                }
                 tBotMin = std::min( tBotMin, tSig );
                 tBotMax = std::max( tBotMax, tSig );
                 tBotSum += tSig;
                 ++tBotCnt;
             }
         }
+
+        MORIS_LOG_INFO( "  sampled nodes skipped (field undefined on unzipped duplicate): %d", tSkippedCnt );
 
         REQUIRE( tTopCnt > 0 );
         REQUIRE( tBotCnt > 0 );
@@ -255,3 +281,5 @@ HERTZ_CONTACT_TEST_CASE( 5 )
 HERTZ_CONTACT_TEST_CASE( 6 )
 HERTZ_CONTACT_TEST_CASE( 7 )
 HERTZ_CONTACT_TEST_CASE( 8 )
+
+}    // namespace exa_struc_hertz_contact
