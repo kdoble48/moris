@@ -40,7 +40,9 @@ namespace moris
             std::type_index mType;
         };
 
-        std::map< std::string, Entry > mEntries;
+        using Pointer_Map = std::map< std::string, Entry >;
+
+        Pointer_Map mEntries;
 
       public:
         /**
@@ -81,7 +83,7 @@ namespace moris
         Function_Type
         lookup( const std::string& aName ) const
         {
-            auto tIterator = mEntries.find( aName );
+            Pointer_Map::const_iterator tIterator = mEntries.find( aName );
             if ( tIterator == mEntries.end() )
             {
                 return nullptr;
@@ -142,7 +144,7 @@ namespace moris
         std::function< Signature >
         lookup_functional( const std::string& aName ) const
         {
-            auto tIterator = mFunctionals.find( aName );
+            Functional_Map::const_iterator tIterator = mFunctionals.find( aName );
             if ( tIterator == mFunctionals.end() )
             {
                 return nullptr;
@@ -201,7 +203,9 @@ namespace moris
             }
         };
 
-        std::map< std::string, std::pair< std::shared_ptr< Functional_Holder >, std::type_index > > mFunctionals;
+        using Functional_Map = std::map< std::string, std::pair< std::shared_ptr< Functional_Holder >, std::type_index > >;
+
+        Functional_Map mFunctionals;
     };
 
 }    // namespace moris

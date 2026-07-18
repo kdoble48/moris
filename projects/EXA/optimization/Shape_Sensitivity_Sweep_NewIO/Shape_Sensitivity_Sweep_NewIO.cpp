@@ -53,7 +53,7 @@ MORIS_DECK( aDeck )
     using namespace moris;
 
     // ---- OPT: sweep-based FD verification of the shape sensitivities ------------
-    auto& tOpt = aDeck.opt();
+    Module_Parameter_Lists& tOpt = aDeck.opt();
     tOpt.set( "is_optimization_problem", true );
     tOpt.set( "problem", "user_defined" );
     // NOTE: no 'library' parameter — the loaded deck is handed through to OPT
@@ -73,7 +73,7 @@ MORIS_DECK( aDeck )
     aDeck.constraint( deck::criterion( "IQIBulkVolume" ) <= 0.0 );
 
     // ---- HMR: background mesh ----------------------------------------------------
-    auto& tHmr = aDeck.hmr();
+    Module_Parameter_Lists& tHmr = aDeck.hmr();
     tHmr.set( "number_of_elements_per_dimension", 2, 2 );
     tHmr.set( "domain_dimensions", 2.0, 2.0 );
     tHmr.set( "domain_offset", -1.0, -1.0 );
@@ -88,7 +88,7 @@ MORIS_DECK( aDeck )
     tHmr.set( "adaptive_refinement_level", 1 );
 
     // ---- XTK: conformal cut ------------------------------------------------------
-    auto& tXtk = aDeck.xtk();
+    Module_Parameter_Lists& tXtk = aDeck.xtk();
     tXtk.set( "decompose", true );
     tXtk.set( "decomposition_type", "conformal" );
     tXtk.set( "enrich_mesh_indices", "0" );
@@ -101,7 +101,7 @@ MORIS_DECK( aDeck )
 
     // ---- GEN: two design lines -----------------------------------------------
     // (IQI_types is written automatically from the objective/constraint expressions)
-    auto& tGen = aDeck.gen();
+    Module_Parameter_Lists& tGen = aDeck.gen();
 
     // vertical line (x-position and normal are design variables)
     tGen( GEN::GEOMETRIES ).add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::LINE ) );
@@ -118,7 +118,7 @@ MORIS_DECK( aDeck )
     tGen.set( "normal_y", 1.0, 1.0, 1.0 );
 
     // ---- FEM: linear elasticity via the preset -----------------------------------
-    auto& tFem = aDeck.fem();
+    Module_Parameter_Lists& tFem = aDeck.fem();
     tFem.hack_for_legacy_fem();
 
     fem::presets::Linear_Elastic_Config tElasticity;
@@ -151,7 +151,7 @@ MORIS_DECK( aDeck )
     tFem.set( "finite_difference_perturbation_size", tFEMFdEpsilon );
 
     // ---- SOL: Belos + ILU, single static step, adjoint sensitivities ------------
-    auto& tSol = aDeck.sol();
+    Module_Parameter_Lists& tSol = aDeck.sol();
     tSol( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::BELOS_IMPL );
     tSol.set( "preconditioners", "0" );
     tSol( SOL::LINEAR_SOLVERS ).add_parameter_list();
@@ -173,7 +173,7 @@ MORIS_DECK( aDeck )
     aDeck.msi();
 
     // ---- VIS: displacement output ------------------------------------------------
-    auto& tVis = aDeck.vis();
+    Module_Parameter_Lists& tVis = aDeck.vis();
     tVis.set( "File_Name", std::pair< std::string, std::string >( "./", "shape_sensitivities_newio.exo" ) );
     tVis.set( "Mesh_Type", vis::VIS_Mesh_Type::STANDARD );
     tVis.set( "Set_Names", tMeshSets );

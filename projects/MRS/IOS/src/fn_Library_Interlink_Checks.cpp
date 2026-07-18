@@ -93,7 +93,7 @@ namespace moris
                 const std::string&            aNameKey )
         {
             std::set< std::string > tNames;
-            const auto&             tSubmodule = aFem( aSubmodule );
+            const Submodule_Parameter_Lists& tSubmodule = aFem( aSubmodule );
             for ( uint iList = 0; iList < tSubmodule.size(); iList++ )
             {
                 if ( tSubmodule( iList ).exists( aNameKey ) )
@@ -174,7 +174,7 @@ namespace moris
 
         for ( uint iSubmodule : { tIwgIndex, tIqiIndex } )
         {
-            const auto& tSubmodule = tFem( iSubmodule );
+            const Submodule_Parameter_Lists& tSubmodule = tFem( iSubmodule );
             for ( uint iList = 0; iList < tSubmodule.size(); iList++ )
             {
                 const Parameter_List& tList = tSubmodule( iList );
@@ -201,7 +201,7 @@ namespace moris
         }
 
         // CMs reference properties too
-        const auto& tCmSubmodule = tFem( tCmIndex );
+        const Submodule_Parameter_Lists& tCmSubmodule = tFem( tCmIndex );
         for ( uint iList = 0; iList < tCmSubmodule.size(); iList++ )
         {
             const Parameter_List& tList         = tCmSubmodule( iList );
@@ -210,7 +210,7 @@ namespace moris
         }
 
         // SPs reference properties
-        const auto& tSpSubmodule = tFem( tSpIndex );
+        const Submodule_Parameter_Lists& tSpSubmodule = tFem( tSpIndex );
         for ( uint iList = 0; iList < tSpSubmodule.size(); iList++ )
         {
             const Parameter_List& tList         = tSpSubmodule( iList );

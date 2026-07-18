@@ -171,7 +171,7 @@ namespace moris::deck
                     return aNode->mValue;
                 case Op::LEAF:
                 {
-                    auto tIterator = aIndexOf.find( aNode->mName );
+                    std::map< std::string, uint >::const_iterator tIterator = aIndexOf.find( aNode->mName );
                     MORIS_ERROR( tIterator != aIndexOf.end(),
                             "deck::Expression - criterion '%s' is not tracked.", aNode->mName.c_str() );
                     return aCriteria( tIterator->second );
@@ -208,7 +208,7 @@ namespace moris::deck
                     return;
                 case Op::LEAF:
                 {
-                    auto tIterator = aIndexOf.find( aNode->mName );
+                    std::map< std::string, uint >::const_iterator tIterator = aIndexOf.find( aNode->mName );
                     MORIS_ERROR( tIterator != aIndexOf.end(),
                             "deck::Expression - criterion '%s' is not tracked.", aNode->mName.c_str() );
                     aGradient( tIterator->second ) += aSeed;

@@ -112,8 +112,8 @@ namespace moris
             tPhaseTwo.mBulkSets = "HMR_dummy_n_p2";
             tPhaseTwo.mPrefix   = "P2";
 
-            auto tNamesOne = fem::presets::linear_elastic( tFemTwoPhase, tPhaseOne );
-            auto tNamesTwo = fem::presets::linear_elastic( tFemTwoPhase, tPhaseTwo );
+            fem::presets::Linear_Elastic_Names tNamesOne = fem::presets::linear_elastic( tFemTwoPhase, tPhaseOne );
+            fem::presets::Linear_Elastic_Names tNamesTwo = fem::presets::linear_elastic( tFemTwoPhase, tPhaseTwo );
 
             CHECK( tNamesOne.mCM == "P1CMStrucLinIso" );
             CHECK( tNamesTwo.mCM == "P2CMStrucLinIso" );

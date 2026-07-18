@@ -205,7 +205,7 @@ namespace moris
             this->module( Module_Type::OPT )( 0 ).set( "constraint_types", tConstraintTypes );
 
             // shared final name -> index map for the evaluation lambdas
-            auto tIndexOf = std::make_shared< std::map< std::string, uint > >();
+            std::shared_ptr< std::map< std::string, uint > > tIndexOf = std::make_shared< std::map< std::string, uint > >();
             for ( uint iCriterion = 0; iCriterion < mCriteriaOrder.size(); iCriterion++ )
             {
                 ( *tIndexOf )[ mCriteriaOrder( iCriterion ) ] = iCriterion;

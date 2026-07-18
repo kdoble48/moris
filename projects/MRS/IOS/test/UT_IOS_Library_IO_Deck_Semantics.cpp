@@ -67,7 +67,7 @@ namespace moris
 
         SECTION( "present-and-mutating function: .so parameters are applied on top of defaults" )
         {
-            auto tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+            Module_Parameter_Lists tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
 
             // the ctor seeds exactly one optimization-problem parameter list, no algorithms
             REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() == 1 );
@@ -79,7 +79,7 @@ namespace moris
 
         SECTION( "present-but-empty function: fn_PRM defaults are preserved" )
         {
-            auto tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+            Module_Parameter_Lists tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
 
             REQUIRE( tHmrParams( HMR::GENERAL ).size() == 1 );
             CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );
@@ -200,12 +200,12 @@ namespace moris
         SECTION( "touched modules keep defaults, mutations are applied, untouched modules are disabled" )
         {
             // OPT: touched and mutated
-            auto tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+            Module_Parameter_Lists tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
             REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() == 1 );
             CHECK( tOptParams( OPT::OPTIMIZATION_PROBLEMS )( 0 ).get< bool >( "is_optimization_problem" ) == true );
 
             // HMR: touched without modification — defaults preserved
-            auto tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+            Module_Parameter_Lists tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
             REQUIRE( tHmrParams( HMR::GENERAL ).size() == 1 );
             CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );
 
@@ -292,7 +292,7 @@ namespace moris
             // constructor seeds one default list per submodule) and APPENDS the XML-parsed
             // list to it. The XML-set value therefore lands at index 1, behind an untouched
             // default at index 0 — consumers that read index 0 never see XML values.
-            auto tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+            Module_Parameter_Lists tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
 
             REQUIRE( tHmrParams( HMR::GENERAL ).size() == 2 );
             CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );    // ctor-seeded default
@@ -306,7 +306,7 @@ namespace moris
             // is LOST, and the GEN module the .so pass had cleared is re-created with
             // default parameter lists. This makes .so + XML composition module-granular,
             // not key-granular. Deliberately surprising; candidates for redesign.
-            auto tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+            Module_Parameter_Lists tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
 
             REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() >= 1 );
             CHECK( tOptParams( OPT::OPTIMIZATION_PROBLEMS )( 0 ).get< bool >( "is_optimization_problem" ) == false );

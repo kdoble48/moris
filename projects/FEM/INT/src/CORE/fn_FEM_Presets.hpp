@@ -31,6 +31,21 @@
 
 namespace moris::fem::presets
 {
+    namespace detail
+    {
+        /** Adds a constant property (built-in constant value function applies). */
+        inline void
+        add_constant_property(
+                Module_Parameter_Lists& aFemParameterLists,
+                const std::string&      aName,
+                const std::string&      aValue )
+        {
+            aFemParameterLists( FEM::PROPERTIES ).add_parameter_list();
+            aFemParameterLists.set( "property_name", aName );
+            aFemParameterLists.set( "function_parameters", aValue );
+        }
+    }    // namespace detail
+
     //------------------------------------------------------------------------------------------------------------------
 
     /**
@@ -115,37 +130,31 @@ namespace moris::fem::presets
         const std::string&   tP = aConfig.mPrefix;
 
         // ---- properties (constant: the built-in value function applies) ----------
-        auto tAddConstantProperty = [ &aFemParameterLists ]( const std::string& aName, const std::string& aValue ) {
-            aFemParameterLists( FEM::PROPERTIES ).add_parameter_list();
-            aFemParameterLists.set( "property_name", aName );
-            aFemParameterLists.set( "function_parameters", aValue );
-        };
-
         tNames.mDensityProp = tP + "PropDensity";
-        tAddConstantProperty( tNames.mDensityProp, aConfig.mDensity );
+        detail::add_constant_property( aFemParameterLists, tNames.mDensityProp, aConfig.mDensity );
 
         tNames.mYoungsProp = tP + "PropYoungs";
-        tAddConstantProperty( tNames.mYoungsProp, aConfig.mYoungs );
+        detail::add_constant_property( aFemParameterLists, tNames.mYoungsProp, aConfig.mYoungs );
 
         tNames.mPoissonProp = tP + "PropPoisson";
-        tAddConstantProperty( tNames.mPoissonProp, aConfig.mPoisson );
+        detail::add_constant_property( aFemParameterLists, tNames.mPoissonProp, aConfig.mPoisson );
 
         if ( !aConfig.mBedding.empty() )
         {
             tNames.mBeddingProp = tP + "PropBedding";
-            tAddConstantProperty( tNames.mBeddingProp, aConfig.mBedding );
+            detail::add_constant_property( aFemParameterLists, tNames.mBeddingProp, aConfig.mBedding );
         }
 
         if ( !aConfig.mDirichletSets.empty() )
         {
             tNames.mDirichletProp = tP + "PropDirichletU";
-            tAddConstantProperty( tNames.mDirichletProp, aConfig.mDirichletValue );
+            detail::add_constant_property( aFemParameterLists, tNames.mDirichletProp, aConfig.mDirichletValue );
         }
 
         if ( !aConfig.mNeumannSets.empty() )
         {
             tNames.mTractionProp = tP + "PropTraction";
-            tAddConstantProperty( tNames.mTractionProp, aConfig.mTraction );
+            detail::add_constant_property( aFemParameterLists, tNames.mTractionProp, aConfig.mTraction );
             if ( !aConfig.mTractionFunction.empty() )
             {
                 aFemParameterLists.set( "value_function", aConfig.mTractionFunction );
@@ -317,31 +326,25 @@ namespace moris::fem::presets
         Diffusion_Names    tNames;
         const std::string& tP = aConfig.mPrefix;
 
-        auto tAddConstantProperty = [ &aFemParameterLists ]( const std::string& aName, const std::string& aValue ) {
-            aFemParameterLists( FEM::PROPERTIES ).add_parameter_list();
-            aFemParameterLists.set( "property_name", aName );
-            aFemParameterLists.set( "function_parameters", aValue );
-        };
-
         tNames.mConductivityProp = tP + "PropConductivity";
-        tAddConstantProperty( tNames.mConductivityProp, aConfig.mConductivity );
+        detail::add_constant_property( aFemParameterLists, tNames.mConductivityProp, aConfig.mConductivity );
 
         tNames.mDensityProp = tP + "PropDensity";
-        tAddConstantProperty( tNames.mDensityProp, aConfig.mDensity );
+        detail::add_constant_property( aFemParameterLists, tNames.mDensityProp, aConfig.mDensity );
 
         tNames.mHeatCapacityProp = tP + "PropHeatCapacity";
-        tAddConstantProperty( tNames.mHeatCapacityProp, aConfig.mHeatCapacity );
+        detail::add_constant_property( aFemParameterLists, tNames.mHeatCapacityProp, aConfig.mHeatCapacity );
 
         if ( !aConfig.mDirichletSets.empty() )
         {
             tNames.mDirichletProp = tP + "PropDirichletTemp";
-            tAddConstantProperty( tNames.mDirichletProp, aConfig.mDirichletValue );
+            detail::add_constant_property( aFemParameterLists, tNames.mDirichletProp, aConfig.mDirichletValue );
         }
 
         if ( !aConfig.mNeumannSets.empty() )
         {
             tNames.mFluxProp = tP + "PropFlux";
-            tAddConstantProperty( tNames.mFluxProp, aConfig.mFlux );
+            detail::add_constant_property( aFemParameterLists, tNames.mFluxProp, aConfig.mFlux );
         }
 
         tNames.mCM = tP + "CMDiffusion";
