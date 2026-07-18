@@ -14,6 +14,7 @@
 #include "cl_FEM_Cluster_Measure.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_Model.hpp"
+#include "fn_FEM_Remap_Nonconformal_Ray.hpp"
 #include "cl_Vector.hpp"
 #include "fn_max.hpp"
 #include "fn_min.hpp"
@@ -2441,55 +2442,14 @@ namespace moris::fem
 
     Matrix< DDRMat > IWG::remap_nonconformal_rays( Field_Interpolator* aLeaderFieldInterpolator, Field_Interpolator* aFollowerFieldInterpolator ) const
     {
-        uint const tDim = aLeaderFieldInterpolator->get_space_dim();
-
-        Geometry_Interpolator* tLeaderIGGI = this->mLeaderFIManager->get_IG_geometry_interpolator();
-
-        // Since the leader field interpolator might have different coefficients (perturbed), we have to make sure that the geometry interpolator uses the updated coefficients
-        // for all computations (i.e. not the memoized ones).
-        tLeaderIGGI->reset_eval_flags_coordinates();
-
-        // get the deformed coordinates of the element after perturbation
-        Matrix< DDRMat > const tLeaderCoordsPerturbed = tLeaderIGGI->get_space_coeff_current( aLeaderFieldInterpolator );
-
-        // get the integration point location after deformation of the element nodes
-        Matrix< DDRMat > const tIGPointPerturbed = tLeaderIGGI->valx_current( aLeaderFieldInterpolator );
-
-        Matrix< DDRMat > const tNormalPerturbed = tLeaderIGGI->get_normal_current( aLeaderFieldInterpolator );
-
-        MORIS_ASSERT( tLeaderCoordsPerturbed.n_rows() == 2 && tLeaderCoordsPerturbed.n_cols() == 2,
-                "IWG::remap_nonconformal_rays - Nonconformal FD scheme is only implemented for line elements." );
-
-        // Get the nodes of the follower element and add the perturbed displacement on each of them
-        Geometry_Interpolator* tFollowerIGGI = this->mFollowerFIManager->get_IG_geometry_interpolator();
-
-        // reset internal flags to make sure that the geometry interpolator reevaluates the perturbed element coordinates
-        tFollowerIGGI->reset_eval_flags_coordinates();
-        Matrix< DDRMat > const tFollowerCoordinates = tFollowerIGGI->get_space_coeff_current( aFollowerFieldInterpolator );
-
-        // Perform the mapping
-        mtk::Ray_Line_Intersection tRLI( tDim );
-        tRLI.set_ray_origin( trans( tIGPointPerturbed ) );
-        tRLI.set_ray_direction( tNormalPerturbed );
-        tRLI.set_target_origin( trans( tFollowerCoordinates.get_row( 0 ) ) );
-        tRLI.set_target_span( trans( tFollowerCoordinates.get_row( 1 ) - tFollowerCoordinates.get_row( 0 ) ) );
-        tRLI.perform_raytracing();
-
-        Matrix< DDRMat > tFollowerSpaceTime;
-        Matrix< DDRMat > tFollowerPhysical( tDim, 1 );
-        tFollowerIGGI->get_space_time( tFollowerSpaceTime );
-
-        if ( tRLI.has_intersection() )
-        {
-            tFollowerSpaceTime( 0 ) = tRLI.get_intersection_parametric()( 0 );
-            tFollowerPhysical       = tRLI.get_intersection_physical();
-        }
-        else
-        {
-            // TODO @ff: What can I do in this case?
-        }
-
-        return tFollowerSpaceTime;
+        // Delegates to the shared current-configuration ray remap (fn_FEM_Remap_Nonconformal_Ray).
+        // The same routine is used by the IQI/VIS output path so that a nonconformal quantity (e.g.
+        // the contact gap) is evaluated against the true deformed follower surface.
+        return remap_nonconformal_ray(
+                this->mLeaderFIManager->get_IG_geometry_interpolator(),
+                this->mFollowerFIManager->get_IG_geometry_interpolator(),
+                aLeaderFieldInterpolator,
+                aFollowerFieldInterpolator );
     }
 
     //------------------------------------------------------------------------------
