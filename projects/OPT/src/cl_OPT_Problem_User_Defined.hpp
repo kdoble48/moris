@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "cl_OPT_Problem.hpp"
 #include "cl_OPT_Criteria_Interface.hpp"
 #include "cl_Parameter_List.hpp"
@@ -17,11 +19,16 @@
 
 namespace moris::opt
 {
-    // User-defined function types
+    // User-defined function types (raw pointers, as resolved from a deck .so)
     typedef Matrix< DDRMat > ( *Objective_Constraint_Function )(
             const Vector< real >&,
             const Vector< real >& );
     typedef Matrix< DDSMat > ( *Constraint_Types_Function )();
+
+    // Stored callback types: std::function so that built-in defaults (lambdas) can be
+    // installed for callbacks the deck does not define
+    using Objective_Constraint_Functional = std::function< Matrix< DDRMat >( const Vector< real >&, const Vector< real >& ) >;
+    using Constraint_Types_Functional     = std::function< Matrix< DDSMat >() >;
 
     class Problem_User_Defined : public moris::opt::Problem
     {
@@ -112,12 +119,27 @@ namespace moris::opt
         Matrix< DDRMat > compute_dconstraint_dcriteria() override;
 
       private:
-        Constraint_Types_Function     get_constraint_types_user_defined;
-        Objective_Constraint_Function compute_objectives_user_defined;
-        Objective_Constraint_Function compute_constraints_user_defined;
-        Objective_Constraint_Function compute_dobjective_dadv_user_defined;
-        Objective_Constraint_Function compute_dobjective_dcriteria_user_defined;
-        Objective_Constraint_Function compute_dconstraint_dadv_user_defined;
-        Objective_Constraint_Function compute_dconstraint_dcriteria_user_defined;
+        /**
+         * Installs built-in defaults for any callback the deck did not define:
+         * - get_constraint_types: taken from the OPT 'constraint_types' parameter
+         *   (comma-separated 0=equality / 1=inequality per constraint); an error if
+         *   neither the function nor the parameter is provided
+         * - compute_dobjective_dadv / compute_dconstraint_dadv: zero matrices (the
+         *   explicit ADV dependence is assumed zero; criteria sensitivities are
+         *   unaffected) — announced with a log message
+         * - compute_dobjective_dcriteria / compute_dconstraint_dcriteria: an error
+         *   at first use (required for gradient-based optimization)
+         *
+         * @param aParameterList OPT problem parameter list (source of 'constraint_types')
+         */
+        void install_default_functions( const Parameter_List& aParameterList );
+
+        Constraint_Types_Functional     get_constraint_types_user_defined;
+        Objective_Constraint_Functional compute_objectives_user_defined;
+        Objective_Constraint_Functional compute_constraints_user_defined;
+        Objective_Constraint_Functional compute_dobjective_dadv_user_defined;
+        Objective_Constraint_Functional compute_dobjective_dcriteria_user_defined;
+        Objective_Constraint_Functional compute_dconstraint_dadv_user_defined;
+        Objective_Constraint_Functional compute_dconstraint_dcriteria_user_defined;
     };
 }    // namespace moris::opt

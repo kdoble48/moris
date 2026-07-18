@@ -32,6 +32,8 @@
 
 #include "cl_Library_IO_Standard.hpp"
 #include "cl_Communication_Tools.hpp"
+#include "cl_Matrix.hpp"
+#include "linalg_typedefs.hpp"
 #include "parameters.hpp"
 
 #ifndef IOS_DECK_FIXTURE_SO
@@ -44,6 +46,10 @@ namespace moris
 
     // signature of the fixture's user callback
     typedef int ( *Fixture_User_Function )();
+
+    // ABI signatures of the built-in deck callbacks (see fn_Library_Builtin_Functions.cpp)
+    typedef void ( *Builtin_Property_Function )( Matrix< DDRMat >&, Vector< Matrix< DDRMat > >&, void* );
+    typedef bool ( *Builtin_Criterion_Function )( void* );
 
     //------------------------------------------------------------------------------------------------------------------
 
@@ -111,6 +117,40 @@ namespace moris
 
             // *ParameterList symbols may not be loaded as user functions
             REQUIRE_THROWS( tLibrary.load_function< Parameter_Function >( "OPTParameterList" ) );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: builtin fallback functions", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_FIXTURE_SO, File_Type::SO_FILE );
+        tLibrary.finalize( "" );
+
+        SECTION( "Func_Const resolves to the builtin when the deck does not define it" )
+        {
+            Builtin_Property_Function tFunc = tLibrary.load_function< Builtin_Property_Function >( "Func_Const" );
+            REQUIRE( tFunc != nullptr );
+
+            Matrix< DDRMat >           tPropMatrix;
+            Vector< Matrix< DDRMat > > tParameters;
+            tParameters.push_back( Matrix< DDRMat >{ { 3.14 }, { 2.71 } } );
+
+            tFunc( tPropMatrix, tParameters, nullptr );
+
+            REQUIRE( tPropMatrix.numel() == 2 );
+            CHECK( tPropMatrix( 0 ) == 3.14 );
+            CHECK( tPropMatrix( 1 ) == 2.71 );
+        }
+
+        SECTION( "a deck-defined symbol wins over the builtin (Output_Criterion)" )
+        {
+            Builtin_Criterion_Function tCriterion = tLibrary.load_function< Builtin_Criterion_Function >( "Output_Criterion" );
+            REQUIRE( tCriterion != nullptr );
+
+            // the fixture's deck version deliberately returns false; the builtin returns true
+            CHECK( tCriterion( nullptr ) == false );
         }
     }
 

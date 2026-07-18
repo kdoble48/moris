@@ -20,6 +20,7 @@
 
 #include "cl_Library_Enums.hpp"
 #include "cl_Vector.hpp"
+#include "fn_Library_Builtin_Functions.hpp"
 
 #include "parameters.hpp"
 
@@ -248,6 +249,13 @@ namespace moris
 
             // get the pointer to the user-defined function
             Function_Type aUserFunction = reinterpret_cast< Function_Type >( dlsym( tLibraryHandle, aFunctionName.c_str() ) );
+
+            // if the deck does not define this function, fall back to a built-in
+            // implementation if one exists for this name (deck-defined symbols win)
+            if ( aUserFunction == nullptr )
+            {
+                aUserFunction = reinterpret_cast< Function_Type >( get_builtin_deck_function( aFunctionName ) );
+            }
 
             // depending on the flag throw an error
             if ( aThrowError )

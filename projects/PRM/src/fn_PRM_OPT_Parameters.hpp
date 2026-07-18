@@ -42,6 +42,8 @@ namespace moris::prm
                                                                           // central, forward, backward, or none
         tParameterList.insert( "finite_difference_epsilons", "1E-8" );    // Epsilon(s) to use per ADV for finite differencing
         tParameterList.insert( "library", "" );                           // Path to a shared object file for user-defined functions
+        tParameterList.insert( "constraint_types", "" );                  // Constraint types when the deck defines no get_constraint_types():
+                                                                          // comma-separated 0 (equality) / 1 (inequality) per constraint, e.g. "1,1"
 
         // Consolidated end-of-run performance report (per-module wall time + memory).
         // Granularity level: 0 = run total only, 1 = top-level modules, 2 = modules +

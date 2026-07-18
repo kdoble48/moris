@@ -227,7 +227,10 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
         Module_Parameter_Lists tOPTParameterList = tLibrary->get_parameters_for_module( Module_Type::OPT );
 
         MORIS_ERROR( tOPTParameterList.size() > 0,
-                "fn_WRK_Workflow_Main_Interface: OPT parameter not set but are required." );
+                "fn_WRK_Workflow_Main_Interface: the OPT parameter list is empty. The input deck "
+                "must export an OPTParameterList symbol: a deck that omits (or misspells) the "
+                "symbol DISABLES the module, while a present-but-empty OPTParameterList function "
+                "keeps the module's defaults. Check the loader log for 'module is disabled' lines." );
 
         // resolve the performance-report configuration: OPT parameter list, overridden
         // by the MORIS_PERF_LEVEL environment variable, overridden by the --perf-level CLI flag.

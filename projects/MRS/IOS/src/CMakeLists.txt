@@ -21,6 +21,7 @@ set(HEADERS
         cl_Module_Parameter_Lists.hpp
         cl_Submodule_Parameter_Lists.hpp
         cl_Library_Factory.hpp
+        fn_Library_Builtin_Functions.hpp
         cl_Library_IO.hpp
         cl_Library_IO_Meshgen.hpp
         cl_Library_IO_Standard.hpp
@@ -42,6 +43,7 @@ set(LIB_SOURCES
         cl_Library_Enums.cpp
         cl_Module_Parameter_Lists.cpp
         cl_Submodule_Parameter_Lists.cpp
+        fn_Library_Builtin_Functions.cpp
         cl_Library_IO.cpp
         cl_Library_IO_Meshgen.cpp
         cl_Library_IO_Standard.cpp

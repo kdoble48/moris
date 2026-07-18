@@ -218,6 +218,57 @@ namespace moris::opt
 
         // ---------------------------------------------------------------------------------------------------------
 
+        // Optional user-defined callbacks (Deck API v2, Stage 1): when a deck omits them,
+        // get_constraint_types is taken from the 'constraint_types' parameter and the
+        // explicit ADV gradients default to zeros — reproducing the hand-written
+        // zero-returning bimodal callbacks exactly.
+        SECTION( "Optional OPT callbacks default correctly" )
+        {
+            Parameter_List tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+            tProblemParameterList.set( "constraint_types", "1" );
+
+            std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                    &bimodal::initialize,
+                    &bimodal::get_criteria,
+                    &bimodal::get_dcriteria_dadv );
+
+            // nullptr for get_constraint_types and both explicit ADV gradient callbacks
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    nullptr,
+                    &bimodal::compute_objectives,
+                    &bimodal::compute_constraints,
+                    nullptr,
+                    &bimodal::compute_dobjective_dcriteria,
+                    nullptr,
+                    &bimodal::compute_dconstraint_dcriteria );
+
+            tProblem->initialize();
+
+            // constraint types come from the parameter
+            Matrix< DDSMat > tConstraintTypes = tProblem->get_constraint_types();
+            REQUIRE( tConstraintTypes.numel() == 1 );
+            CHECK( tConstraintTypes( 0 ) == 1 );
+
+            Vector< real > tADVs = tProblem->get_advs();
+            tProblem->compute_design_criteria( tADVs );
+            tProblem->compute_design_criteria_gradients( tADVs );
+
+            if ( par_rank() == 0 )
+            {
+                // objective gradient = 0 (defaulted dObj/dADV) + dObj/dCriteria * dCriteria/dADV,
+                // identical to the explicit bimodal callbacks
+                const Matrix< DDRMat >& tObjGrad = tProblem->get_objective_gradients();
+                REQUIRE( tObjGrad.numel() == 5 );
+                CHECK( tObjGrad( 0, 0 ) == Approx( 1.0e8 ) );
+                CHECK( tObjGrad( 0, 1 ) == Approx( 0.01 ) );
+                CHECK( tObjGrad( 0, 4 ) == 0.0 );
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
 #ifdef MORIS_HAVE_GCMMA
         SECTION( "GCMMA" )
         {

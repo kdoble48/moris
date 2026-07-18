@@ -320,6 +320,14 @@ namespace moris
             }
             else
             {
+                // NOTE: a missing <MODULE>ParameterList symbol DISABLES the module (its
+                // parameter lists are cleared), while a present-but-empty function keeps
+                // the module enabled with its defaults. Log this so a misspelled symbol
+                // name does not silently disable a module.
+                MORIS_LOG( "No %s symbol in .so file; the %s module is disabled.",
+                        tParamListFuncName.c_str(),
+                        convert_parameter_list_enum_to_string( tParamListType ).c_str() );
+
                 mParameterLists( iParamListType ).clear();
             }
         }    // end for: parameter list types that could be specified

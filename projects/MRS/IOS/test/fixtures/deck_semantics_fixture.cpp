@@ -56,5 +56,17 @@ namespace moris
 
     //------------------------------------------------------------------------------------------------------------------
 
+    // Deck-defined version of the well-known "Output_Criterion" callback. Returns the
+    // deliberately unusual value FALSE so tests can prove that a deck-defined symbol
+    // takes precedence over the built-in implementation (which always returns true).
+    // "Func_Const" is intentionally NOT defined so the builtin fallback is exercised.
+    bool
+    Output_Criterion( void* /* aTimeSolver */ )
+    {
+        return false;
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
 }    // namespace moris
 }    // extern "C"
