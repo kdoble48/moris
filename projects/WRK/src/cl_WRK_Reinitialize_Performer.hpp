@@ -163,6 +163,17 @@ namespace moris
             //------------------------------------------------------------------------------
 
             /**
+             * @brief Get the name of the ADV (level-set) field this performer reinitializes.
+             *        Used to target that design's ADV slice when writing reinitialized coefficients.
+             *
+             * @return std::string const&
+             */
+            std::string const &
+            get_adv_field_name() const { return mADVFiledName; }
+
+            //------------------------------------------------------------------------------
+
+            /**
              * @brief clip values of advs
              *
              * @param aGENPerformer

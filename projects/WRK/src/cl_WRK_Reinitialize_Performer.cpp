@@ -714,12 +714,30 @@ namespace moris::wrk
             MORIS_LOG_INFO( "SDF reinit field drift (diagnostic): %.4e", tRelChange );
         }
 
-        // Create MTK Field with computed SDF values
-        // For INTERFACE_SDF mode, use mesh index 0 (since mAdofMeshIndex isn't set)
-        moris_index tMeshIndex = ( mReinitMode == ReinitMode::INTERFACE_SDF ) ? 0 : mAdofMeshIndex;
-        
-        aSDFField = std::make_shared< mtk::Field_Discrete >(
-                aMTKPerformer( 0 )->get_mesh_pair( 0 ), tMeshIndex );
+        // Create the MTK Field holding the computed SDF values. Build it on the ADV field's
+        // OWN mesh pair + discretization_mesh_index so the resulting coefficients align with
+        // the GEN ADV vector. (Previously the INTERFACE_SDF path used mesh_pair(0)/index 0,
+        // whose coefficient count never matched the ADVs, so every in-place apply was skipped
+        // with "coeff count != ADV count".) This mirrors the field_remap path above; falls
+        // back to mesh_pair(0)/index 0 if the ADV field cannot be located by label.
+        Vector< std::shared_ptr< mtk::Field > > tAdvLookupFields;
+        tAdvLookupFields.append( aGENPerformer( 0 )->get_mtk_fields() );
+        auto tAdvItr = std::find_if( tAdvLookupFields.begin(), tAdvLookupFields.end(),
+                [ this ]( std::shared_ptr< mtk::Field > const& aField ) {
+                    return aField->get_label() == mADVFiledName;
+                } );
+
+        if ( tAdvItr != tAdvLookupFields.end() )
+        {
+            aSDFField = std::make_shared< mtk::Field_Discrete >(
+                    ( *tAdvItr )->get_mesh_pair(), ( *tAdvItr )->get_discretization_mesh_index() );
+        }
+        else
+        {
+            moris_index tMeshIndex = ( mReinitMode == ReinitMode::INTERFACE_SDF ) ? 0 : mAdofMeshIndex;
+            aSDFField = std::make_shared< mtk::Field_Discrete >(
+                    aMTKPerformer( 0 )->get_mesh_pair( 0 ), tMeshIndex );
+        }
         aSDFField->set_label( mADVFiledName );
         aSDFField->unlock_field();
         aSDFField->set_values( tSDF );
