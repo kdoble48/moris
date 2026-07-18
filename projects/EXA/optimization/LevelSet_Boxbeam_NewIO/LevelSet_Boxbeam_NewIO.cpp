@@ -74,6 +74,14 @@ namespace
         return tEnvMaxIts != nullptr ? std::atoi( tEnvMaxIts ) : 2;
     }
 
+    // GCMMA step size: legacy default, overridable for smoke tuning
+    real
+    step_size()
+    {
+        const char* tEnvStepSize = std::getenv( "BOXBEAM_STEP_SIZE" );
+        return tEnvStepSize != nullptr ? std::atof( tEnvStepSize ) : tMMAStepSize;
+    }
+
     // ---- phases and generated set names -----------------------------------------
     // geometry sign pattern -> bulk phase via the phase table [0,1,2,2]:
     // 0 = void, 1 = interior (design), 2 = frame
@@ -263,7 +271,7 @@ MORIS_DECK( aDeck )
     tOpt.set( "restart_file", "" );
 
     tOpt( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::GCMMA );
-    tOpt.set( "step_size", tMMAStepSize );
+    tOpt.set( "step_size", step_size() );
     tOpt.set( "penalty", tMMAPenalty );
     tOpt.set( "max_its", max_iterations() );
 
