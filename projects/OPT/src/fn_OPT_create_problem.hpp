@@ -13,6 +13,7 @@
 
 #include "cl_OPT_Problem.hpp"
 #include "cl_Parameter_List.hpp"
+#include "cl_Library_IO.hpp"
 
 namespace moris::opt
 {
@@ -21,9 +22,15 @@ namespace moris::opt
      *
      * @param aProblemParameterList Parameter list for the optimization problem
      * @param aInterface Pointer to already-built criteria interface
+     * @param aLibrary Optional already-loaded input library; when provided, user-defined
+     *        problems resolve their callbacks from it (registry included) instead of
+     *        re-opening the .so named by the 'library' parameter
      * @return Problem class
      */
-    std::shared_ptr< Problem > create_problem( Parameter_List aProblemParameterList, std::shared_ptr< Criteria_Interface > aInterface );
+    std::shared_ptr< Problem > create_problem(
+            Parameter_List                        aProblemParameterList,
+            std::shared_ptr< Criteria_Interface > aInterface,
+            std::shared_ptr< Library_IO >         aLibrary = nullptr );
     }
 
 #endif //MORIS_FN_OPT_CREATE_PROBLEM_HPP

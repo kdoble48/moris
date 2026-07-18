@@ -39,10 +39,14 @@ namespace moris::opt
          *
          * @param aParameterList parameter list for this problem specifying the needed library
          * @param aInterface Interface class written for other module
+         * @param aLibrary Optional already-loaded input library. When provided, callbacks
+         *        are resolved from it (in-process registry included) instead of
+         *        re-opening the .so named by the 'library' parameter.
          */
         Problem_User_Defined(
                 Parameter_List&                        aParameterList,
-                std::shared_ptr< Criteria_Interface >& aInterface );
+                std::shared_ptr< Criteria_Interface >& aInterface,
+                std::shared_ptr< Library_IO >          aLibrary = nullptr );
 
         /**
          * Alternate constructor where the user-defined functions are provided directly. Used for OPT tests.

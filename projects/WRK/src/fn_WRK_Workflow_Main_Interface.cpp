@@ -285,7 +285,9 @@ int fn_WRK_Workflow_Main_Interface( int argc, char *argv[] )
 
         if ( tOPTParameterList( 0 )( 0 ).get< bool >( "is_optimization_problem" ) )
         {
-            moris::opt::Manager tManager( tOPTParameterList, tWorkflows );
+            // hand the already-loaded library to OPT so user-defined problems resolve
+            // their callbacks from it instead of re-opening the deck .so
+            moris::opt::Manager tManager( tOPTParameterList, tWorkflows, tLibrary );
             tManager.perform();
         }
         else

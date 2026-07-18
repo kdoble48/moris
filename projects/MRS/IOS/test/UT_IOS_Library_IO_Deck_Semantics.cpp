@@ -39,6 +39,12 @@
 #ifndef IOS_DECK_FIXTURE_SO
 #error "IOS_DECK_FIXTURE_SO must be defined by CMake (path to the fixture deck .so)"
 #endif
+#ifndef IOS_DECK_V2_FIXTURE_SO
+#error "IOS_DECK_V2_FIXTURE_SO must be defined by CMake (path to the entry-point fixture .so)"
+#endif
+#ifndef IOS_DECK_MIXED_FIXTURE_SO
+#error "IOS_DECK_MIXED_FIXTURE_SO must be defined by CMake (path to the mixed-style fixture .so)"
+#endif
 
 namespace moris
 {
@@ -181,6 +187,74 @@ namespace moris
             CHECK( std::filesystem::exists( tReceiptPath ) );
             std::filesystem::remove( tReceiptPath );
         }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: single-entry-point deck (MORISInputDeck)", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_V2_FIXTURE_SO, File_Type::SO_FILE );
+        tLibrary.finalize( "" );
+
+        SECTION( "touched modules keep defaults, mutations are applied, untouched modules are disabled" )
+        {
+            // OPT: touched and mutated
+            auto tOptParams = tLibrary.get_parameters_for_module( Module_Type::OPT );
+            REQUIRE( tOptParams( OPT::OPTIMIZATION_PROBLEMS ).size() == 1 );
+            CHECK( tOptParams( OPT::OPTIMIZATION_PROBLEMS )( 0 ).get< bool >( "is_optimization_problem" ) == true );
+
+            // HMR: touched without modification — defaults preserved
+            auto tHmrParams = tLibrary.get_parameters_for_module( Module_Type::HMR );
+            REQUIRE( tHmrParams( HMR::GENERAL ).size() == 1 );
+            CHECK( tHmrParams( HMR::GENERAL )( 0 ).get< uint >( "refinement_buffer" ) == 0 );
+
+            // untouched modules are disabled
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::GEN ).size() == 0 );
+            CHECK( tLibrary.get_parameters_for_module( Module_Type::FEM ).size() == 0 );
+        }
+
+        SECTION( "registered callbacks resolve without extern \"C\" symbols" )
+        {
+            // the fixture registers this function with INTERNAL linkage — it is not a
+            // dlsym-able symbol, only the registry can resolve it
+            Fixture_User_Function tFunc = tLibrary.load_function< Fixture_User_Function >( "Registered_User_Function" );
+            REQUIRE( tFunc != nullptr );
+            CHECK( tFunc() == 77 );
+        }
+
+        SECTION( "a registered callback wins over the builtin (Func_Const)" )
+        {
+            Builtin_Property_Function tFunc = tLibrary.load_function< Builtin_Property_Function >( "Func_Const" );
+            REQUIRE( tFunc != nullptr );
+
+            Matrix< DDRMat >           tPropMatrix;
+            Vector< Matrix< DDRMat > > tParameters;
+            tParameters.push_back( Matrix< DDRMat >{ { 3.0 }, { 5.0 } } );
+
+            tFunc( tPropMatrix, tParameters, nullptr );
+
+            // the fixture's registered version doubles the values; the builtin copies them
+            REQUIRE( tPropMatrix.numel() == 2 );
+            CHECK( tPropMatrix( 0 ) == 6.0 );
+            CHECK( tPropMatrix( 1 ) == 10.0 );
+        }
+
+        SECTION( "requesting a registered callback with the wrong signature throws" )
+        {
+            REQUIRE_THROWS( tLibrary.load_function< Builtin_Criterion_Function >( "Registered_User_Function" ) );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Library_IO deck semantics: mixing deck styles is rejected", "[IOS],[Library_IO],[deck_semantics]" )
+    {
+        // the mixed fixture exports both MORISInputDeck and OPTParameterList
+        Library_IO_Standard tLibrary;
+        tLibrary.load_parameter_list( IOS_DECK_MIXED_FIXTURE_SO, File_Type::SO_FILE );
+
+        REQUIRE_THROWS( tLibrary.finalize( "" ) );
     }
 
     //------------------------------------------------------------------------------------------------------------------

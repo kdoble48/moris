@@ -18,12 +18,11 @@ set(TEST_SOURCES
     UT_IOS_Performance_Reporter.cpp
     UT_IOS_Library_IO_Deck_Semantics.cpp )
 
-# Fixture input-deck shared object for the Library_IO deck-semantics tests.
-# Like a real input deck it is NOT linked against any moris libraries; its moris
+# Fixture input-deck shared objects for the Library_IO deck-semantics tests.
+# Like real input decks they are NOT linked against any moris libraries; their moris
 # symbols resolve at dlopen against the (-rdynamic) test executable. The include
 # set mirrors the deck-.so convention of dynamic_link_input()/moris_add_example.
-add_library(IOS-deck-fixture SHARED fixtures/deck_semantics_fixture.cpp)
-target_include_directories(IOS-deck-fixture PRIVATE
+set(IOS_FIXTURE_INCLUDES
     ${CMAKE_BINARY_DIR}/generated
     ${MORIS_PACKAGE_DIR}/PRM/src
     ${MORIS_PACKAGE_DIR}/PRM/ENM/src
@@ -32,7 +31,17 @@ target_include_directories(IOS-deck-fixture PRIVATE
     ${MORIS_PACKAGE_DIR}/LINALG/src/${LINALG_IMPLEMENTATION_INCLUDES}
     ${MORIS_BOOST_INCLUDE_DIRS}
     ${MORIS_ARMADILLO_INCLUDE_DIRS})
-set_target_properties(IOS-deck-fixture PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+foreach(FIXTURE IOS-deck-fixture,deck_semantics_fixture
+                IOS-deck-v2-fixture,deck_entry_point_fixture
+                IOS-deck-mixed-fixture,deck_mixed_fixture)
+    string(REPLACE "," ";" FIXTURE ${FIXTURE})
+    list(GET FIXTURE 0 FIXTURE_TARGET)
+    list(GET FIXTURE 1 FIXTURE_SOURCE)
+    add_library(${FIXTURE_TARGET} SHARED fixtures/${FIXTURE_SOURCE}.cpp)
+    target_include_directories(${FIXTURE_TARGET} PRIVATE ${IOS_FIXTURE_INCLUDES})
+    set_target_properties(${FIXTURE_TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endforeach()
 
 # List additional includes
 include_directories(${MORIS_DIR}/snippets/ios)
@@ -55,10 +64,12 @@ add_executable(${IOS_TEST} ${TEST_SOURCES})
 target_link_libraries(${IOS_TEST} ${TEST_DEPENDENCIES})
 set_target_properties(${IOS_TEST} PROPERTIES OUTPUT_NAME ${IOS_TEST}${EXE_EXT})
 
-# Hand the deck-semantics tests the path to the fixture .so and make sure it is built
+# Hand the deck-semantics tests the paths to the fixture .so's and make sure they build
 target_compile_definitions(${IOS_TEST} PRIVATE
-    "IOS_DECK_FIXTURE_SO=\"$<TARGET_FILE:IOS-deck-fixture>\"")
-add_dependencies(${IOS_TEST} IOS-deck-fixture)
+    "IOS_DECK_FIXTURE_SO=\"$<TARGET_FILE:IOS-deck-fixture>\""
+    "IOS_DECK_V2_FIXTURE_SO=\"$<TARGET_FILE:IOS-deck-v2-fixture>\""
+    "IOS_DECK_MIXED_FIXTURE_SO=\"$<TARGET_FILE:IOS-deck-mixed-fixture>\"")
+add_dependencies(${IOS_TEST} IOS-deck-fixture IOS-deck-v2-fixture IOS-deck-mixed-fixture)
 
 
 # List source files for Query

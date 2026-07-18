@@ -20,15 +20,22 @@ namespace moris::opt
 
     Problem_User_Defined::Problem_User_Defined(
             Parameter_List&                        aParameterList,
-            std::shared_ptr< Criteria_Interface >& aInterface )
+            std::shared_ptr< Criteria_Interface >& aInterface,
+            std::shared_ptr< Library_IO >          aLibrary )
             : Problem( aParameterList, aInterface )
     {
-        // Load library
-        moris::Library_Factory        tLibraryFactory;
-        std::shared_ptr< Library_IO > tLibrary     = tLibraryFactory.create_Library( Library_Type::STANDARD );
-        std::string                   tLibraryName = aParameterList.get< std::string >( "library" );
-        tLibrary->load_parameter_list( tLibraryName, File_Type::SO_FILE );
-        tLibrary->finalize();
+        // Use the already-loaded input library when provided (avoids re-opening the
+        // deck .so and preserves in-process registered callbacks); otherwise fall back
+        // to loading the .so named by the 'library' parameter
+        std::shared_ptr< Library_IO > tLibrary = std::move( aLibrary );
+        if ( tLibrary == nullptr )
+        {
+            moris::Library_Factory tLibraryFactory;
+            tLibrary                 = tLibraryFactory.create_Library( Library_Type::STANDARD );
+            std::string tLibraryName = aParameterList.get< std::string >( "library" );
+            tLibrary->load_parameter_list( tLibraryName, File_Type::SO_FILE );
+            tLibrary->finalize();
+        }
 
         // Set user-defined functions. The objective and constraint evaluations are
         // required; the gradient callbacks and get_constraint_types are optional and

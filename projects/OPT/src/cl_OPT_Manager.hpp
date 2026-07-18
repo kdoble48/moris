@@ -16,6 +16,11 @@
 #include "cl_OPT_Problem.hpp"
 #include "cl_OPT_Criteria_Interface.hpp"
 
+namespace moris
+{
+    class Library_IO;
+}
+
 namespace moris::opt
 {
     class Manager
@@ -30,9 +35,13 @@ namespace moris::opt
          *
          * @param aParameterLists parameter lists for defining an optimization problem
          * @param aCriteriaInterface criteria interfaces, in addition to any specified in the parameter lists
+         * @param aLibrary Optional already-loaded input library, forwarded to the
+         *        user-defined problem so it can resolve callbacks (including in-process
+         *        registered ones) without re-opening the deck .so
          */
         Manager( const Module_Parameter_Lists&             aParameterLists,
-                const Vector< std::shared_ptr< Criteria_Interface > >& aInterfaces = Vector< std::shared_ptr< Criteria_Interface > >( 0 ) );
+                const Vector< std::shared_ptr< Criteria_Interface > >& aInterfaces = Vector< std::shared_ptr< Criteria_Interface > >( 0 ),
+                std::shared_ptr< Library_IO >                          aLibrary    = nullptr );
 
         /**
          * Constructor with problem class already created

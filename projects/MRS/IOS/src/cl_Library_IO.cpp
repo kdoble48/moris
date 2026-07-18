@@ -10,6 +10,7 @@
 
 #include "cl_Library_IO.hpp"
 #include "cl_Library_Enums.hpp"
+#include "cl_Input_Deck.hpp"
 #include "cl_XML_Parser.hpp"
 #include <cctype>
 #include <cstddef>
@@ -289,7 +290,58 @@ namespace moris
         // check that an .so file has been initialized
         MORIS_ERROR( mSoLibIsInitialized, "Library_IO::load_parameters_from_shared_object_library() - No .so file has been loaded." );
 
-        // go through the various parameter list names and see if they exist in the provided .so file
+        // single-entry-point deck API (see doc/internal/DECK_API_RFC.md): if the deck
+        // exports "MORISInputDeck", use it instead of the legacy per-module symbols
+        Input_Deck_Function tInputDeckFunc = reinterpret_cast< Input_Deck_Function >( dlsym( mLibraryHandle, "MORISInputDeck" ) );
+
+        if ( tInputDeckFunc != nullptr )
+        {
+            // mixing the two deck styles in one .so is a hard error: the legacy symbols
+            // would silently be ignored, so fail loudly instead
+            for ( uint iParamListType = 0; iParamListType < (uint)( Module_Type::END_ENUM ); iParamListType++ )
+            {
+                std::string tLegacyName = get_name_for_parameter_list_type( (Module_Type)iParamListType );
+
+                MORIS_ERROR( dlsym( mLibraryHandle, tLegacyName.c_str() ) == nullptr,
+                        "Library_IO - the input deck exports both 'MORISInputDeck' and the legacy "
+                        "'%s' symbol. A deck must use exactly one input style.",
+                        tLegacyName.c_str() );
+            }
+
+            MORIS_LOG( "Single-entry-point deck detected (MORISInputDeck)." );
+
+            // build the deck object over this library's parameter lists and registry,
+            // and let the deck configure itself
+            Input_Deck tInputDeck( mParameterLists, mRegistry );
+            tInputDeckFunc( tInputDeck );
+
+            // OPT is mandatory for workflow selection; activate it even if untouched
+            tInputDeck.touch( Module_Type::OPT );
+
+            // untouched modules are disabled — the explicit equivalent of a missing
+            // legacy symbol (touch = enable with defaults, untouched = disabled)
+            for ( uint iParamListType = 0; iParamListType < (uint)( Module_Type::END_ENUM ); iParamListType++ )
+            {
+                Module_Type tParamListType = (Module_Type)iParamListType;
+
+                if ( !tInputDeck.is_touched( tParamListType ) )
+                {
+                    MORIS_LOG( "Module %s not configured by MORISInputDeck; the module is disabled.",
+                            convert_parameter_list_enum_to_string( tParamListType ).c_str() );
+
+                    mParameterLists( iParamListType ).clear();
+                }
+                else if ( !is_module_supported( tParamListType ) )
+                {
+                    MORIS_LOG( "Parameters for %s are irrelevant for the chosen workflow and will be ignored.",
+                            convert_parameter_list_enum_to_string( tParamListType ).c_str() );
+                }
+            }
+
+            return;
+        }
+
+        // legacy path: go through the various parameter list names and see if they exist in the provided .so file
         for ( uint iParamListType = 0; iParamListType < (uint)( Module_Type::END_ENUM ); iParamListType++ )
         {
             // get the current enum

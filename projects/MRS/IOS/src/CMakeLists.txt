@@ -22,6 +22,8 @@ set(HEADERS
         cl_Submodule_Parameter_Lists.hpp
         cl_Library_Factory.hpp
         fn_Library_Builtin_Functions.hpp
+        cl_Function_Registry.hpp
+        cl_Input_Deck.hpp
         cl_Library_IO.hpp
         cl_Library_IO_Meshgen.hpp
         cl_Library_IO_Standard.hpp

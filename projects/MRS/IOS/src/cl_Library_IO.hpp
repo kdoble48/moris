@@ -21,6 +21,7 @@
 #include "cl_Library_Enums.hpp"
 #include "cl_Vector.hpp"
 #include "fn_Library_Builtin_Functions.hpp"
+#include "cl_Function_Registry.hpp"
 
 #include "parameters.hpp"
 
@@ -62,6 +63,10 @@ namespace moris
 
         // storage for the parameters for the various Modules
         Vector< Module_Parameter_Lists > mParameterLists;
+
+        // registry of user callbacks registered by a single-entry-point deck
+        // (MORISInputDeck); consulted by load_function() before dlsym
+        Function_Registry mRegistry;
 
         // XML parser for output
         std::unique_ptr< XML_Parser > mXmlWriter;
@@ -243,6 +248,13 @@ namespace moris
                     "Library_IO::load_function() - "
                     "Trying to load parameters for %s directly from shared object library. Use 'get_parameters_for_module()' instead.",
                     aFunctionName.c_str() );
+
+            // callbacks registered by a single-entry-point deck take precedence
+            Function_Type tRegisteredFunction = mRegistry.lookup< Function_Type >( aFunctionName );
+            if ( tRegisteredFunction != nullptr )
+            {
+                return tRegisteredFunction;
+            }
 
             // get a handle to the library handle
             void* tLibraryHandle = this->get_shared_object_library_handle();
