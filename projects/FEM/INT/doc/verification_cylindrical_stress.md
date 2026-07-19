@@ -60,6 +60,9 @@ rate for a stress (gradient) quantity on a cut interface — and improves system
 p. This is a benchmark of the *whole chain* (immersed discretization + CM stress + this
 IQI's rotation); the rotation itself is exact per Tier 1.
 
+![Kirsch convergence by basis order: native hoop-stress rms error (left, with O(h)/O(h²)/O(h³)
+reference slopes) and displacement rel-L2 error (right)](verification_cylindrical_stress_kirsch.png)
+
 ## Provenance
 
 - Unit test: `projects/FEM/INT/test/UT_FEM_IQI_Cylindrical_Stress.cpp` (this PR).
