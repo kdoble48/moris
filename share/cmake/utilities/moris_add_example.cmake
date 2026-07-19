@@ -12,6 +12,11 @@
 #     [SOURCES <files> ...]          # default: example_test_case.cpp
 #     [INPUTS <deckbase> ...]        # each: dynamic_link_input(<b> <b> <b>.cpp); default: TEST_BASE
 #     [EXTRA_SO_INCLUDES <dirs> ...] # for leaves whose SO_INCLUDES deviate from the standard block
+#     [CASES <i> [<i> ...]]          # case-matrix leaf: registers <TEST_BASE>_<i>-<procs>-procs
+#                                    # running tag [EXA_<NAME>_<i>] for each listed case index,
+#                                    # one runner process per case (ArborX/Kokkos re-entrancy
+#                                    # constraint). List indices explicitly so gated-out cases
+#                                    # are visible in the leaf CMakeLists, with a comment why.
 # )
 #
 # Replaces the legacy per-leaf example boilerplate (see doc/internal/EXA_RUNNER_RFC.md).
@@ -23,7 +28,7 @@
 function(moris_add_example)
     set(options NO_PROCS_SUFFIX NO_INPUTS)
     set(oneValueArgs NAME TEST_BASE)
-    set(multiValueArgs PROCS SOURCES INPUTS EXTRA_SO_INCLUDES)
+    set(multiValueArgs PROCS SOURCES INPUTS EXTRA_SO_INCLUDES CASES)
     cmake_parse_arguments(EXA "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if(NOT EXA_NAME OR NOT EXA_TEST_BASE)
@@ -94,19 +99,34 @@ function(moris_add_example)
 
     # ---- ctest registrations: EXACT legacy names, PROCS, workdir, valgrind --
     if(MORIS_HAVE_PARALLEL_TESTS)
+        # CASES leaves register one ctest per case index (tag [EXA_<NAME>_<i>]) so the
+        # runner starts a fresh process per case; plain leaves register one ctest per
+        # PROCS entry running the whole [EXA_<NAME>] tag.
+        if(EXA_CASES)
+            foreach(_case IN LISTS EXA_CASES)
+                list(APPEND _suffixes "_${_case}")
+            endforeach()
+        else()
+            set(_suffixes "|")    # sentinel for the single, unsuffixed registration
+        endif()
         foreach(PROCS ${EXA_PROCS})
-            if(EXA_NO_PROCS_SUFFIX)
-                set(_test_name ${EXA_TEST_BASE})
-            else()
-                set(_test_name ${EXA_TEST_BASE}-${PROCS}-procs)
-            endif()
-            add_test(NAME ${_test_name}
-                COMMAND ${MORIS_EXECUTE_COMMAND} -n ${PROCS} ${VALGRIND} ${VALGRIND_OPTIONS_EXA}
-                        $<TARGET_FILE:EXA-test> "[EXA_${EXA_NAME}]"
-                WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            # explicit label: directory-property inheritance does not reach
-            # the deep EXA leaves; enables `ctest -L EXA` / `ctest -LE EXA`
-            set_tests_properties(${_test_name} PROPERTIES LABELS "EXA")
+            foreach(_suffix IN LISTS _suffixes)
+                if(_suffix STREQUAL "|")
+                    set(_suffix "")
+                endif()
+                if(EXA_NO_PROCS_SUFFIX)
+                    set(_test_name ${EXA_TEST_BASE}${_suffix})
+                else()
+                    set(_test_name ${EXA_TEST_BASE}${_suffix}-${PROCS}-procs)
+                endif()
+                add_test(NAME ${_test_name}
+                    COMMAND ${MORIS_EXECUTE_COMMAND} -n ${PROCS} ${VALGRIND} ${VALGRIND_OPTIONS_EXA}
+                            $<TARGET_FILE:EXA-test> "[EXA_${EXA_NAME}${_suffix}]"
+                    WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+                # explicit label: directory-property inheritance does not reach
+                # the deep EXA leaves; enables `ctest -L EXA` / `ctest -LE EXA`
+                set_tests_properties(${_test_name} PROPERTIES LABELS "EXA")
+            endforeach()
         endforeach()
     endif()
 endfunction()
