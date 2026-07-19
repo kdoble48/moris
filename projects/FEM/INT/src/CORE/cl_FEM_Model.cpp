@@ -171,6 +171,9 @@ namespace moris::fem
     {
         Tracer tTracer( "FEM", "Model", "Create" );
 
+        // unpack the moment-fitted cut-cell quadrature settings (default OFF)
+        this->parse_moment_fitting_parameters();
+
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
         // STEP 0: unpack fem input and mesh
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -216,6 +219,40 @@ namespace moris::fem
         {
             mFEMOnly = true;
             MORIS_LOG( "Skipping GEN, FEM Only" );
+        }
+
+        // unpack the moment-fitted cut-cell quadrature settings (default OFF)
+        this->parse_moment_fitting_parameters();
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    FEM_Model::parse_moment_fitting_parameters()
+    {
+        // keep defaults (OFF) if no computation parameter list was provided
+        if ( mParameterList( 5 ).size() == 0 )
+        {
+            return;
+        }
+
+        const Parameter_List &tComputationParameterList = mParameterList( 5 )( 0 );
+
+        // keep defaults (OFF) if the keys are absent (e.g. hand-built parameter lists)
+        if ( !tComputationParameterList.exists( "use_moment_fitting" ) )
+        {
+            return;
+        }
+
+        mUseMomentFitting    = tComputationParameterList.get< bool >( "use_moment_fitting" );
+        mMomentFittingDegree = tComputationParameterList.get< uint >( "moment_fitting_degree" );
+        mMomentFittingTol    = tComputationParameterList.get< real >( "moment_fitting_tolerance" );
+
+        if ( mUseMomentFitting )
+        {
+            MORIS_LOG_INFO( "FEM: moment-fitted cut-cell quadrature enabled (degree %u, tolerance %e)",
+                    mMomentFittingDegree,
+                    mMomentFittingTol );
         }
     }
 
