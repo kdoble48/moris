@@ -54,6 +54,22 @@ output, cluster measures, ghost/side/double-side sets.
 Overhead at the probe size: fitted end-to-end 0.83 s vs 1.71 s tessellated (**2.1×
 faster**); weights re-fit automatically per design iteration when FEM rebuilds.
 
+## Full-length production A/B (3D box-beam, 151 GCMMA iterations per arm)
+
+Beyond the 7-evaluation gate, two complete optimizations of the 3D frameless box-beam were
+run to 151 iterations each (~2h45m tessellated, ~2h53m fitted, both exit 0; 2026-07-14,
+`phase1_3d_production/`):
+
+- objective trajectories: median per-iteration rel. difference **8.6e-7**, p90 6.8e-4,
+  max 3.0e-3 (a brief transient at iteration 110); final objectives 0.267846 vs 0.267822
+  (rel. diff **9.1e-5**);
+- final designs: section-for-section visually identical (figure below), with identical
+  measured topology — 1 material component, 3 void components, 0 enclosed cavities;
+  volume fraction 0.202238 (tess) vs 0.202249 (fit).
+
+![Final designs after 151 GCMMA iterations: tessellated rule (top) vs moment-fitted rule
+(bottom), four cross-sections and four elevations each](verification_moment_fitting_ab_designs.png)
+
 ## Usage guidance
 
 - Deck keys (FEM computation list): `use_moment_fitting` (default false),
