@@ -54,6 +54,35 @@ output, cluster measures, ghost/side/double-side sets.
 Overhead at the probe size: fitted end-to-end 0.83 s vs 1.71 s tessellated (**2.1×
 faster**); weights re-fit automatically per design iteration when FEM rebuilds.
 
+## Timing (measured, honest)
+
+The mechanism: median 44 tets × TET_11 = 484 candidate points collapse to 56 retained
+(= the d=5 basis size) — a **7.64× cut-cluster GP reduction** (single-rank census, no
+fallbacks, max fit residual 1.4e-15).
+
+Production-scale (3D frameless box-beam, p=1, d=5, np 8, idle machine, 151 GCMMA
+iterations per arm):
+
+| arm | wall | vs tessellated |
+|---|---|---|
+| tessellated | 9931 s | — |
+| fitted, initial NNLS (MGS) | 10393 s | **4.7% slower** |
+| fitted, fast passive solve (LAPACK dgels) | 7230 s | **27% faster (1.37×)** |
+
+The initial slowdown was the fitting cost, not the quadrature: AssembleResidual dropped
+1236 → 352 s (3.5× — the pure GP-loop win) while AssembleJacobian rose 1624 → 3028 s
+carrying the per-XTK-rebuild NNLS cost (~16 s × 151 rebuilds). The Phase-1d fast passive
+solve (per-fit 0.69 / 2.21 / 5.83 ms at d = 4/5/6 on production-size 1050-candidate
+systems; first-AssembleJacobian per rebuild 12.5–17.0 s → 4.6–5.5 s, ~3.1–3.8×) flips the
+end-to-end balance. The fast-solve re-run's trajectory still tracks the tessellated arm
+(median per-iteration rel. diff 7.5e-7, max 1.6e-3, same final design basin).
+
+Bounds on the gain (Amdahl): linear solves, XTK, GEN, and the deliberately-tessellated
+dRdp sweep are unchanged, so end-to-end speedup is smaller than the assembly-scope
+speedup. Higher-order / nonlinear assembly (where the GP loop dominates) should benefit
+more; a clean p=2/hyperelastic timing A/B has not been completed (the attempted bench runs
+were aborted by machine overload) and is the open measurement.
+
 ## Full-length production A/B (3D box-beam, 151 GCMMA iterations per arm)
 
 Beyond the 7-evaluation gate, two complete optimizations of the 3D frameless box-beam were
