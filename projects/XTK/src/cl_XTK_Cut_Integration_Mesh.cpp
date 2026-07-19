@@ -603,14 +603,19 @@ namespace moris::xtk
             mtk::EntityRank aEntityRank,
             moris_index     aDiscretizationIndex ) const
     {
+        // NOTE: this returns the local INDEX as the "global id" (get_index(), not get_id()),
+        // while the inverse query get_loc_entity_ind_from_entity_glb_id() is keyed by the
+        // REAL ids (mIntegrationVertexIdToIndexMap / mIntegrationCellIdToIndexMap), so the
+        // round trip is inconsistent and the answer collides across processors in parallel.
+        // See share/doc/Dev_XTK_Ids_And_Indices.dox; audit callers before changing to get_id().
         MORIS_ERROR( aEntityRank == mtk::EntityRank::NODE || aEntityRank == mtk::EntityRank::ELEMENT, "Only supported for nodes and cells" );
         if ( aEntityRank == mtk::EntityRank::NODE )
         {
-            return mIntegrationVertices( aEntityIndex )->get_id();
+            return mIntegrationVertices( aEntityIndex )->get_index();
         }
         else if ( aEntityRank == mtk::EntityRank::ELEMENT )
         {
-            return mIntegrationCells( aEntityIndex )->get_id();
+            return mIntegrationCells( aEntityIndex )->get_index();
         }
 
         else

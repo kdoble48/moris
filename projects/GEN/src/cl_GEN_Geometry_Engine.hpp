@@ -128,6 +128,17 @@ namespace moris::gen
         Vector< real >& get_advs();
 
         /**
+         * Gets the global ADV IDs owned by a named design's field, in coefficient order. Lets a
+         * caller (e.g. the SDF reinitialization workflow) write new coefficients into exactly that
+         * design's slice of the global ADV vector, leaving every other design's ADVs and all PDVs
+         * untouched -- avoiding the full distribute_advs() rebuild that desyncs FEM-coupled PDVs.
+         *
+         * @param aDesignName Name of the geometry/design (matches the "name" parameter)
+         * @return Determining ADV IDs of that design's field coefficients; empty if not found
+         */
+        Vector< sint > get_design_determining_adv_ids( const std::string& aDesignName );
+
+        /**
          * Get vector with ijkl IDs. All Ids are on proc 0, all others return empty vec
          *
          * @return vector of aijkl Ids
