@@ -67,6 +67,17 @@ run to 151 iterations each (~2h45m tessellated, ~2h53m fitted, both exit 0; 2026
   measured topology — 1 material component, 3 void components, 0 enclosed cavities;
   volume fraction 0.202238 (tess) vs 0.202249 (fit).
 
+Design evolution per arm (isosurface renders every 10 evaluations, with per-eval objective /
+strain energy and the objective trajectory):
+
+![Tessellated-rule arm: design evolution over 151 GCMMA
+evaluations](verification_moment_fitting_evolution_tess.png)
+
+![Moment-fitted arm: design evolution over 151 GCMMA
+evaluations](verification_moment_fitting_evolution_fit.png)
+
+Pixel-level identity check of the final designs (section slices):
+
 ![Final designs after 151 GCMMA iterations: tessellated rule (top) vs moment-fitted rule
 (bottom), four cross-sections and four elevations each](verification_moment_fitting_ab_designs.png)
 
