@@ -22,6 +22,7 @@ Don't re-derive what's already written — read the relevant doc first:
 | Coding style | `share/doc/Dev_Coding_Style.dox` + `.clang-format` (authoritative) |
 | Adding a library / executable / project | `share/doc/Dev_Adding_Libraries.dox`, `Dev_Adding_Executables.dox`, `Dev_Adding_Projects.dox` |
 | CMake details / known build-system debt | `share/doc/Dev_CMake_*.dox`, `CMAKE_AUDIT.md` |
+| Internal design notes / RFCs / reviews (new ones go here) | `doc/internal/` — never `share/doc/` (that is the Doxygen source tree) |
 | Architecture overview & workflows | `share/doc/Overview.dox`, `Modules.dox`, `Wrk_*_Workflow.dox`, `../.claude/rules/agent-knowledge-overview.md` |
 
 ## Day-one commands
