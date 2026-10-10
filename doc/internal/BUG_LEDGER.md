@@ -41,6 +41,33 @@ Missing features belong in a study's capability list, not here (exception: a mis
   3. It was then used unchecked as an index at `cl_XTK_Enriched_Integration_Mesh.cpp` (`tNoChildBlockSetOrds( tBulkPhaseIndex )`).
 - **Fix, v1 (rejected 2026-10-09):** a GEN tie-break treating such cells as positive. The run then completed, but the pad was **silently decoupled**: design strain energy exactly 0, and no `dbl_iside_p0_1_p1_2` set processed. A phase boundary along grid lines gets no interface facets (MB-010), so v1 traded a crash for a wrong answer.
 - **Fix, v2:** XTK stops with a `MORIS_ERROR` naming the cell and the remedy (shift the geometry off the grid lines). A `MORIS_ERROR` guard also sits before the block-set index. GEN is unchanged.
+- **Code** (commit 992639917):
+  ```diff
+  // projects/XTK/src/cl_XTK_Integration_Mesh_Generator.cpp — deduce_ig_cell_bulk_phase_from_facets()
+   if ( (uint)aCell->get_geometry_type() == 4 || (uint)aCell->get_geometry_type() == 2 )
+   {
+  -    return MORIS_INDEX_MAX - 1;      // sentinel != MORIS_INDEX_MAX, so the cell counted as "assigned"
+  +    MORIS_ERROR( false,
+  +            "Integration_Mesh_Generator::deduce_ig_cell_bulk_phase_from_facets() - every vertex of background cell %d "
+  +            "(id %d) lies on a geometry interface, so its bulk phase cannot be determined. [...] "
+  +            "Shift the geometry off the grid lines (e.g. by half a cell).",
+  +            aCell->get_index(), aCell->get_id() );
+   }
+
+  // projects/XTK/src/cl_XTK_Enriched_Integration_Mesh.cpp — setup_blockset_with_cell_clusters()
+   if ( tPrimarySubPhase > -1 )
+   {
+  +    MORIS_ERROR( tBulkPhaseIndex >= 0 && tBulkPhaseIndex < (moris_index)tNoChildBlockSetOrds.size(),
+  +            "... enriched IP cell %d has invalid bulk phase index %d (number of bulk phases: %d).", ... );
+       if ( tCluster.is_trivial() )
+       {
+           tSetOrd = tNoChildBlockSetOrds( tBulkPhaseIndex );   // was the segfault (index 2147483646)
+  ```
+  Upstream of it, GEN reports the undetermined phase (unchanged; `projects/GEN/src/cl_GEN_Geometry_Engine.cpp:546`):
+  ```cpp
+              // All vertices are (somehow) on the interface; return that this is a problem
+              return MORIS_INDEX_MAX;
+  ```
 - **Regression test:** `XTK/test/xtk/UT_Snapping.cpp` "Band One Cell Thick on Grid Lines 2d" `[Snapping_2d]`, expecting `CHECK_THROWS( perform_decomposition() )`.
 - **Workaround:** keep fixed-geometry faces off grid lines.
 
@@ -50,6 +77,28 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/triage_bridge/sweep_pad20_idx1/`, a bridge with the deck pad's top face on node row J=2. SWEEP ADVs 262/342/343/349: analytic −1.25e8/+1.31e8/+6.9e7/−6.4e6 vs central FD −6.93e-3/−7.00e-3/−2.69e-2/−6.2e-4. The control with the pad face at 2.5h (`sweep_pad25_an`) is clean.
 - **Root cause:** `FEM/INT/src/IWG/cl_FEM_IWG.cpp` `IWG::select_dRdp_FD_geometry_double` computed the perturbed node's ξ in the *leader* IP element and wrote it into the *follower* IG cell's parametric coefficients. That is only valid when both sides share one IP element. Across a cell edge (η = −1 vs +1) the follower point jumped a whole cell, giving an O(1) residual jump divided by δ ≈ 5.6e-9. GEN's dx/dφ was verified correct (the ADV ratio test matches, 1.90).
 - **Fix:** for conformal sets, the follower ξ comes from the follower IP geometry interpolator (`update_parametric_coordinates`). The nonconformal path is unchanged (see MB-006).
+- **Code** (commit 22c3c2799, `projects/FEM/INT/src/IWG/cl_FEM_IWG.cpp`, `IWG::select_dRdp_FD_geometry_double`):
+  ```diff
+   // xi of the perturbed node, computed in the LEADER IP element
+   tLeaderIPGI->update_parametric_coordinates( tXCoords, tXiCoords );
+
+   Matrix< DDRMat > tFollowerParamCoeffPert = tFollowerParamCoeff;
+  -tFollowerParamCoeffPert.get_row( iFollowerNode ) = tXiCoords.matrix_data();     // leader xi reused for the follower
+  +if ( tIsNonconformal )
+  +{
+  +    tFollowerParamCoeffPert.get_row( iFollowerNode ) = tXiCoords.matrix_data();  // unchanged, see MB-006
+  +}
+  +else
+  +{
+  +    // follower xi from the FOLLOWER IP element (differs when the facet lies on a background-cell edge)
+  +    Matrix< DDRMat > tFollowerXCoords  = tFollowerCoeffPert.get_row( iFollowerNode );
+  +    Matrix< DDRMat > tFollowerXiCoords = tFollowerParamCoeff.get_row( iFollowerNode );
+  +    tFollowerIPGI->update_parametric_coordinates( tFollowerXCoords, tFollowerXiCoords );
+  +    tFollowerParamCoeffPert.get_row( iFollowerNode ) = tFollowerXiCoords.matrix_data();
+  +}
+  ```
+  With leader η = −1 and follower η = +1 on a horizontal cell edge, the old line moved the follower Gauss point one
+  whole cell per FD perturbation (δ ≈ 5.6e-9), so dR/dp ≈ O(1)/δ ≈ 1e8.
 - **Verification to run:** the reproducer above; pass = analytic within ~1e-4 relative of FD, and Criteria norms drop from 1e7–1e8 to O(1).
 - **Regression test:** TODO, `FEM/INT/test/UT_FEM_IWG_Struc_Linear_Interface.cpp`, two-IP-element interface facet vs hand FD.
 - **Was misdiagnosed first** as "fixed geometry on the grid" and as the −2 static path (MB-003). The −1 re-test ruled the latter out.
@@ -59,6 +108,21 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Symptom:** once a static (ADV-free) user geometry's boundary becomes an exposed material interface, every `GCMMA - Criteria(N): norm = -nan`. The design freezes, with no error or warning.
 - **Reproducer:** moment_fitting p2 padded warm restart (`runs/studies/moment_fitting/phase1_p2_opt/deck/boxbeam3d_frameless_lean_p2.py`, pads with index −2). A/B: −1 is clean.
 - **Root cause (partial):** the analytic user-field path (`cl_GEN_User_Defined_Field`: FD `get_dfield_dcoordinates`, no `get_dfield_dadvs`) produces NaN in the intersection-node sensitivity chain.
+- **Code** (`projects/GEN/src/ADV/fields/cl_GEN_User_Defined_Field.cpp`): the analytic (−2) path differentiates the user
+  function by an internal FD with a fixed 1e-8 step and has no ADV sensitivity for ADV-free geometries. The NaN appears
+  somewhere in this chain (exact site not yet located):
+  ```cpp
+  void User_Defined_Field::get_dfield_dcoordinates( const Matrix< DDRMat >& aCoordinates, Matrix< DDRMat >& aSensitivities )
+  {
+      const real tPertubation = 1e-8;
+      Matrix< DDRMat > tCoordinates( aCoordinates );
+      for ( uint idim = 0; idim < aCoordinates.numel(); ++idim )
+      {
+          tCoordinates( idim ) += tPertubation;
+          real tFieldValue = this->get_field_value_user_defined( tCoordinates, mFieldVariables );
+          tCoordinates( idim ) -= 2.0 * tPertubation;
+          ...
+  ```
 - **Notes:** pymoris `add_user_geometry` defaults to −2, so every pymoris deck with fixed pads is exposed. Either fix GEN or make −2 error out for geometries without ADVs in optimization runs.
 - **Workaround:** `discretization_mesh_index = -1`. Memory note: gen-static-geometry-stored-field.
 
@@ -68,26 +132,51 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/X6_sweep/` (runB_fd, ADVs 417, 4015, 1103).
 - **Root cause:** not investigated.
 
+- **Code:** defect not located yet; add the excerpt when the root cause is found.
 ## MB-005 · OPT/HMR: adaptive refinement + optimization ADV drift
 - **Status:** open.
 - **Symptom:** abort with "incompatible matrix dimensions 1x4370 and 1x4374" in `opt::Problem::compute_design_criteria_gradients`. The B-spline ADV count changes between remeshes because the refinement pattern follows the evolving topology.
+- **Code** (`projects/OPT/src/cl_OPT_Problem.cpp:276-287`): the product fails when the ADV count of `get_dcriteria_dadv()`
+  changed after a remesh, while `mADVs` and the user callbacks still use the old count:
+  ```cpp
+  mObjectiveGradient =
+          this->compute_dobjective_dadv() +
+          this->compute_dobjective_dcriteria() * mInterface->get_dcriteria_dadv();   // 1x4370 * ... vs 1x4374
+  ```
 - **Reproducer:** seeding_impact deck family at 60×20 + refine-1 with remeshing (`studies/seeding_impact/FINDINGS.md`, S3-W2 it.70).
 - **Workaround:** a static uniform mesh.
 
 ## MB-006 · FEM: nonconformal FD geometry sensitivity copies the leader ξ (suspect)
 - **Status:** open (suspect, unverified).
 - **Symptom:** none observed yet. Found by reading `select_dRdp_FD_geometry_double` while fixing MB-002. In the nonconformal branch the follower node is not perturbed, but its parametric row is overwritten with the leader's ξ before the ray remap.
+- **Code** (`projects/FEM/INT/src/IWG/cl_FEM_IWG.cpp`, nonconformal branch kept as-is by the MB-002 fix): the follower
+  coordinates are not perturbed for nonconformal sets, but its parametric row is still overwritten with the LEADER's xi:
+  ```cpp
+  if ( tIsNonconformal )
+  {
+      // unchanged behavior for nonconformal sets (follower not perturbed; see the remapping below)
+      tFollowerParamCoeffPert.get_row( iFollowerNode ) = tXiCoords.matrix_data();
+  }
+  ```
 - **Owner:** whoever owns the nonconformal contact work (`feature/nonconformal-*`). Check whether the remap later overrides it; if not, this is MB-002's twin.
 
 ## MB-007 · FEM/VIS: IQI on zero sets writes silent zeros
 - **Status:** open (usability).
 - **Symptom:** a contact IQI (`GAP`, `CONTACT_PRESSURE_*`) missing `IQI_bulk_type = NONCONFORMAL_SIDESET` is matched to 0 sets (`nIQIonSet=0`). VIS writes uninitialized zeros and nothing warns.
+- **Code:** defect not located yet; add the excerpt when the root cause is found.
 - **Suggested fix:** warn or error when a VIS-requested IQI is evaluated on no set. Memory note: nonconformal-contact-iqis-zero-at-vis.
 
 ## MB-008 · FEM: no analytic dQ/du for the p-norm stress IQI
 - **Status:** open (limitation; it fails loudly, so it is kept here only because it forces whole-model FD).
 - **Symptom:** `IQI_Max_Stress::compute_dQIdu` calls `MORIS_ERROR("not implemented")` (`cl_FEM_IQI_Max_Stress.hpp:99-114`). Stress-constrained decks must set `is_analytical_forward = false`, which is slow in 3D.
 
+- **Code** (`projects/FEM/INT/src/IQI/cl_FEM_IQI_Max_Stress.hpp:99-114`):
+  ```cpp
+  void compute_dQIdu( real aWStar ) override
+  {
+      MORIS_ERROR( false, "IQI_Max_Stress::compute_dQIdu - not implemented." );
+  }
+  ```
 ## MB-009 · GEN: design factory ignores unbuilt dependencies
 - **Status:** fixed, commit a856e9c13 on `fix/xiga-deck-bugs` (2026-10-09); GEN suite passes (80101 assertions).
 - **Symptom:** `GEN does not recognize geometry type: level_set` (`cl_GEN_Design_Factory.cpp`) when a geometry with
@@ -98,6 +187,23 @@ Missing features belong in a study's capability list, not here (exception: a mis
   `level_set and tCanBuild`, so an unbuildable level set fell through to the error. The property branch had no check
   and would bind `mFields( tFieldIndex - 1 )` (the wrong field). Both erased `design_type` even when nothing was built.
 - **Fix:** build designs only `if ( exists( "design_type" ) and tCanBuild )`; the existing outer loop retries.
+- **Code** (commit a856e9c13, `projects/GEN/src/ADV/cl_GEN_Design_Factory.cpp`):
+  ```diff
+  -// Check if design needs building
+  -if ( iParameterList.exists( "design_type" ) )
+  +// Check if design needs building (only once its field dependencies exist; otherwise the outer loop retries it)
+  +if ( iParameterList.exists( "design_type" ) and tCanBuild )
+   {
+       ...
+  -    if ( tGeometryType == "level_set" and tCanBuild )      // false -> fell through to the error below
+  +    if ( tGeometryType == "level_set" )
+       { ... }
+       ...
+       else
+       {
+           MORIS_ERROR( false, "GEN does not recognize geometry type: %s", tGeometryType.c_str() );
+       }
+  ```
 - **Regression test:** `GEN/test/ut_GEN_Field.cpp` "Combined Field Declared Before Its Fields".
 
 ## MB-010 · XTK: phase boundary along background grid lines is not coupled
@@ -110,6 +216,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
   coincides with grid lines over whole cells adjacent to another non-cut phase.
 - **Root cause:** not investigated. Interface facets appear to come only from cut cells. Check whether XTK should emit
   facets on background edges shared by non-cut cells of different bulk phases.
+- **Code:** defect not located yet; add the excerpt when the root cause is found.
 - **Workaround:** keep static geometry boundaries off grid lines. MB-001 v2 now errors in the worst case (all vertices
   on the interface); partially grid-aligned boundaries are not detected yet.
 
@@ -128,6 +235,15 @@ Missing features belong in a study's capability list, not here (exception: a mis
   (∂R/∂x)·(h/3)/MEA·dMEA/dp for every PDV of the cluster. `IQI::add_cluster_measure_dQIdp_FD_geometry` has the same pattern.
   The elementwise bulk paths already reset (`cl_FEM_IWG.cpp` ~3422, `cl_FEM_IQI.cpp` ~2669).
 - **Fix:** `this->reset_eval_flags()` before the base evaluation in the two IWG routines and the IQI routine.
+- **Code** (commit 06515ef67): the same insertion in `IWG::add_cluster_measure_dRdp_FD_geometry`,
+  `IWG::add_cluster_measure_dRdp_FD_geometry_double` (`cl_FEM_IWG.cpp`) and `IQI::add_cluster_measure_dQIdp_FD_geometry`
+  (`cl_FEM_IQI.cpp`). The old comment already said "reset", but nothing reset:
+  ```diff
+   // reset, evaluate and store the residual for unperturbed case
+  +this->reset_eval_flags();     // CM/SP caches still held the last perturbed geometry
+   mSet->get_residual()( 0 ).fill( 0.0 );
+   this->compute_residual( aWStar );
+  ```
 - **Workaround:** FEM computation `finite_difference_scheme = POINT_3_CENTRAL` (no base point).
 - **Regression test:** TODO, forward vs central dR/dp on a Nitsche-interface facet with an active PDV (agree to 1e-6).
 
@@ -142,6 +258,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Root cause:** not investigated. Possibly nodal averaging with zero weight for nodes of material clusters that no
   material integration cell touches. Check whether non-finite output is intended as a "no value" marker; if it is, it
   should be documented and kept out of material nodes.
+- **Code:** defect not located yet; add the excerpt when the root cause is found.
 - **Workaround:** mask non-finite values in post-processing (`scripts/lbracket_peak.py`).
 
 ---
@@ -154,6 +271,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Reproducer:** durable path (deck/run dir/unit test) + the minimal config that triggers it
 - **Root cause:** file:line and the data condition (or "not investigated")
 - **Fix:** what changed (commit), and why that is the right place
+- **Code:** the offending lines (open) or a trimmed `diff` of the fix hunk (fixed), with file:line / commit
 - **Regression test:** test file + tag
 - **Workaround:** deck-level avoidance, if any
 ```
