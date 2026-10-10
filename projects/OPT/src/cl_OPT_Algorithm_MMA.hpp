@@ -102,8 +102,14 @@ namespace moris::opt
                                                          ///< proven regimes needlessly perturbs the trajectory
         static constexpr real sObjGradTarget = 1.0e8;    ///< decade-quantized scale brings max into (1e7, 1e8]
 
+        /** true if the objective and all constraints are finite */
+        bool all_finite( real aF0, const std::vector< double >& aF ) const;
+
         /** true if the current trial criteria (f0valnew, fvalnew) are all finite */
         bool criteria_finite() const;
+
+        /** true if the approximations f0app, fapp bound the trial criteria from above (GCMMA conservatism) */
+        bool is_conservative() const;
 
         /** outcome of the NaN-guard backtrack on a trial design */
         enum class Trial_Status
@@ -124,7 +130,7 @@ namespace moris::opt
          * Re-evaluate the accepted design xval after a rejected iteration. Every failed trial evaluation has
          * overwritten the shared Problem (ADVs, geometry, analysis, criteria) that the Manager reads; this restores
          * a state consistent with the design the optimizer holds (MB-024). Returns false if the restore evaluation
-         * requested a restart or was itself non-finite.
+         * requested a restart; a non-finite restore is a MORIS_ERROR (the evaluation is not reproducible).
          */
         bool restore_accepted_state( int aIter, int& aNumFunc );
 
