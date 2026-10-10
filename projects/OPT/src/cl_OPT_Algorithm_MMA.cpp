@@ -114,6 +114,10 @@ namespace moris::opt
         Vector< real > tADVs( mNumVar );
         for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = aX[ i ];
 
+        // Write the restart file for this design, as the TPL GCMMA wrapper does before every
+        // criteria evaluation (MB-016: the native port wrote none, so no warm restart was possible)
+        this->write_advs_to_file( tADVs );
+
         this->compute_design_criteria( tADVs );
 
         aF0 = mObjScale * this->get_objectives()( 0 );
