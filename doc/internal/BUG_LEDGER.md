@@ -9,7 +9,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - Every fix commit message cites its ID (`fix(XTK): ... [MB-001]`) and the entry records the commit and the regression test.
 - Status: `open` → `fix-written` (on a branch, not yet verified) → `fixed` (built, regression test + original
   reproducer pass) → `merged` (on `develop` of the fork). `wontfix`/`not-a-bug` with a reason.
-- Reproducers point at durable paths (`runs/...` decks, unit tests). Workspace agents read this file before triage
+- Reproducers point at durable paths (`runs/...` decks, unit tests). **Evidence bundles** (pathology figure from the real output, log excerpt, copies of the small raw artifacts) live in `runs/moris_bugs/MB-NNN/` and are rebuilt by `studies/lunch_and_learn_xiga/scripts/build_bug_evidence.py`; add a builder function for each new bug. Workspace agents read this file before triage
   (`.claude/rules/moris-bug-ledger.md`).
 
 ## Index
@@ -33,6 +33,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-001 · XTK segfault: cell with every vertex on an interface
 - **Status:** fixed, commit 992639917 on `fix/xiga-deck-bugs` (2026-10-09). Verified: the regression test passes and the original reproducer now stops with the new error instead of a SIGSEGV (`runs/studies/lunch_and_learn_xiga/MB001_repro_v2`); the full XTK/GEN/INT suites pass.
+- **Evidence:** `runs/moris_bugs/MB-001/` — `v2_error_excerpt.txt` (the clean error), `why_not_a_tiebreak_decoupled_pads.png`.
 - **Symptom:** SIGSEGV "Address not mapped" in `xtk::Enriched_Integration_Mesh::setup_blockset_with_cell_clusters()` at GCMMA iteration 1, right after "XTK - Enriched Integration Mesh - Construction". Opt build only.
 - **Reproducer:** `studies/lunch_and_learn_xiga/decks/mbb_levelset.py`, MBB with `"elements": [60, 20]` and on-grid pads (no `pad_offgrid`), config `runs/studies/lunch_and_learn_xiga/configs/MB001_repro.json`. The two fixed pads are exactly 2×1 cells with every face on a grid line.
 - **Root cause:**
@@ -73,6 +74,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-002 · FEM: follower parametric coordinates in double-sided FD geometry sensitivities
 - **Status:** fixed, commit 22c3c2799 (2026-10-09); the 1e8 defect is gone. The remaining 0.5–15% error near the interface is a separate defect (MB-011), also present in the off-grid pad25 control. After the fix the reproducer gives ADVs 262/342/343/349 = −6.58e-3/−6.64e-3/−2.64e-2/−6.93e-4 vs FD −6.93e-3/−7.00e-3/−2.68e-2/−6.21e-4: the 1e8 spikes are gone, signs and magnitudes are right, but 1.7–12% error remains on the grid-aligned interface row. The residual is under investigation (candidates: follower point leaving its element during the FD step, ghost facets on cell edges, the step size chosen from the leader only).
+- **Evidence:** `runs/moris_bugs/MB-002/` — `gradient_vs_fd.png` (before/after bars), `bridge_strain_energy_history.png` + `bridge_v1_designs_*.png` (the optimization pathology), raw SWEEP hdf5 ×3, deck + config.
 - **Symptom:** analytic d(strain energy)/dADV of order 1e7–1e8, sometimes with the wrong sign, for ADVs whose intersection nodes sit on a double-sided interface facet lying along a background-cell edge. Volume and perimeter gradients are fine, because they use explicit FD and don't go through λᵀ∂R/∂p. No NaN and no warning; GCMMA climbs and topology degrades.
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/triage_bridge/sweep_pad20_idx1/`, a bridge with the deck pad's top face on node row J=2. SWEEP ADVs 262/342/343/349: analytic −1.25e8/+1.31e8/+6.9e7/−6.4e6 vs central FD −6.93e-3/−7.00e-3/−2.69e-2/−6.2e-4. The control with the pad face at 2.5h (`sweep_pad25_an`) is clean.
 - **Root cause:** `FEM/INT/src/IWG/cl_FEM_IWG.cpp` `IWG::select_dRdp_FD_geometry_double` computed the perturbed node's ξ in the *leader* IP element and wrote it into the *follower* IG cell's parametric coefficients. That is only valid when both sides share one IP element. Across a cell edge (η = −1 vs +1) the follower point jumped a whole cell, giving an O(1) residual jump divided by δ ≈ 5.6e-9. GEN's dx/dφ was verified correct (the ADV ratio test matches, 1.90).
@@ -105,6 +107,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-003 · GEN: analytic static user geometry poisons design gradients with NaN
 - **Status:** open (deck workaround known).
+- **Evidence:** `runs/moris_bugs/MB-003/` — none yet (logs not found; README says how to rebuild it).
 - **Symptom:** once a static (ADV-free) user geometry's boundary becomes an exposed material interface, every `GCMMA - Criteria(N): norm = -nan`. The design freezes, with no error or warning.
 - **Reproducer:** moment_fitting p2 padded warm restart (`runs/studies/moment_fitting/phase1_p2_opt/deck/boxbeam3d_frameless_lean_p2.py`, pads with index −2). A/B: −1 is clean.
 - **Root cause (partial):** the analytic user-field path (`cl_GEN_User_Defined_Field`: FD `get_dfield_dcoordinates`, no `get_dfield_dadvs`) produces NaN in the intersection-node sensitivity chain.
@@ -128,6 +131,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-004 · FEM: perimeter adjoint mismatch
 - **Status:** open.
+- **Evidence:** `runs/moris_bugs/MB-004/` — `perimeter_gradient_table.md` (pre-MB-011 mismatches), raw SWEEP, post-MB-011 diagnostic logs.
 - **Symptom:** X6 SWEEP at the MBB seed. Strain-energy and volume adjoints match central FD (≤ 6.5e-5, ~1e-8). The perimeter criterion (`IQI VOLUME` on `iside_*` sets) is off by 12%, 18% and 150% on 3 of 12 ADVs. FD is stable to 4 digits over steps 1e-5 to 1e-7. The absolute size is ~1e-4 of the largest perimeter gradient.
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/X6_sweep/` (runB_fd, ADVs 417, 4015, 1103).
 - **Root cause:** not investigated.
@@ -135,6 +139,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Code:** defect not located yet; add the excerpt when the root cause is found.
 ## MB-005 · OPT/HMR: adaptive refinement + optimization ADV drift
 - **Status:** open.
+- **Evidence:** `runs/moris_bugs/MB-005/` — `crash_excerpt.txt` (the abort with matrix sizes).
 - **Symptom:** abort with "incompatible matrix dimensions 1x4370 and 1x4374" in `opt::Problem::compute_design_criteria_gradients`. The B-spline ADV count changes between remeshes because the refinement pattern follows the evolving topology.
 - **Code** (`projects/OPT/src/cl_OPT_Problem.cpp:276-287`): the product fails when the ADV count of `get_dcriteria_dadv()`
   changed after a remesh, while `mADVs` and the user callbacks still use the old count:
@@ -208,6 +213,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-010 · XTK: phase boundary along background grid lines is not coupled
 - **Status:** open (found 2026-10-09 while verifying MB-001 v1).
+- **Evidence:** `runs/moris_bugs/MB-010/` — `decoupled_pads_ux.png` (design carries nothing), `v1_log_excerpt.txt` (SE design = 0, no dbl_iside set), raw exodus.
 - **Symptom:** two phases meet along background-cell edges (e.g. a fixed pad whose faces lie exactly on grid lines,
   next to non-cut design cells). No double-sided interface facets are created there, so an interface IWG (Nitsche) has
   no set to act on. The phases separate silently: in the MB-001 reproducer with the tie-break, design strain energy was
@@ -222,6 +228,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-011 · FEM: stale CM/SP caches in cluster-measure FD geometry sensitivities
 - **Status:** fixed, commit 06515ef67 (2026-10-10). Falsifier (unfixed binary, central FD): 262/342/343/349 within 8.5e-5/1.4e-4/4.4e-6/9.6e-4 of FD, as
+- **Evidence:** `runs/moris_bugs/MB-011/` — `gradient_vs_fd.png`, falsifier + verification logs, pad25 control SWEEP before/after.
   predicted. After the fix (default forward FD): the same, and the pad25 control is within 1e-5..1e-3 (was 15%). INT suite passes.
   Logs: `runs/studies/lunch_and_learn_xiga/queue/logs/005_mb011_falsify.log`, `007_build_mb011.log`.
 - **Symptom:** the analytic objective gradient is off by 0.5–15% on ADVs next to a Nitsche interface whose stabilization
@@ -249,6 +256,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ## MB-012 · VIS: non-finite nodal output values
 - **Status:** open (found 2026-10-10).
+- **Evidence:** `runs/moris_bugs/MB-012/` — `nonfinite_nodes_x9.png` (non-finite nodes trace every hole boundary), raw VIS exodus + GEN field.
 - **Symptom:** nodal IQI fields in the STANDARD VIS exodus (UX, UY, VM) are non-finite at 11–15% of nodes: X9 MBB
   917/5946, stress demo 409/3735, X18 1605/14667. Of X9's 917, 793 lie in the void (φ < 0) but 124 have φ ≥ 0.
   Post-processing that takes a max without masking returns NaN; this broke the first X18 σ* calibration
@@ -269,6 +277,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Status:** open | fix-written (<branch>, <date>) | fixed (<commit>) | merged | wontfix (<why>)
 - **Symptom:** what the user sees; exact error text or log signature
 - **Reproducer:** durable path (deck/run dir/unit test) + the minimal config that triggers it
+- **Evidence:** `runs/moris_bugs/MB-NNN/`: pathology figure, log excerpt, raw artifacts (copied, so cleanups can't delete them)
 - **Root cause:** file:line and the data condition (or "not investigated")
 - **Fix:** what changed (commit), and why that is the right place
 - **Code:** the offending lines (open) or a trimmed `diff` of the fix hunk (fixed), with file:line / commit
