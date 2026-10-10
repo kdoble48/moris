@@ -139,6 +139,21 @@ namespace moris::gen
         Vector< sint > get_design_determining_adv_ids( const std::string& aDesignName );
 
         /**
+         * Gets the names of all designs (geometries and properties) discretized with discretization_mode = "additive".
+         *
+         * @return Names of additively discretized designs (empty if none)
+         */
+        Vector< std::string > get_additive_discretized_design_names() const;
+
+        /**
+         * Gets whether any design (geometry or property) is discretized with discretization_mode = "additive".
+         * Such designs are incompatible with HMR remeshing and level-set reinitialization.
+         *
+         * @return true if at least one design is discretized additively
+         */
+        bool has_additive_discretized_designs() const;
+
+        /**
          * Get vector with ijkl IDs. All Ids are on proc 0, all others return empty vec
          *
          * @return vector of aijkl Ids

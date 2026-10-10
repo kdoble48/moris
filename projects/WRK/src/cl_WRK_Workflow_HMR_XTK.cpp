@@ -98,6 +98,44 @@ namespace moris::wrk
                 mPerformerManager->mReinitializePerformer( 0 ) = std::make_shared< wrk::Reinitialize_Performer >( mPerformerManager->mLibrary );
             }
         }
+
+        // Additive discretization (field + B-spline correction) cannot be remapped by remeshing or reinitialization
+        this->check_additive_discretization_compatibility();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Workflow_HMR_XTK::check_additive_discretization_compatibility()
+    {
+        // Same activity conditions as perform(): remeshing performer built / reinitialize performer built
+        bool tRemeshingActive      = mPerformerManager->mRemeshingMiniPerformer( 0 ) != nullptr;
+        bool tReinitializingActive = mPerformerManager->mReinitializePerformer.size() > 0;
+
+        if ( not( tRemeshingActive or tReinitializingActive ) )
+        {
+            return;
+        }
+
+        Vector< std::string > tAdditiveDesigns = mPerformerManager->mGENPerformer( 0 )->get_additive_discretized_design_names();
+
+        if ( tAdditiveDesigns.size() > 0 )
+        {
+            std::string tDesignList;
+            for ( const std::string& iName : tAdditiveDesigns )
+            {
+                tDesignList += ( tDesignList.empty() ? "" : ", " ) + iName;
+            }
+
+            MORIS_ERROR( false,
+                    "Workflow_HMR_XTK - design(s) [%s] use discretization_mode = \"additive\", which is incompatible with %s%s%s: "
+                    "the analytic field + B-spline correction split is not preserved when the field is remapped. "
+                    "Use discretization_mode = \"replace\" or disable remeshing / reinitialization.",
+                    tDesignList.c_str(),
+                    tRemeshingActive ? "HMR remeshing" : "",
+                    tRemeshingActive and tReinitializingActive ? " and " : "",
+                    tReinitializingActive ? "level-set reinitialization" : "" );
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------

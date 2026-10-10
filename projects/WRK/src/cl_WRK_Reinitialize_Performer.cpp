@@ -160,6 +160,10 @@ namespace moris::wrk
         auto itr = std::find_if( tGENFields.begin(), tGENFields.end(), [ & ]( std::shared_ptr< mtk::Field > const & aFiled )    //
                 { return aFiled->get_label() == mADVFiledName; } );
 
+        MORIS_ERROR( itr != tGENFields.end(),
+                "Reinitialize_Performer::perform() - GEN provides no MTK field named \"%s\" to reinitialize.",
+                mADVFiledName.c_str() );
+
         // find the index of the adv field
         moris_index tADVFieldIndex = std::distance( tGENFields.begin(), itr );
 

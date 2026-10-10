@@ -74,6 +74,12 @@ namespace moris
             /// the design-variable change between reinits for the wean-off decision
             Vector< real > mPrevReinitADVs;
 
+            /**
+             * Errors if any GEN design uses discretization_mode = "additive" while HMR remeshing or level-set
+             * reinitialization is active (the additive field split cannot be remapped).
+             */
+            void check_additive_discretization_compatibility();
+
           public:
             //------------------------------------------------------------------------------
             /**

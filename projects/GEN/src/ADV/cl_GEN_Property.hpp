@@ -145,6 +145,13 @@ namespace moris::gen
         bool intended_discretization() override;
 
         /**
+         * Gets if this design is discretized additively (analytic field + B-spline correction).
+         *
+         * @return Additive discretization flag
+         */
+        bool uses_additive_discretization() const override;
+
+        /**
          * Gets a discretization mesh index for a discretized field.
          *
          * @return Mesh index

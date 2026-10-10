@@ -205,7 +205,7 @@ namespace moris::prm
         aDesignParameterList.insert( "discretization_lower_bound", -1.0 );        // Lower bound of level set field (if bspline_mesh_index >= 0)
         aDesignParameterList.insert( "discretization_upper_bound", 1.0 );         // Upper bound of level set field (if bspline_mesh_index >= 0)
         aDesignParameterList.insert( "use_multilinear_interpolation", false );    // Whether to use multilinear interpolation for derived node field values
-        aDesignParameterList.insert( "discretization_mode", "replace" );          // "replace": B-spline field replaces the field; "additive": field + zero-initialized B-spline correction
+        aDesignParameterList.insert( "discretization_mode", "replace" );          // "replace": B-spline field replaces the field; "additive": field + zero-initialized B-spline correction; additive is incompatible with HMR remeshing and level-set reinitialization (MORIS_ERROR at workflow init)
     }
 
     /**
