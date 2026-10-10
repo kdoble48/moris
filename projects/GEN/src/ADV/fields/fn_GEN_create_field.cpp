@@ -238,10 +238,10 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
-    Vector< char > get_active_parameter_ids( const Parameter_List& aFieldParameterList )
+    Vector< sint > get_active_parameter_ids( const Parameter_List& aFieldParameterList )
     {
         // Vector of parameter IDs
-        Vector< char > tParameterIDs;
+        Vector< sint > tParameterIDs;
 
         // Loop over all parameters
         for ( const auto& iParameter : aFieldParameterList )
