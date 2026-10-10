@@ -3833,6 +3833,7 @@ namespace moris::fem
 
         // get the follower GI for the IG and IP element considered
         Geometry_Interpolator* tFollowerIGGI = mSet->get_field_interpolator_manager( mtk::Leader_Follower::FOLLOWER )->get_IG_geometry_interpolator();
+        Geometry_Interpolator* tFollowerIPGI = mSet->get_field_interpolator_manager( mtk::Leader_Follower::FOLLOWER )->get_IP_geometry_interpolator();
 
         // get the leader residual dof type index in the set
         uint const tLeaderResDofIndex         = mSet->get_dof_index_for_type( mResidualDofType( 0 )( 0 ), mtk::Leader_Follower::LEADER );
@@ -3996,10 +3997,25 @@ namespace moris::fem
                         Matrix< DDRMat > tXiCoords = tLeaderParamCoeff.get_row( iLeaderNode );
                         tLeaderIPGI->update_parametric_coordinates( tXCoords, tXiCoords );
 
-                        Matrix< DDRMat > tLeaderParamCoeffPert           = tLeaderParamCoeff;
-                        tLeaderParamCoeffPert.get_row( iLeaderNode )     = tXiCoords.matrix_data();
-                        Matrix< DDRMat > tFollowerParamCoeffPert         = tFollowerParamCoeff;
-                        tFollowerParamCoeffPert.get_row( iFollowerNode ) = tXiCoords.matrix_data();
+                        Matrix< DDRMat > tLeaderParamCoeffPert       = tLeaderParamCoeff;
+                        tLeaderParamCoeffPert.get_row( iLeaderNode ) = tXiCoords.matrix_data();
+                        Matrix< DDRMat > tFollowerParamCoeffPert     = tFollowerParamCoeff;
+                        if ( tIsNonconformal )
+                        {
+                            // unchanged behavior for nonconformal sets (follower not perturbed; see the remapping below)
+                            tFollowerParamCoeffPert.get_row( iFollowerNode ) = tXiCoords.matrix_data();
+                        }
+                        else
+                        {
+                            // The follower node's parametric coordinates must come from the FOLLOWER IP element. Reusing the
+                            // leader's is only correct when both sides share one IP element; for an interface facet lying on
+                            // a background-cell edge (leader and follower in different IP elements) it moved the follower
+                            // point by a whole cell and gave dR/dp errors of ~1e8 (lunch_and_learn_xiga B12).
+                            Matrix< DDRMat > tFollowerXCoords  = tFollowerCoeffPert.get_row( iFollowerNode );
+                            Matrix< DDRMat > tFollowerXiCoords = tFollowerParamCoeff.get_row( iFollowerNode );
+                            tFollowerIPGI->update_parametric_coordinates( tFollowerXCoords, tFollowerXiCoords );
+                            tFollowerParamCoeffPert.get_row( iFollowerNode ) = tFollowerXiCoords.matrix_data();
+                        }
 
                         tLeaderIGGI->set_space_param_coeff( tLeaderParamCoeffPert );
                         tFollowerIGGI->set_space_param_coeff( tFollowerParamCoeffPert );
