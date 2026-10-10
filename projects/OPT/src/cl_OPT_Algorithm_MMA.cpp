@@ -169,6 +169,12 @@ namespace moris::opt
             MORIS_LOG_INFO( "Native MMA: objective scale -> %.1e (raw max|df0dx| = %.4e).",
                     tNewScale, tRawMax );
             f0val    *= tNewScale / mObjScale;
+            // in-place redistance mode: keep the conservatism weight consistent with the objective's scale,
+            // so a scale change does not jump the approximation's curvature (raa0 is in objective units)
+            if ( mReinitHook )
+            {
+                raa0 *= tNewScale / mObjScale;
+            }
             mObjScale = tNewScale;
         }
 
@@ -313,6 +319,7 @@ namespace moris::opt
                 tSumSp += tSp;
                 if ( tSp < 0.05 ) tLocked++;
             }
+            mNumLocked = tLocked;
             MORIS_LOG_INFO( "MMA asymptote spread iter %d: min=%.4f mean=%.4f max=%.4f | %d/%d vars at floor (locked)",
                     iter, tMinSp, tSumSp / (real)mNumVar, tMaxSp, tLocked, mNumVar );
         }
@@ -444,8 +451,9 @@ namespace moris::opt
         for ( int i = 0; i < mNumVar; ++i )
         {
             double rex   = df0dx[ i ] - xsi[ i ] + eta[ i ];
-            double rexsi = xsi[ i ] * ( xmma[ i ] - xmin[ i ] );
-            double reeta = eta[ i ] * ( xmax[ i ] - xmma[ i ] );
+            // complementarity at the committed design xval (== xmma unless the in-place redistance moved it)
+            double rexsi = xsi[ i ] * ( xval[ i ] - xmin[ i ] );
+            double reeta = eta[ i ] * ( xmax[ i ] - xval[ i ] );
 
             for ( int j = 0; j < mNumCon; ++j ) rex += dfdx[ j ][ i ] * lam[ j ];
 
@@ -908,6 +916,14 @@ namespace moris::opt
             return istop;
         }
 
+        // in-place redistance mode: the initial evaluation may have redistanced the design; start from the
+        // redistanced point so the gradient call sees the ADVs the criteria were computed for (MB-013: the
+        // consistency assert in Problem::compute_design_criteria_gradients fired here)
+        if ( mReinitHook && (int)mLastRedistanced.size() == mNumVar )
+        {
+            for ( int i = 0; i < mNumVar; ++i ) xval[ i ] = mLastRedistanced[ i ];
+        }
+
         this->grad( xval.data() );
         nfunc++; nsens++;
 
@@ -1028,6 +1044,28 @@ namespace moris::opt
                 xold2[ i ] = xold1[ i ];
                 xold1[ i ] = xval[ i ];
                 xval[ i ]  = tUseRedist ? mLastRedistanced[ i ] : xmma[ i ];
+            }
+
+            // Warm restart across the redistance: express the optimizer's history in the redistanced
+            // coordinates. The redistance R leaves the zero contour (hence the criteria) unchanged, so it
+            // is not a step: shift xold1, xold2 and the asymptotes by delta = R(xmma) - xmma, AFTER the
+            // rotation. asymp() then sees x_k - x_{k-1} = xmma - phi_{k-1} (the subproblem's own step) and
+            // keeps xold1 - low / upp - xold1 exactly. Without the shift, far-field redistance jumps
+            // (0.1-0.15 vs a 0.015 move limit) drive the oscillation test and collapse the asymptotes
+            // onto the floor (measured: 641/4961 variables locked after 26 iterations).
+            // Design note: runs/studies/lunch_and_learn_xiga (2026-10-10), MB-013.
+            if ( tUseRedist && mShiftHistory )
+            {
+                for ( int i = 0; i < mNumVar; ++i )
+                {
+                    const double tDelta = xval[ i ] - xmma[ i ];
+                    xold1[ i ] += tDelta;
+                    xold2[ i ] += tDelta;
+                    low[ i ] += tDelta;
+                    upp[ i ] += tDelta;
+                    MORIS_ASSERT( low[ i ] < xval[ i ] && xval[ i ] < upp[ i ],
+                            "Native MMA: asymptotes on the wrong side of the redistanced design (variable %d).", i );
+                }
             }
             f0val = f0valnew;
             for ( int j = 0; j < mNumCon; ++j ) fval[ j ] = fvalnew[ j ];
