@@ -135,6 +135,10 @@ namespace moris::opt
         {
             mLastRedistanced.assign( mNumVar, 0.0 );
             for ( int i = 0; i < mNumVar; ++i ) mLastRedistanced[ i ] = tADVs( i );
+
+            // rewrite this iteration's restart file with the redistanced design the criteria were evaluated at, so
+            // checkpoints (and restarts) hold phi = R(psi) rather than the raw trial point psi (written above)
+            this->write_advs_to_file( tADVs );
         }
     }
 
