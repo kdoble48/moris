@@ -274,11 +274,15 @@ namespace moris::opt
             // Compute gradients of design criteria at current evaluation point
             if ( mEvaluateObjectiveGradients or mEvaluateConstraintGradients )
             {
-                // Analytical gradients, always: they are the reference every finite difference scheme is checked against
-                this->set_sensitivity_analysis_type( SA_Type::analytical );
-                this->compute_design_criteria_gradients( tEvaluationPoint );
-                this->evaluate_objective_gradients( tEvaluationName + " analytical" );
-                this->evaluate_constraint_gradients( tEvaluationName + " analytical" );
+                // Get analytical gradients if requested; a single finite difference mode is FD-only, so it can check
+                // decks whose analytic sensitivities are unavailable or expensive
+                if ( mFiniteDifferenceType == "none" or mFiniteDifferenceType == "all" )
+                {
+                    this->set_sensitivity_analysis_type( SA_Type::analytical );
+                    this->compute_design_criteria_gradients( tEvaluationPoint );
+                    this->evaluate_objective_gradients( tEvaluationName + " analytical" );
+                    this->evaluate_constraint_gradients( tEvaluationName + " analytical" );
+                }
 
                 // Perform finite difference sensitivity analysis for different perturbation sizes
                 for ( uint tEpsilonIndex = 0; tEpsilonIndex < tTotalEpsilons and mFiniteDifferenceType != "none"; tEpsilonIndex++ )

@@ -194,11 +194,30 @@ namespace moris::opt
     //------------------------------------------------------------------------------
 
     bool
+    Algorithm_MMA::all_finite( real aF0, const std::vector< double >& aF ) const
+    {
+        if ( !std::isfinite( aF0 ) ) return false;
+        for ( int j = 0; j < mNumCon; ++j )
+            if ( !std::isfinite( aF[ j ] ) ) return false;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
     Algorithm_MMA::criteria_finite() const
     {
-        if ( !std::isfinite( f0valnew ) ) return false;
+        return this->all_finite( f0valnew, fvalnew );
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::is_conservative() const
+    {
+        if ( ( f0app + epsimin ) < f0valnew ) return false;
         for ( int j = 0; j < mNumCon; ++j )
-            if ( !std::isfinite( fvalnew[ j ] ) ) return false;
+            if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) return false;
         return true;
     }
 
@@ -267,15 +286,14 @@ namespace moris::opt
             return false;
         }
 
-        bool tFinite = std::isfinite( tF0 );
-        for ( int j = 0; j < mNumCon; ++j ) tFinite = tFinite && std::isfinite( tF[ j ] );
-        if ( !tFinite )
-        {
-            MORIS_LOG_WARNING( "Native MMA iter %d: the accepted design no longer evaluates to finite criteria; "
-                               "stopping the optimization.",
-                    aIter );
-        }
-        return tFinite;
+        // the accepted design evaluated finite when it was committed; failing now means the evaluation is not
+        // reproducible. Fail loudly (nonzero exit for the run sentinels) rather than iterate on an unevaluable design
+        MORIS_ERROR( this->all_finite( tF0, tF ),
+                "Native MMA iter %d: the accepted design no longer evaluates to finite criteria; restart from the last "
+                "checkpoint.",
+                aIter );
+
+        return true;
     }
 
     //------------------------------------------------------------------------------
@@ -1061,16 +1079,10 @@ namespace moris::opt
                 return istop;
             }
 
-            int conserv = 1;
-            if ( tTrialStatus == Trial_Status::finite )
-            {
-                if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
-                for ( int j = 0; j < mNumCon; ++j )
-                    if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) conserv = 0;
-            }
+            bool tConservative = tTrialStatus == Trial_Status::finite && this->is_conservative();
 
             int innerit = 0;
-            while ( tTrialStatus == Trial_Status::finite && conserv == 0 && innerit < mMaxInnerIter )
+            while ( tTrialStatus == Trial_Status::finite && !tConservative && innerit < mMaxInnerIter )
             {
                 innerit++;
                 this->raaupdate();
@@ -1096,10 +1108,7 @@ namespace moris::opt
                     break;
                 }
 
-                conserv = 1;
-                if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
-                for ( int j = 0; j < mNumCon; ++j )
-                    if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) conserv = 0;
+                tConservative = this->is_conservative();
             }
 
             if ( tTrialStatus == Trial_Status::failed )
@@ -1108,7 +1117,7 @@ namespace moris::opt
                 // shared Problem state, so re-evaluate xval before continuing; the Manager reads that state (MB-024)
                 if ( !this->restore_accepted_state( iter, nfunc ) )
                 {
-                    return mProblem->restart_optimization() ? istop : 1;
+                    return istop;    // restart requested
                 }
                 MORIS_LOG_INFO( "Native MMA iter %d: holding previous design and continuing.", (int)iter );
                 continue;

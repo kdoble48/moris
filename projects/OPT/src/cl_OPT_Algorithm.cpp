@@ -13,6 +13,8 @@
 
 #include "fn_linspace.hpp"
 
+#include <cmath>
+
 namespace moris::opt
 {
 
@@ -325,12 +327,17 @@ namespace moris::opt
                 return;
             }
             case opt::SA_Type::backward:
-            {
-                mFiniteDifferenceEpsilons = -1.0 * mFiniteDifferenceEpsilons;
-                [[fallthrough]];
-            }
             case opt::SA_Type::forward:
             {
+                // the perturbation sign selects the scheme; set it absolutely (backward -|eps|, forward +|eps|). Negating
+                // in place toggled the sign on every backward call, so a sweep over several epsilons or evaluation points
+                // alternated between the schemes and saved them under the wrong labels (MB-026)
+                const real tSign = aType == opt::SA_Type::backward ? -1.0 : 1.0;
+                for ( uint iEntry = 0; iEntry < mFiniteDifferenceEpsilons.numel(); iEntry++ )
+                {
+                    mFiniteDifferenceEpsilons( iEntry ) = tSign * std::abs( mFiniteDifferenceEpsilons( iEntry ) );
+                }
+
                 compute_design_criteria_gradients_by_type = &Algorithm::compute_design_criteria_gradients_fd_fwbw;
                 get_objective_gradients_by_type           = &Algorithm::get_objective_gradients_by_fd;
                 get_constraint_gradients_by_type          = &Algorithm::get_constraint_gradients_by_fd;
