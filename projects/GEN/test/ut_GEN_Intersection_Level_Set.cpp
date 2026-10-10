@@ -391,6 +391,18 @@ namespace moris::gen
                 CHECK_EQUAL(
                         tNodeManager.get_coordinate_determining_adv_ids_from_derived_node( iNodeIndex ),
                         tIntersectionIDs( iNodeIndex - 9 ), );
+
+                // MB-022: the sensitivities are linear in the incoming chain factor, D(A) = A * D(I), at every
+                // nesting depth. A non-commuting A also checks the order of the recursive product (A * J, not J * A).
+                // Nodes 21 and 22 have intersection-node parents; before the fix they ignored A in the parent terms.
+                Matrix< DDRMat > tChainFactor = { { 1.0, 2.0 }, { -3.0, 0.5 } };
+                Matrix< DDRMat > tFactoredSensitivities;
+                tNodeManager.append_dcoordinate_dadv_from_derived_node( iNodeIndex, tFactoredSensitivities, tChainFactor );
+                Matrix< DDRMat > tExpectedFactoredSensitivities = tChainFactor * tHostADVSensitivities;
+                CHECK_EQUAL(
+                        tFactoredSensitivities,
+                        tExpectedFactoredSensitivities,
+                        1E8, );
             }
 
             //------------------------------------------------------------------------------------------------------
