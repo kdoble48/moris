@@ -223,8 +223,12 @@ namespace moris::gen
                         aBackgroundNodes( iBackgroundNode )->get_global_coordinates() );
             }
 
-            // Scale element level set field such that norm equals 1.0
-            real tPhiScaling = 1.0 / norm( tPhiBCNodes );
+            // Scale element level set field such that norm equals 1.0. If every corner value is zero, the multilinear
+            // field vanishes on the whole cell (all corners on a zero isocontour, e.g. an order-2 field whose nonzero
+            // values sit only at mid-side and interior nodes): 1/0 would turn every scaled value into NaN (MB-020), so
+            // leave the values unscaled; the checks below then classify the edge (no sign change / coincident parents).
+            real tPhiNorm    = norm( tPhiBCNodes );
+            real tPhiScaling = tPhiNorm > MORIS_REAL_MIN ? 1.0 / tPhiNorm : 1.0;
             tPhiBCNodes      = tPhiScaling * tPhiBCNodes;
             tIsocontourThreshold *= tPhiScaling;
 
