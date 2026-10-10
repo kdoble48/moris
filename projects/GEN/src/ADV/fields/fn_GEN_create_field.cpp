@@ -179,7 +179,8 @@ namespace moris::gen
                         tSDFScaling,
                         tSDFShift,
                         tSDFDefault,
-                        tsDFInterp );
+                        tsDFInterp,
+                        tName );
                 break;
             }
             case Field_Type::USER_DEFINED:

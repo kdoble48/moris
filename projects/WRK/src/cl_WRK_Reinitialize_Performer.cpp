@@ -160,6 +160,10 @@ namespace moris::wrk
         auto itr = std::find_if( tGENFields.begin(), tGENFields.end(), [ & ]( std::shared_ptr< mtk::Field > const & aFiled )    //
                 { return aFiled->get_label() == mADVFiledName; } );
 
+        MORIS_ERROR( itr != tGENFields.end(),
+                "Reinitialize_Performer: no GEN field is labelled '%s' (the mapping sublist's adv_field). Check the design "
+                "geometry's \"name\" parameter.", mADVFiledName.c_str() );
+
         // find the index of the adv field
         moris_index tADVFieldIndex = std::distance( tGENFields.begin(), itr );
 
@@ -727,6 +731,10 @@ namespace moris::wrk
                     return aField->get_label() == mADVFiledName;
                 } );
 
+        // a missing label used to fall back silently to mesh pair 0 / index 0 (sdf_reinit_sweep layer 3, MB-019)
+        MORIS_ERROR( tAdvItr != tAdvLookupFields.end(),
+                "Reinitialize_Performer (interface SDF): no GEN field is labelled '%s' (the mapping sublist's adv_field). "
+                "Check the design geometry's \"name\" parameter.", mADVFiledName.c_str() );
         if ( tAdvItr != tAdvLookupFields.end() )
         {
             aSDFField = std::make_shared< mtk::Field_Discrete >(
