@@ -32,6 +32,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-014 | open | WRK | Scheduled-restart SDF apply in `Workflow_HMR_XTK::initialize()` replaces the whole ADV vector with one field's coefficients → silently skipped ("does not match current ADV count") on composite designs (level set + PDVs) | sdf_reinit_sweep (2026-06), review 2026-10-10 |
 | MB-015 | open | WRK | `sdf_reinit_mode = "field_remap"` throws `std::out_of_range` in `Reinitialize_Performer::perform()` | sdf_reinit_sweep (2026-06) |
 | MB-016 | fixed (f6d21bfb7) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
+| MB-017 | fixed (7a3115ee7) | GEN/WRK | Every-step in-place SDF redistance wrote coefficients at their global ADV IDs instead of ADV-vector positions → design shifted by one coefficient per redistance ("wrote 4960 of 4961"), MBB cut off its load pad | warm-restart work 2026-10-10 (D-015) |
 | MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
 | MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 
@@ -449,6 +450,38 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Regression test:** `projects/OPT/test/opt_test.cpp`, section "MMA native": `REQUIRE( std::ifstream( "ADV_Alg_0_Iter_1.hdf5" ).good() )`.
 - **Related tooling gap (fixed the same day, not MORIS):** native GCMMA logs `MMA - Objective:` where the TPL logs
   `GCMMA - Objective:`; the workspace merit gate, guard and post-run report matched only the TPL form, so native runs ran unguarded.
+
+---
+
+## MB-017 · GEN/WRK: in-place SDF redistance wrote at ADV IDs, not positions
+- **Status:** fixed, commit 7a3115ee7 on `fix/xiga-deck-bugs` (2026-10-10).
+- **Symptom:** with `sdf_reinit_every_step = true` the log says `wrote 4960 of 4961 level-set coeffs`; every redistance
+  iterate sweeps 9–14% of the nodes (ordinary iterates ~3%); the MBB design is cut off its load pad after ~12 iterations
+  and the strain energy freezes at the pad-only value (0.077352). Checkpoints across a redistance align best when shifted
+  by one coefficient (sign flips 5.8% at shift −1 vs 11.1% unshifted; ordinary iterates align at shift 0).
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/X28_inplace_recut/` and `X28_recut_f10/` (MBB cheese, `algorithm`
+  `mma`, `sdf_reinit` `every_step`).
+- **Evidence:** `runs/moris_bugs/MB-017/` — `detached_evals12_15.png`, `log_before.txt` / `log_after.txt`.
+- **Root cause:** the slice write in `Workflow_HMR_XTK::perform()` (every-step block) used
+  `Geometry_Engine::get_design_determining_adv_ids()`, which returns the B-spline field's GLOBAL ADV IDs (shared
+  `ADV_Handler`, `cl_GEN_ADV_Handler.cpp:62`), as indices into `aNewADVs`. `set_advs()` places `aNewADVs( k )` at global ID
+  `mFullADVIds( k )` (`cl_GEN_Geometry_Engine.cpp:149`); serially the IDs are one past the positions. The scheduled-restart
+  path writes the coefficients in order and was not affected. Likely also behind the June sweep's "surface roughening /
+  frayed members" in its in-place arms.
+- **Fix / Code** (commit 7a3115ee7):
+  ```diff
+  // projects/WRK/src/cl_WRK_Workflow_HMR_XTK.cpp, every-step in-place block
+  -                        Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
+  -                                ->get_design_determining_adv_ids( tReinitPerformer->get_adv_field_name() );
+  +                        // positions in aNewADVs, not global ADV IDs (MB-017: using the IDs shifted the design by one index)
+  +                        Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
+  +                                ->get_design_adv_positions( tReinitPerformer->get_adv_field_name() );
+  ```
+  plus `Geometry_Engine::get_design_adv_positions()` (ID → position through `mFullADVIds`), and a re-cut on the
+  redistanced design before FEM.
+- **Verification:** `X29_inplace_f1` (same deck, redistance every iteration): `wrote 4961 of 4961`, stays attached,
+  strain energy 77.18 at iteration 30 (scheduled-restart arm 77.16, no upkeep 78.42).
+- **Regression test:** none yet (needs a GEN geometry engine with a B-spline field; to add).
 
 ---
 
