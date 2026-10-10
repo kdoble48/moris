@@ -167,4 +167,17 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    void Derived_Node::clear_override_linear_interpolation()
+    {
+        gOverrideLinearInterpolation = false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Derived_Node::get_override_linear_interpolation()
+    {
+        return gOverrideLinearInterpolation;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
 }

@@ -167,7 +167,11 @@ namespace moris::gen
             const Parent_Node&                aFirstParentNode,
             const Parent_Node&                aSecondParentNode )
     {
-        if ( this->use_multilinear_interpolation() )
+        if ( this->use_cell_order_intersection() )
+        {
+            return this->compute_intersection_local_coordinate_cell_order( aBackgroundNodes, aFirstParentNode, aSecondParentNode );
+        }
+        else if ( this->use_multilinear_interpolation() )
         {
             // get isocontour threshold from geometry
             real tIsocontourThreshold = this->get_isocontour_threshold();
@@ -452,6 +456,141 @@ namespace moris::gen
 
             return tLocalCoordinates( 0 );
         }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Level_Set_Geometry::compute_intersection_local_coordinate_cell_order(
+            const Vector< Background_Node* >& aBackgroundNodes,
+            const Parent_Node&                aFirstParentNode,
+            const Parent_Node&                aSecondParentNode )
+    {
+        MORIS_ERROR( not Derived_Node::get_override_linear_interpolation(),
+                "Level_Set_Geometry: use_cell_order_intersection needs derived nodes with the cell's own-order basis, but "
+                "another geometry forces linear interpolation (use_multilinear_interpolation without cell order)." );
+
+        // spatial dimension and number of background cell nodes
+        uint tNumDims  = aFirstParentNode.get_global_coordinates().length();
+        uint tNumBases = aBackgroundNodes.size();
+
+        // interpolation function of the background cell (QUAD4/9/16, HEX8/27/64)
+        mtk::Interpolation_Function_Base* tInterpolation = Intersection_Node_Bilinear::create_cell_interpolation( tNumDims, tNumBases );
+
+        // level set values at all background cell nodes
+        Matrix< DDRMat > tPhiCellNodes( tNumBases, 1 );
+        for ( uint iNode = 0; iNode < tNumBases; ++iNode )
+        {
+            tPhiCellNodes( iNode ) = this->get_field_value(
+                    aBackgroundNodes( iNode )->get_index(),
+                    aBackgroundNodes( iNode )->get_global_coordinates() );
+        }
+
+        // scale so that the nodal values have unit norm (guard an all-zero cell, cf. MB-020)
+        real tPhiNorm             = norm( tPhiCellNodes );
+        real tPhiScaling          = tPhiNorm > MORIS_REAL_MIN ? 1.0 / tPhiNorm : 1.0;
+        tPhiCellNodes             = tPhiScaling * tPhiCellNodes;
+        real tIsocontourThreshold = tPhiScaling * this->get_isocontour_threshold();
+
+        // residuals at the parents: the parents are cell nodes or derived nodes of this cell, whose values are the
+        // same cell interpolant, so these bracket the root of the residual below
+        real tFirstResidual  = tPhiScaling * this->get_field_value( aFirstParentNode.get_index(), aFirstParentNode.get_global_coordinates() ) - tIsocontourThreshold;
+        real tSecondResidual = tPhiScaling * this->get_field_value( aSecondParentNode.get_index(), aSecondParentNode.get_global_coordinates() ) - tIsocontourThreshold;
+
+        // edge not intersected
+        if ( tFirstResidual * tSecondResidual > 0.0 )
+        {
+            delete tInterpolation;
+            return MORIS_REAL_MAX;
+        }
+
+        // parents with (numerically) equal values: intersection at the edge center, as in the multilinear path
+        if ( std::abs( tFirstResidual - tSecondResidual ) < MORIS_REAL_EPS )
+        {
+            delete tInterpolation;
+            return 0.0;
+        }
+
+        // parent on the isocontour
+        if ( tFirstResidual == 0.0 )
+        {
+            delete tInterpolation;
+            return -1.0;
+        }
+        if ( tSecondResidual == 0.0 )
+        {
+            delete tInterpolation;
+            return 1.0;
+        }
+
+        // vector from first to second parent in parametric coordinates of the background cell
+        const Matrix< DDRMat >& tFirstParentXi  = aFirstParentNode.get_parametric_coordinates();
+        const Matrix< DDRMat >& tSecondParentXi = aSecondParentNode.get_parametric_coordinates();
+        Matrix< DDRMat >        tParentVector   = tSecondParentXi - tFirstParentXi;
+
+        // sign-change bracket in the edge coordinate
+        real tLowerCoordinate = -1.0;
+        real tUpperCoordinate = 1.0;
+        real tLowerResidual   = tFirstResidual;
+
+        // initial guess: linear interpolation of the parent values
+        real tEdgeCoordinate = ( tFirstResidual + tSecondResidual ) / ( tFirstResidual - tSecondResidual );
+        tEdgeCoordinate      = std::min( 1.0 - MORIS_REAL_EPS, std::max( tEdgeCoordinate, -1.0 + MORIS_REAL_EPS ) );
+
+        const uint tMaxIterations     = 100;      // bisection alone halves the bracket 100 times
+        const real tResidualTolerance = 1e-13;    // on the unit-norm scaled field
+        const real tBracketTolerance  = 1e-14;    // on the edge coordinate
+
+        Matrix< DDRMat > tCellCoordinate( 1, tNumDims );
+        Matrix< DDRMat > tBasis;
+        Matrix< DDRMat > tDBasisDxi;
+
+        for ( uint iIteration = 0; iIteration < tMaxIterations; ++iIteration )
+        {
+            // residual at the current edge coordinate
+            tCellCoordinate = 0.5 * ( 1.0 - tEdgeCoordinate ) * tFirstParentXi + 0.5 * ( 1.0 + tEdgeCoordinate ) * tSecondParentXi;
+            tInterpolation->eval_N( tCellCoordinate, tBasis );
+            real tResidual = dot( tBasis, tPhiCellNodes ) - tIsocontourThreshold;
+
+            if ( std::abs( tResidual ) < tResidualTolerance )
+            {
+                break;
+            }
+
+            // shrink the bracket
+            if ( ( tResidual < 0.0 ) == ( tLowerResidual < 0.0 ) )
+            {
+                tLowerCoordinate = tEdgeCoordinate;
+                tLowerResidual   = tResidual;
+            }
+            else
+            {
+                tUpperCoordinate = tEdgeCoordinate;
+            }
+
+            if ( tUpperCoordinate - tLowerCoordinate < tBracketTolerance )
+            {
+                break;
+            }
+
+            // Newton step on d(residual)/d(edge coordinate), bisection if it leaves the bracket
+            tInterpolation->eval_dNdXi( tCellCoordinate, tDBasisDxi );
+            Matrix< DDRMat > tGradient = 0.5 * tParentVector * tDBasisDxi * tPhiCellNodes;
+
+            real tNewCoordinate = 0.5 * ( tLowerCoordinate + tUpperCoordinate );
+            if ( std::abs( tGradient( 0 ) ) > MORIS_REAL_MIN )
+            {
+                real tNewtonCoordinate = tEdgeCoordinate - tResidual / tGradient( 0 );
+                if ( tNewtonCoordinate > tLowerCoordinate and tNewtonCoordinate < tUpperCoordinate )
+                {
+                    tNewCoordinate = tNewtonCoordinate;
+                }
+            }
+            tEdgeCoordinate = tNewCoordinate;
+        }
+
+        delete tInterpolation;
+
+        return tEdgeCoordinate;
     }
 
     //--------------------------------------------------------------------------------------------------------------
