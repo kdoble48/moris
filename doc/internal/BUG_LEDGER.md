@@ -41,8 +41,9 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-021 | fixed (4ed1e2393) | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
 | MB-022 | fix-written (fix/mb022-025-audit @307236d81) | GEN | Nested intersection recursion drops the incoming sensitivity factor | implementation audit 2026-10-10 (D-028) |
 | MB-023 | fix-written (fix/mb022-025-audit @307236d81) | OPT | Native GCMMA accepts NaN criteria in the conservativeness inner loop | implementation audit 2026-10-10 (D-029) |
-| MB-024 | fix-written (fix/mb022-025-audit @307236d81) | OPT | Exhausted MMA backtracking leaves Problem on the rejected trial | implementation audit 2026-10-10 (D-030) |
-| MB-025 | fix-written (fix/mb022-025-audit @307236d81) | OPT | SWEEP single finite-difference modes silently skip all perturbations | implementation audit 2026-10-10 (D-031) |
+| MB-024 | fix-written (fix/mb022-025-audit @307236d81, 7a947d669) | OPT | Exhausted MMA backtracking leaves Problem on the rejected trial | implementation audit 2026-10-10 (D-030) |
+| MB-025 | fix-written (fix/mb022-025-audit @307236d81, 7a947d669) | OPT | SWEEP single finite-difference modes silently skip all perturbations | implementation audit 2026-10-10 (D-031) |
+| MB-026 | fix-written (fix/mb022-025-audit @7a947d669) | OPT | FD perturbation sign toggles on every backward call: SWEEP fd_forward/fd_backward swapped for every second (point, epsilon) call | code review of fix/mb022-025-audit, 2026-10-10 |
 
 ---
 
@@ -712,7 +713,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/implementation_audit_20261010/opt_invalid_audit.cpp`, Catch test `AUDIT native MMA restores accepted state after failed backtracking`. Build and run instructions in that directory's `README.md`.
 - **Evidence:** `runs/moris_bugs/MB-024/`; native log `opt_backtrack_test.log`; defect intake D-030.
 - **Root cause:** `projects/OPT/src/cl_OPT_Algorithm_MMA.cpp:1007`. continue preserves private xval/f0val but does not restore mProblem, which every func evaluation overwrites through Problem::compute_design_criteria (lines 218-236). Manager getters return this polluted Problem state. If the iteration budget ends here, the returned result is the rejected trial.
-- **Fix:** after exhausted backtracking, `Algorithm_MMA::restore_accepted_state` re-evaluates the held design `xval` (one extra evaluation) so the shared Problem state (ADVs, geometry, analysis, criteria) matches it before `continue`. In reinit mode the restore evaluates R(xval), so the Problem holds that redistance with consistent criteria. If the restore evaluation is itself non-finite the solve stops (returns 1) instead of iterating on an unevaluable design.
+- **Fix:** after exhausted backtracking, `Algorithm_MMA::restore_accepted_state` re-evaluates the held design `xval` (one extra evaluation) so the shared Problem state (ADVs, geometry, analysis, criteria) matches it before `continue`. In reinit mode the restore evaluates R(xval), so the Problem holds that redistance with consistent criteria. If the restore evaluation is itself non-finite (the evaluation is not reproducible) it is a `MORIS_ERROR` (7a947d669; 307236d81 returned silently, which the Manager could not see), so the run exits nonzero for the sentinels.
 - **Code** (fix, `git show 307236d81`, trimmed):
   ```diff
   -            if ( !this->criteria_finite() )
@@ -729,13 +730,14 @@ Missing features belong in a study's capability list, not here (exception: a mis
   +                // shared Problem state, so re-evaluate xval before continuing; the Manager reads that state (MB-024)
   +                if ( !this->restore_accepted_state( iter, nfunc ) )
   +                {
-  +                    return mProblem->restart_optimization() ? istop : 1;
+  +                    return istop;    // restart requested (7a947d669; a non-finite restore is a MORIS_ERROR)
   +                }
   +                MORIS_LOG_INFO( "Native MMA iter %d: holding previous design and continuing.", (int)iter );
   +                continue;
   ```
 - **Regression test:** `OPT-test.exe "[MB-024]"`: NaN at every design other than the initial x = 0.5 (a design-dependent failure, unlike the audit harness, which also failed the accepted design and so could not be restored). Asserts 18 evaluations (initial, trial, 15 backtracks, restore), no gradient on a failed evaluation, and the Problem returning x = 0.5 with objective 0.25. Fails on `a3b602862`, passes with the fix.
 - **Workaround / scope:** Treat exhausted-backtracking output as a failed solve and recover from a known accepted state. max_inner_its=0 does not avoid this branch; the default recipe can reach it if all retries fail.
+- **Follow-ups (code review, not changed):** (1) a held iteration restarts the next outer iteration at the full move limit from the same history, so a design-local failure costs 1 trial + 15 backtracks + 1 restore per outer iteration until `max_its`; carrying the shrunk move scale (or a consecutive-hold limit) across iterations would stop the burn. (2) With `max_inner_its > 0`, an inner trial that exhausts its backtracks discards the whole iteration even if an earlier inner trial was finite; committing the last finite trial instead would need a re-evaluation and subproblem multipliers that match it for `kktcheck`. Both are retry-policy changes in the failure path, deliberately left out of this correctness fix.
 
 
 ## MB-025 · OPT: SWEEP single finite-difference modes silently skip all perturbations
@@ -744,7 +746,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/implementation_audit_20261010/opt_invalid_audit.cpp`, Catch test `AUDIT SWEEP individual FD modes perform perturbations`. Build and run instructions in that directory's `README.md`.
 - **Evidence:** `runs/moris_bugs/MB-025/`; native log `opt_sweep_test.log`; defect intake D-031.
 - **Root cause:** `projects/OPT/src/cl_OPT_Algorithm_Sweep.cpp:291`. The parameter API documents all three individual modes, but sweep_solve executes finite differences only under mFiniteDifferenceType == all. No alternative dispatch handles individual modes. The manual already notes this defect; the audit independently reproduces it.
-- **Fix:** `sweep_solve` dispatches `forward`/`backward`/`central` to `SA_Type::forward/backward/central` and saves `fd_<mode>` datasets; the analytic gradient is always saved as the reference; unknown `finite_difference_type` strings abort in the constructor; `all` writes `fd_central` only for the gradient types requested. `none`/`all` output is otherwise unchanged (no in-repo deck uses an individual mode).
+- **Fix:** `sweep_solve` dispatches `forward`/`backward`/`central` to `SA_Type::forward/backward/central` and saves `fd_<mode>` datasets. Single modes are FD-only (analytic gradients only for `none`/`all`, the original intent; 307236d81 always computed them, reverted in 7a947d669 after code review so FD-only checks work on decks whose analytic sensitivities are unavailable or expensive); unknown `finite_difference_type` strings abort in the constructor; `all` writes `fd_central` only for the gradient types requested. `none`/`all` output is otherwise unchanged (no in-repo deck uses an individual mode).
 - **Code** (fix, `git show 307236d81`, trimmed):
   ```diff
   +                    else
@@ -765,5 +767,31 @@ Missing features belong in a study's capability list, not here (exception: a mis
   +                        this->evaluate_constraint_gradients( tEvaluationName + " fd_" + mFiniteDifferenceType );
   +                    }
   ```
-- **Regression test:** `OPT-test.exe "[MB-025]"`: for none/forward/backward/central/all, asserts the criteria-evaluation count (1/2/2/3/3) and that every requested HDF5 dataset exists and matches the analytic gradient within 1.1e-2. Fails on `a3b602862`, passes with the fix.
-- **Workaround / scope:** Use finite_difference_type=all and inspect the central-difference datasets. The manual reported sweeps use this workaround, so their results are not invalidated by this finding.
+- **Regression test:** `OPT-test.exe "[MB-025]"` (`[MB-025][MB-026]`): for none/forward/backward/central/all at two points and two epsilons, asserts the criteria-evaluation count and that every requested dataset exists and equals the exact quadratic FD value (f' ± 100 eps, central f') to 1e-6, and that the analytic dataset exists only for none/all. Fails on `a3b602862`, passes with the fix.
+- **Workaround / scope:** Use finite_difference_type=all and inspect only the central-difference datasets (on builds before 7a947d669 the `all` forward/backward datasets are also mislabelled, MB-026). The manual reported sweeps use this workaround, so their results are not invalidated by this finding.
+
+
+## MB-026 · OPT: FD perturbation sign toggles on every backward call
+- **Status:** fix-written (`fix/mb022-025-audit @7a947d669`; found by the code review of that branch, 2026-10-10). Present since before `a3b602862`. Not yet in the main `build_opt`.
+- **Symptom:** In a SWEEP with more than one (evaluation point, epsilon) pair, every second forward/backward FD call computes the opposite one-sided scheme and saves it under the wrong label. In `all` mode `fd_forward` and `fd_backward` are swapped for the 2nd, 4th, … pair; in `backward` mode every second `fd_backward` is a forward difference. `fd_central` is unaffected (its formula is sign-symmetric), as is the analytic gradient. No error or warning.
+- **Reproducer:** `OPT-test.exe "[MB-026]"` against `cl_OPT_Algorithm.cpp` from `a3b602862`: 6 of 63 assertions fail, e.g. `eval_1-2 epsilon_2-2 fd_forward` = 9.99 where the forward difference of 100 (x - 0.45)^2 at x = 0.5, eps = 1e-4 is 10.01; `eval_1-2 epsilon_2-2 fd_backward` = 10.01 (expected 9.99); the same at x = 0.6 (29.99/30.01 swapped).
+- **Root cause:** `projects/OPT/src/cl_OPT_Algorithm.cpp:327` (`a3b602862`). `set_sensitivity_analysis_type( SA_Type::backward )` negates `mFiniteDifferenceEpsilons` in place and `SA_Type::forward` does not reset it, so the sign toggles with each backward call and leaks into the next forward call. SWEEP is the only caller that selects forward/backward.
+- **Fix:** set the sign absolutely: backward `-|eps|`, forward `+|eps|` (central uses whatever sign; its quotient is invariant).
+- **Code** (fix, `git show 7a947d669`, trimmed):
+  ```diff
+               case opt::SA_Type::backward:
+  -            {
+  -                mFiniteDifferenceEpsilons = -1.0 * mFiniteDifferenceEpsilons;
+  -                [[fallthrough]];
+  -            }
+               case opt::SA_Type::forward:
+               {
+  +                const real tSign = aType == opt::SA_Type::backward ? -1.0 : 1.0;
+  +                for ( uint iEntry = 0; iEntry < mFiniteDifferenceEpsilons.numel(); iEntry++ )
+  +                {
+  +                    mFiniteDifferenceEpsilons( iEntry ) = tSign * std::abs( mFiniteDifferenceEpsilons( iEntry ) );
+  +                }
+  ```
+- **Regression test:** `OPT-test.exe "[MB-026]"` (shared with MB-025): exact forward/backward/central values at two points and two epsilons.
+- **Affected outputs:** any pre-fix SWEEP output read for `fd_forward`/`fd_backward` at an even-numbered call. In this workspace: `runs/studies/lunch_and_learn_xiga/triage_bridge/scripts/fd_table.py:12` prints `fwd e2`/`bwd e2` from `eval_1-1 epsilon_2-4`, the swapped pair, so its two one-sided columns are exchanged (its central columns and the analytic gradient are correct). The 27 in-repo EXA SWEEP decks that use `all` may store swapped forward/backward gold values for their 2nd+ epsilon.
+- **Workaround (builds before 7a947d669):** use `fd_central` only, or one epsilon and one evaluation point per sweep.
