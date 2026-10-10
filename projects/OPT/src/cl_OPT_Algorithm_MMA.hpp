@@ -80,6 +80,8 @@ namespace moris::opt
         // ---- optional in-place reinitialization hook ----
         bool mReinitHook = false;   ///< if true, call Problem reinit on xval each outer iteration
         std::vector< double > mLastRedistanced;   ///< redistanced ADVs from the most recent func() eval
+        bool mShiftHistory = true;   ///< reinit mode: shift xold1/xold2/low/upp by the redistance (warm restart)
+        int  mNumLocked    = 0;      ///< variables whose asymptote spread is at the floor, from the last asymp()
                                                   ///< (kept separate so xmma stays the raw subproblem
                                                   ///< solution for raaupdate/conservatism); committed to xval
 
@@ -157,6 +159,26 @@ namespace moris::opt
 
         /** Run the GCMMA outer loop on proc 0 (port of solve.cpp) */
         int mma_solve();
+
+        /**
+         * Number of design variables whose asymptote spread (upp - low) / range was below 0.05 in the
+         * last asymp() call ("locked": their move limit is choked to ~1% of the range). Diagnostic.
+         */
+        int
+        get_num_locked_asymptotes() const
+        {
+            return mNumLocked;
+        }
+
+        /**
+         * Reinit mode only: whether to shift the history and asymptotes by the redistance (default true, the
+         * warm restart). false reproduces the pre-2026-10-10 behaviour; used as the unit test's negative control.
+         */
+        void
+        set_shift_history( bool aShift )
+        {
+            mShiftHistory = aShift;
+        }
     };
 }    // namespace moris::opt
 
