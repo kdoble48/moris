@@ -36,6 +36,13 @@ namespace moris::gen
          * @param aParameterList Design field parameter list
          */
         explicit Field_Parameters( const Parameter_List& aParameterList );
+
+        /**
+         * Gets whether this field is discretized additively (field + B-spline correction).
+         *
+         * @return true if discretization_mesh_index >= 0 and discretization_mode is "additive"
+         */
+        bool uses_additive_discretization() const;
     };
 
     class Design_Field

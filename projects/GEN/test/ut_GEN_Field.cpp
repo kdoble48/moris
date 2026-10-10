@@ -916,6 +916,11 @@ namespace moris::gen
             CHECK( tGeometry->depends_on_advs() );
             CHECK( tGeometry->get_field()->has_advs() );
 
+            // The engine reports additive designs (used by WRK to reject remeshing / reinitialization)
+            CHECK( tGeometry->uses_additive_discretization() == tAdditive );
+            CHECK( tGeometryEngine.has_additive_discretized_designs() == tAdditive );
+            CHECK( tGeometryEngine.get_additive_discretized_design_names().size() == ( tAdditive ? 1u : 0u ) );
+
             // Coefficient ADV IDs are offset by the number of primitive ADVs
             uint tOffset = 1;
 
@@ -932,7 +937,7 @@ namespace moris::gen
                 else
                 {
                     // (d) Replace mode: L2-projected circle (exact for a linear B-spline / linear Lagrange mesh)
-                    CHECK( tGeometry->get_field_value( iNodeIndex, tNodeCoordinates ) == Approx( tDistance - tRadius ).scale( 2.0 ).epsilon( 1e-12 ) );
+                    CHECK( tGeometry->get_field_value( iNodeIndex, tNodeCoordinates ) == Approx( tDistance - tRadius ).margin( 1e-12 ) );
                 }
 
                 if ( (uint)par_rank() == tMesh->get_entity_owner( iNodeIndex, mtk::EntityRank::NODE, 0 ) )

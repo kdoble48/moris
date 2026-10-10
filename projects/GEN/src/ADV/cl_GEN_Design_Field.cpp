@@ -46,6 +46,13 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Field_Parameters::uses_additive_discretization() const
+    {
+        return mDiscretizationIndex >= 0 and mDiscretizationMode == "additive";
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Design_Field::Design_Field(
             std::shared_ptr< Field > aField,
             const Field_Parameters&  aParameters,
