@@ -266,6 +266,22 @@ namespace moris::gen
 
       private:
         /**
+         * Cell-order intersection (use_cell_order_intersection): root of the background cell's own-order Lagrange
+         * interpolant of this level set along the parent edge, by a Newton iteration safeguarded with bisection on the
+         * sign-change bracket [-1, 1]. For a B-spline field whose Lagrange cell order equals the B-spline order, this
+         * interpolant reproduces the B-spline field exactly, so the intersection lies on the true zero set.
+         *
+         * @param aBackgroundNodes All nodes of the background cell (4/9/16 in 2D, 8/27/64 in 3D)
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @return Parent edge local coordinate, between -1 and 1 (MORIS_REAL_MAX if the edge is not intersected)
+         */
+        real compute_intersection_local_coordinate_cell_order(
+                const Vector< Background_Node* >& aBackgroundNodes,
+                const Parent_Node&                aFirstParentNode,
+                const Parent_Node&                aSecondParentNode );
+
+        /**
          * Determines the geometric region of a point based on a level set value
          *
          * @param aLevelSetValue Value of the level set function
