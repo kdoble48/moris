@@ -3814,6 +3814,9 @@ namespace moris::fem
         uint tResDofAssemblyStop  = mSet->get_res_dof_assembly_map()( tResDofIndex )( 0, 1 );
 
         // reset, evaluate and store the residual for unperturbed case
+        // the caller has just restored the unperturbed geometry: clear the CM/SP evaluation caches, which still hold the
+        // last perturbed state (otherwise the one-sided FD base residual is stale; MB-011)
+        this->reset_eval_flags();
         mSet->get_residual()( 0 ).fill( 0.0 );
         this->compute_residual( aWStar );
         Matrix< DDRMat > tResidual =
@@ -3916,6 +3919,9 @@ namespace moris::fem
         uint tFollowerResDofAssemblyStop  = mSet->get_res_dof_assembly_map()( tFollowerResDofIndex )( 0, 1 );
 
         // reset, evaluate and store the residual for unperturbed case
+        // the caller has just restored the unperturbed geometry: clear the CM/SP evaluation caches, which still hold the
+        // last perturbed state (otherwise the one-sided FD base residual is stale; MB-011)
+        this->reset_eval_flags();
         mSet->get_residual()( 0 ).fill( 0.0 );
         this->compute_residual( aWStar );
         Matrix< DDRMat > tLeaderResidual =
