@@ -39,6 +39,10 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 | MB-020 | fixed (abb99ee66) | GEN | Multilinear intersection divides by the norm of the four corner φ values; a cell whose corners are all exactly 0 (order-2 field nonzero only at mid-side/interior nodes) gives NaN residuals → abort "Newton did not converge: Reference residual nan" | lunch_and_learn_xiga X40_cheese_o2 (D-020) |
 | MB-021 | fixed (4ed1e2393) | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
+| MB-022 | fix-written (fix/mb022-025-audit @307236d81) | GEN | Nested intersection recursion drops the incoming sensitivity factor | implementation audit 2026-10-10 (D-028) |
+| MB-023 | fix-written (fix/mb022-025-audit @307236d81) | OPT | Native GCMMA accepts NaN criteria in the conservativeness inner loop | implementation audit 2026-10-10 (D-029) |
+| MB-024 | fix-written (fix/mb022-025-audit @307236d81) | OPT | Exhausted MMA backtracking leaves Problem on the rejected trial | implementation audit 2026-10-10 (D-030) |
+| MB-025 | fix-written (fix/mb022-025-audit @307236d81) | OPT | SWEEP single finite-difference modes silently skip all perturbations | implementation audit 2026-10-10 (D-031) |
 
 ---
 
@@ -650,3 +654,116 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/X81_o2_cellorder/results/checkpoints/` (count |s| = 0.15 per file with
   `runs/moris_bugs/MB-021/mb021_count.py`).
 - **Workaround (runs on builds before 4ed1e2393):** use only the final checkpoint as a φ restart; treat intermediate checkpoints as ψ.
+
+
+## MB-022 · GEN: Nested intersection recursion drops the incoming sensitivity factor
+- **Status:** fix-written (`fix/mb022-025-audit @307236d81`; found by the implementation audit 2026-10-10 at `a3b602862`). Not yet in the main `build_opt`.
+- **Symptom:** Scaling the incoming chain factor from I to 2I leaves parent contributions unscaled: nodes 21 and 22 have maximum absolute errors 0.410097050636513 and 0.41009705063651286; nodes 9 through 20 pass.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/implementation_audit_20261010/gen_chain_audit.cpp`, Catch test `AUDIT nested intersection chain factor`. Build and run instructions in that directory's `README.md`.
+- **Evidence:** `runs/moris_bugs/MB-022/`; native log `gen_chain_test.log`; defect intake D-028.
+- **Root cause:** `projects/GEN/src/PDV/cl_GEN_Intersection_Node_Level_Set.cpp:85`. The direct field term includes aSensitivityFactor, but each recursive parent call constructs only its local Jacobian and discards the incoming factor. For incoming A and parent Jacobian J, recursion must receive A*J. A top-level call with I masks the issue for a single layer of moving parents; deeper nesting loses ancestor factors.
+- **Fix:** parents receive `aSensitivityFactor * J` (incoming factor times the local parent Jacobian) in both parent branches.
+- **Code** (fix, `git show 307236d81`, trimmed):
+  ```diff
+  -            Matrix< DDRMat > tSensitivityFactor = 0.5 * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_first_parent() );
+  +            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_first_parent() );
+               tFirstParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
+  @@ -95,3 +99,3 @@ namespace moris::gen
+  -            Matrix< DDRMat > tSensitivityFactor = 0.5 * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_second_parent() );
+  +            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_second_parent() );
+               tSecondParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
+  ```
+- **Regression test:** `GEN-test.exe "[linear intersection]"` (`ut_GEN_Intersection_Level_Set.cpp`) checks D(A) = A·D(I) for every derived node with the non-commuting A = [[1, 2], [-3, 0.5]]; on `a3b602862` it fails for nodes 21 and 22 (2 of 510 assertions), with the fix it passes. The three-level fixed-branch coordinate FD test proposed by the audit is not written yet.
+- **Workaround / scope:** Until the fix is in the production build: The manual recipe cuts ADV-free pads first and the moving geometry afterward, avoiding the affected moving-parent recursion. Restrict nesting until fixed; this audit does not establish a failing recipe gradient.
+
+
+## MB-023 · OPT: Native GCMMA accepts NaN criteria in the conservativeness inner loop
+- **Status:** fix-written (`fix/mb022-025-audit @307236d81`; found by the implementation audit 2026-10-10 at `a3b602862`). Not yet in the main `build_opt`.
+- **Symptom:** A fault-injection test with max_inner_its=3 returns NaN at the third criteria evaluation. MMA requests a gradient at that failed point and returns objective=nan at x=0.48074069641608658.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/implementation_audit_20261010/opt_invalid_audit.cpp`, Catch test `AUDIT native MMA rejects invalid inner trial`. Build and run instructions in that directory's `README.md`.
+- **Evidence:** `runs/moris_bugs/MB-023/`; native log `opt_invalid_test.log`; defect intake D-029.
+- **Root cause:** `projects/OPT/src/cl_OPT_Algorithm_MMA.cpp:1037`. The outer trial is checked by criteria_finite(), but the trial inside the conservativeness loop is not. Every comparison of the form fapp+eps < NaN is false, leaving conserv=1; the failed point is committed and grad() is called.
+- **Fix:** every conservatism inner trial goes through the same NaN-guard backtrack as the first trial (`Algorithm_MMA::backtrack_non_finite`: halve the move limit, re-solve, re-evaluate, at most 15 times). A trial that stays non-finite rejects the iteration (MB-024 path); it is never tested for conservatism, committed, or differentiated.
+- **Code** (fix, `git show 307236d81`, trimmed):
+  ```diff
+  -                    conserv = 1;
+  -                    if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
+  +                // a failed inner trial must not reach the conservatism test: NaN comparisons are false, so it
+  +                // would pass as conservative and be committed and differentiated (MB-023)
+  +                tTrialStatus = this->backtrack_non_finite( iter, nfunc );
+  +                if ( tTrialStatus == Trial_Status::restart )
+  +                {
+  +                    return istop;
+  +                }
+  +                if ( tTrialStatus == Trial_Status::failed )
+  +                {
+  +                    break;
+  +                }
+  +                conserv = 1;
+  +                if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
+  ```
+- **Regression test:** `OPT-test.exe "[MB-023]"` (same quadratic, `max_inner_its = 3`, NaN injected at evaluation 3): asserts no gradient at a failed evaluation and a finite, self-consistent returned objective. Fails on `a3b602862`, passes with the fix.
+- **Workaround / scope:** max_inner_its=0 avoids this particular branch, including in the manual recipe. This is a test of failure handling using injected NaN, not proof that the recipe naturally generates this failure.
+
+
+## MB-024 · OPT: Exhausted MMA backtracking leaves Problem on the rejected trial
+- **Status:** fix-written (`fix/mb022-025-audit @307236d81`; found by the implementation audit 2026-10-10 at `a3b602862`). Not yet in the main `build_opt`.
+- **Symptom:** With a finite initial x=0.5 and injected NaN for every subsequent trial, all 15 backtracks fail. Despite logging holding previous design, solve returns Problem objective=nan and x=0.49999084573096514.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/implementation_audit_20261010/opt_invalid_audit.cpp`, Catch test `AUDIT native MMA restores accepted state after failed backtracking`. Build and run instructions in that directory's `README.md`.
+- **Evidence:** `runs/moris_bugs/MB-024/`; native log `opt_backtrack_test.log`; defect intake D-030.
+- **Root cause:** `projects/OPT/src/cl_OPT_Algorithm_MMA.cpp:1007`. continue preserves private xval/f0val but does not restore mProblem, which every func evaluation overwrites through Problem::compute_design_criteria (lines 218-236). Manager getters return this polluted Problem state. If the iteration budget ends here, the returned result is the rejected trial.
+- **Fix:** after exhausted backtracking, `Algorithm_MMA::restore_accepted_state` re-evaluates the held design `xval` (one extra evaluation) so the shared Problem state (ADVs, geometry, analysis, criteria) matches it before `continue`. In reinit mode the restore evaluates R(xval), so the Problem holds that redistance with consistent criteria. If the restore evaluation is itself non-finite the solve stops (returns 1) instead of iterating on an unevaluable design.
+- **Code** (fix, `git show 307236d81`, trimmed):
+  ```diff
+  -            if ( !this->criteria_finite() )
+  -            {
+  -                // could not recover: hold the previous (finite) design and continue
+  -                MORIS_LOG_INFO( "Native MMA iter %d: criteria still non-finite after %d backtracks; "
+  -                                "holding previous design and continuing.",
+  -                        (int)iter, tMaxBacktrack );
+  -                continue;
+  -            }
+  +            if ( tTrialStatus == Trial_Status::failed )
+  +            {
+  +                // could not recover: hold the previous (finite) design. The failed evaluations overwrote the
+  +                // shared Problem state, so re-evaluate xval before continuing; the Manager reads that state (MB-024)
+  +                if ( !this->restore_accepted_state( iter, nfunc ) )
+  +                {
+  +                    return mProblem->restart_optimization() ? istop : 1;
+  +                }
+  +                MORIS_LOG_INFO( "Native MMA iter %d: holding previous design and continuing.", (int)iter );
+  +                continue;
+  ```
+- **Regression test:** `OPT-test.exe "[MB-024]"`: NaN at every design other than the initial x = 0.5 (a design-dependent failure, unlike the audit harness, which also failed the accepted design and so could not be restored). Asserts 18 evaluations (initial, trial, 15 backtracks, restore), no gradient on a failed evaluation, and the Problem returning x = 0.5 with objective 0.25. Fails on `a3b602862`, passes with the fix.
+- **Workaround / scope:** Treat exhausted-backtracking output as a failed solve and recover from a known accepted state. max_inner_its=0 does not avoid this branch; the default recipe can reach it if all retries fail.
+
+
+## MB-025 · OPT: SWEEP single finite-difference modes silently skip all perturbations
+- **Status:** fix-written (`fix/mb022-025-audit @307236d81`; found by the implementation audit 2026-10-10 at `a3b602862`). Not yet in the main `build_opt`.
+- **Symptom:** forward, backward, and central each perform only one baseline criteria evaluation and produce HDF5 files with no gradient datasets. The all control performs three evaluations and writes analytic plus all three FD gradients.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/implementation_audit_20261010/opt_invalid_audit.cpp`, Catch test `AUDIT SWEEP individual FD modes perform perturbations`. Build and run instructions in that directory's `README.md`.
+- **Evidence:** `runs/moris_bugs/MB-025/`; native log `opt_sweep_test.log`; defect intake D-031.
+- **Root cause:** `projects/OPT/src/cl_OPT_Algorithm_Sweep.cpp:291`. The parameter API documents all three individual modes, but sweep_solve executes finite differences only under mFiniteDifferenceType == all. No alternative dispatch handles individual modes. The manual already notes this defect; the audit independently reproduces it.
+- **Fix:** `sweep_solve` dispatches `forward`/`backward`/`central` to `SA_Type::forward/backward/central` and saves `fd_<mode>` datasets; the analytic gradient is always saved as the reference; unknown `finite_difference_type` strings abort in the constructor; `all` writes `fd_central` only for the gradient types requested. `none`/`all` output is otherwise unchanged (no in-repo deck uses an individual mode).
+- **Code** (fix, `git show 307236d81`, trimmed):
+  ```diff
+  +                    else
+  +                    {
+  +                        SA_Type tType = SA_Type::central;
+  +                        if ( mFiniteDifferenceType == "forward" )
+  +                        {
+  +                            tType = SA_Type::forward;
+  +                        }
+  +                        else if ( mFiniteDifferenceType == "backward" )
+  +                        {
+  +                            tType = SA_Type::backward;
+  +                        }
+  +
+  +                        this->set_sensitivity_analysis_type( tType );
+  +                        this->compute_design_criteria_gradients( tEvaluationPoint );
+  +                        this->evaluate_objective_gradients( tEvaluationName + " fd_" + mFiniteDifferenceType );
+  +                        this->evaluate_constraint_gradients( tEvaluationName + " fd_" + mFiniteDifferenceType );
+  +                    }
+  ```
+- **Regression test:** `OPT-test.exe "[MB-025]"`: for none/forward/backward/central/all, asserts the criteria-evaluation count (1/2/2/3/3) and that every requested HDF5 dataset exists and matches the analytic gradient within 1.1e-2. Fails on `a3b602862`, passes with the fix.
+- **Workaround / scope:** Use finite_difference_type=all and inspect the central-difference datasets. The manual reported sweeps use this workaround, so their results are not invalidated by this finding.
