@@ -9,6 +9,8 @@
  */
 
 // MRS
+#include <unordered_map>
+
 #include "cl_Module_Parameter_Lists.hpp"
 #include "fn_Parsing_Tools.hpp"
 #include "cl_Tracer.hpp"
@@ -181,6 +183,33 @@ namespace moris::gen
             }
         }
         return Vector< sint >( 0 );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< sint >
+    Geometry_Engine::get_design_adv_positions( const std::string& aDesignName )
+    {
+        Vector< sint > tIds = this->get_design_determining_adv_ids( aDesignName );
+
+        // global ADV ID -> position in the full ADV vector
+        std::unordered_map< sint, sint > tPositionOfId;
+        tPositionOfId.reserve( mFullADVIds.size() );
+        for ( uint iPosition = 0; iPosition < mFullADVIds.size(); iPosition++ )
+        {
+            tPositionOfId[ mFullADVIds( iPosition ) ] = (sint)iPosition;
+        }
+
+        Vector< sint > tPositions( tIds.size(), -1 );
+        for ( uint iCoefficient = 0; iCoefficient < tIds.size(); iCoefficient++ )
+        {
+            std::unordered_map< sint, sint >::const_iterator tFound = tPositionOfId.find( tIds( iCoefficient ) );
+            if ( tFound != tPositionOfId.end() )
+            {
+                tPositions( iCoefficient ) = tFound->second;
+            }
+        }
+        return tPositions;
     }
 
     //--------------------------------------------------------------------------------------------------------------
