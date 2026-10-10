@@ -418,6 +418,9 @@ namespace moris::wrk
         // XTK perform - enrich - ghost - multigrid
         tXTKPerformer->perform_enrichment();
 
+        // set by the every-step in-place redistance below: the design was replaced by its SDF after this cut
+        bool tRecut = false;
+
         // Stage *: Interface-based SDF reinitialization (after XTK has interface facets)
         if ( mPerformerManager->mReinitializePerformer.size() > 0 )
         {
@@ -506,8 +509,9 @@ namespace moris::wrk
                         // composite ADV vector. The next optimizer iteration's normal set_advs()
                         // re-syncs all fields and PDVs consistently.
                         Matrix< DDRMat > const& tCoeffs   = tReinitPerformer->get_coefficients();
+                        // positions in aNewADVs, not global ADV IDs (MB-017: using the IDs shifted the design by one index)
                         Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
-                                ->get_design_determining_adv_ids( tReinitPerformer->get_adv_field_name() );
+                                ->get_design_adv_positions( tReinitPerformer->get_adv_field_name() );
 
                         if ( tLSAdvIds.size() == tCoeffs.n_rows() && tCoeffs.n_rows() > 0 )
                         {
@@ -522,6 +526,7 @@ namespace moris::wrk
                                 }
                             }
                             mSDFInitialized = true;
+                            tRecut          = tWritten > 0;
                             MORIS_LOG_INFO( "SDF redistanced in-place every step (no restart): wrote %u of %u level-set coeffs into the %u-ADV vector slice%s",
                                     tWritten, (uint)tCoeffs.n_rows(), (uint)aNewADVs.size(), tDoSmooth ? ", smoothed" : "" );
                         }
@@ -593,6 +598,52 @@ namespace moris::wrk
                     }
                 }
             }
+        }
+
+        // Every-step in-place redistance: the cut above was made on the pre-redistance design psi, but the optimizer
+        // records phi = R(psi). Re-cut on phi so that FEM, the criteria, the adjoint and the sensitivities all belong to
+        // the design the optimizer holds (otherwise each step uses psi's gradients for phi: D-015, the MBB detached from
+        // its load pad at eval 13). Mirrors the per-iteration GEN -> XTK sequence above; the psi cut has only been used
+        // by the redistance itself, nothing else holds it yet.
+        if ( tRecut )
+        {
+            Tracer tRecutTracer( "WRK", "HMR-XTK Workflow", "Re-cut on redistanced design" );
+
+            delete tXTKPerformer;
+
+            mPerformerManager->mGENPerformer( 0 )->set_advs( aNewADVs );
+
+            tXTKPerformer = new xtk::Model( tXTKParameterList( 0 )( 0 ) );
+            tMTKPerformer = std::make_shared< mtk::Mesh_Manager >();
+
+            tXTKPerformer->set_geometry_engine( mPerformerManager->mGENPerformer( 0 ).get() );
+            tXTKPerformer->set_input_performer( mPerformerManager->mMTKPerformer( 0 ) );
+            tXTKPerformer->set_output_performer( tMTKPerformer );
+
+            mPerformerManager->mGENPerformer( 0 )->reset_mesh_information(
+                    mPerformerManager->mMTKPerformer( 0 )->get_interpolation_mesh( 0 ) );
+
+            tDeleteXTK = tXTKPerformer->delete_xtk_after_generation();
+
+            if ( not tXTKPerformer->perform_decomposition() )
+            {
+                mInitializeOptimizationRestart = true;
+
+                Vector< real > tVector( mNumCriteria, std::numeric_limits< real >::quiet_NaN() );
+
+                if ( tDeleteXTK )
+                {
+                    delete tXTKPerformer;
+                }
+
+                return tVector;
+            }
+
+            tUseNewGhostSets = tXTKPerformer->uses_SPG_based_enrichment();
+
+            tXTKPerformer->perform_enrichment();
+
+            MORIS_LOG_INFO( "Re-cut on the redistanced design before FEM" );
         }
 
         // NOTE: mSDFReinitPending is NOT cleared here.
