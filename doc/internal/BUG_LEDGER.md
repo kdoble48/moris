@@ -16,21 +16,21 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 | ID | Status | Module | Summary | Found by |
 |---|---|---|---|---|
-| MB-001 | fix-written | XTK | Segfault building the enriched integration mesh when a cell's vertices all lie on one geometry's interface → now a clear error | lunch_and_learn_xiga B13 |
-| MB-002 | partly fixed | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
+| MB-001 | fixed (992639917) | XTK | Segfault building the enriched integration mesh when a cell's vertices all lie on one geometry's interface → now a clear error | lunch_and_learn_xiga B13 |
+| MB-002 | partly fixed (22c3c2799) | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
 | MB-003 | open | GEN/FEM | Static user-defined geometry with `discretization_mesh_index = -2` (analytic) makes design gradients NaN, silently | moment_fitting (2026-07-16) |
 | MB-004 | open | FEM | Perimeter (interface VOLUME IQI) adjoint off by 12–150% on a few small-gradient ADVs | lunch_and_learn_xiga B11 |
 | MB-005 | open | OPT/HMR | Adaptive refinement during optimization: ADV count drifts between remeshes → abort in `compute_design_criteria_gradients` | seeding_impact (2026-07-13) |
 | MB-006 | open (suspect) | FEM/INT | Nonconformal branch of `select_dRdp_FD_geometry_double` also copies the leader ξ into the follower row | review of MB-002 |
 | MB-007 | open | FEM/VIS | Requested IQI evaluated on zero sets writes zeros to Exodus with no warning | Hertz contact (2026-07) |
 | MB-008 | open (limitation) | FEM/INT | `IQI_Max_Stress::compute_dQIdu` stops with "not implemented"; decks must switch the whole forward analysis to FD | moris_stress_demo (2026-10-06) |
-| MB-009 | fix-written | GEN | Design factory rejects a level-set geometry listed before the fields it depends on ("does not recognize geometry type"); properties built on the wrong field | MB-001 regression test |
+| MB-009 | fixed (a856e9c13) | GEN | Design factory rejects a level-set geometry listed before the fields it depends on ("does not recognize geometry type"); properties built on the wrong field | MB-001 regression test |
 | MB-010 | open | XTK | Phase boundary along background grid lines creates no interface facets → phases silently decoupled | MB-001 verification |
 
 ---
 
 ## MB-001 · XTK segfault: cell with every vertex on an interface
-- **Status:** fix-written on `fix/xiga-deck-bugs` (2026-10-09, second version); rebuild + test pending.
+- **Status:** fixed, commit 992639917 on `fix/xiga-deck-bugs` (2026-10-09). Verified: the regression test passes and the original reproducer now stops with the new error instead of a SIGSEGV (`runs/studies/lunch_and_learn_xiga/MB001_repro_v2`); the full XTK/GEN/INT suites pass.
 - **Symptom:** SIGSEGV "Address not mapped" in `xtk::Enriched_Integration_Mesh::setup_blockset_with_cell_clusters()` at GCMMA iteration 1, right after "XTK - Enriched Integration Mesh - Construction". Opt build only.
 - **Reproducer:** `studies/lunch_and_learn_xiga/decks/mbb_levelset.py`, MBB with `"elements": [60, 20]` and on-grid pads (no `pad_offgrid`), config `runs/studies/lunch_and_learn_xiga/configs/MB001_repro.json`. The two fixed pads are exactly 2×1 cells with every face on a grid line.
 - **Root cause:**
@@ -87,7 +87,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Symptom:** `IQI_Max_Stress::compute_dQIdu` calls `MORIS_ERROR("not implemented")` (`cl_FEM_IQI_Max_Stress.hpp:99-114`). Stress-constrained decks must set `is_analytical_forward = false`, which is slow in 3D.
 
 ## MB-009 · GEN: design factory ignores unbuilt dependencies
-- **Status:** fix-written on `fix/xiga-deck-bugs` (2026-10-09).
+- **Status:** fixed, commit a856e9c13 on `fix/xiga-deck-bugs` (2026-10-09); GEN suite passes (80101 assertions).
 - **Symptom:** `GEN does not recognize geometry type: level_set` (`cl_GEN_Design_Factory.cpp`) when a geometry with
   `dependencies` comes before its fields, e.g. a COMBINED_FIELDS geometry in GEOMETRIES with its fields in the FIELDS
   sublist, which `Geometry_Engine` appends *after* the geometries.
