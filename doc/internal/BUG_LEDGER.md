@@ -33,6 +33,8 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-015 | open | WRK | `sdf_reinit_mode = "field_remap"` throws `std::out_of_range` in `Reinitialize_Performer::perform()` | sdf_reinit_sweep (2026-06) |
 | MB-016 | fixed (f6d21bfb7) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
 | MB-017 | fixed (7a3115ee7) | GEN/WRK | Every-step in-place SDF redistance wrote coefficients at their global ADV IDs instead of ADV-vector positions → design shifted by one coefficient per redistance ("wrote 4960 of 4961"), MBB cut off its load pad | warm-restart work 2026-10-10 (D-015) |
+| MB-018 | fixed (a0fe9502e) | GEN | `Stored_Field::get_mtk_field()` built an MTK field on a null mesh pair → segfault in `mtk::Field::Field` whenever SDF reinit (or the remeshing restart) asked GEN for its MTK fields with a static stored geometry | L-bracket SDF port 2026-10-10 |
+| MB-019 | fixed (a0fe9502e) | GEN/WRK | `SIGNED_DISTANCE_IMAGE` field ignored the `name` parameter (named after the image file), so SDF reinit found no design: redistance skipped silently every iteration | L-bracket SDF port 2026-10-10 |
 | MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
 | MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 
@@ -482,6 +484,54 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Verification:** `X29_inplace_f1` (same deck, redistance every iteration): `wrote 4961 of 4961`, stays attached,
   strain energy 77.18 at iteration 30 (scheduled-restart arm 77.16, no upkeep 78.42).
 - **Regression test:** `projects/GEN/test/ut_GEN_Field.cpp`, "Design ADV positions" [MB-017]: two named B-spline level sets; positions valid, unique, covering; IDs differ from positions (the test discriminates); a slice write at one design's positions sets only that design's field (partition of unity: 1 vs 0).
+
+---
+
+## MB-018 · GEN: stored-field MTK export dereferenced a null mesh
+- **Status:** fixed, commit a0fe9502e on `fix/xiga-deck-bugs` (2026-10-10).
+- **Symptom:** `Segmentation fault ... moris::mtk::Field::Field(Mesh_Pair const&, ...)` from
+  `gen::Field_Discrete_Integration::get_mtk_field()` ← `Geometry_Engine::get_mtk_fields()` ←
+  `Reinitialize_Performer::compute_sdf_from_interface()`, at the first redistance.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/queue/failed/050_x18sdf_smoke.sh` (L-bracket stress deck, `XIGA_SDF=1`;
+  corner block and load pad are static user-defined geometries with `discretization_mesh_index -1`).
+- **Evidence:** `runs/moris_bugs/MB-018/segfault_excerpt.txt`.
+- **Root cause:** `Field_Discrete_Integration`'s ADV constructor sets `mMeshPair( nullptr, nullptr )` (upstream `// FIXME`);
+  `Stored_Field` derives from it and never sets a pair, but inherited `get_mtk_field()` → `create_mtk_field( mMeshPair )`.
+- **Fix / Code:**
+  ```diff
+  // projects/GEN/src/ADV/fields/cl_GEN_Stored_Field.hpp
+  +      std::shared_ptr< mtk::Field > get_mtk_field() override
+  +      {
+  +          return nullptr;
+  +      }
+  ```
+  (`Level_Set_Geometry::get_mtk_fields()` already returns no field for a null one.)
+- **Verification:** `052_x18sdf_smoke_r2` runs 5 in-place redistances with no crash.
+
+## MB-019 · GEN/WRK: image-seeded designs could not be redistanced (name ignored)
+- **Status:** fixed, commit a0fe9502e (2026-10-10), with guards so the failure can no longer be silent.
+- **Symptom:** `SDF redistance skipped this step: 0 level-set ADV ids vs 10404 coeffs (mesh changed)` every iteration; the
+  start-of-run initialization re-fires every evaluation; the run otherwise proceeds as if no redistancing were configured.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/queue/done/051_x18sdf_smoke_r.sh` (design geometry is a
+  `SIGNED_DISTANCE_IMAGE` with `name "Design"`).
+- **Evidence:** `runs/moris_bugs/MB-019/skip_excerpt.txt`, `after_fix.txt`.
+- **Root cause:** `fn_GEN_create_field.cpp` built `Image_Signed_Distance_Field` without the `name` parameter, and its
+  constructor named the field after the image file; `get_design_adv_positions( "Design" )` found nothing. The two
+  label lookups in `cl_WRK_Reinitialize_Performer.cpp` additionally fell back silently (interface mode: mesh pair 0 /
+  index 0, the June sweep's "layer 3") or dereferenced the end iterator (field_remap).
+- **Fix / Code:**
+  ```diff
+  // projects/GEN/src/ADV/fields/cl_GEN_Image_Signed_Distance_Field.hpp
+  -                bool                  aSdfInterpolate )
+  -                : Field_Analytic< 0 >( {}, aImageFileName )
+  +                bool                  aSdfInterpolate,
+  +                const std::string&    aName = "" )    // MB-019: the "name" parameter was ignored (field named after the image file)
+  +                : Field_Analytic< 0 >( {}, aName.empty() ? aImageFileName : aName )
+  ```
+  plus `tName` passed in `fn_GEN_create_field.cpp`, and `MORIS_ERROR`s for a missing `adv_field` label (both lookups) and for
+  a design with no ADV positions (workflow slice write).
+- **Verification:** `052_x18sdf_smoke_r2`: `wrote 10404 of 10404` on all 5 redistances.
+- **Regression test:** none yet.
 
 ---
 
