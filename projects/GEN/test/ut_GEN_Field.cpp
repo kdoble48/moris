@@ -13,6 +13,8 @@
 #include "catch.hpp"
 #include "fn_trans.hpp"
 #include "cl_GEN_User_Defined_Field.hpp"
+#include "cl_GEN_Circle.hpp"
+#include "cl_GEN_Summed_Fields.hpp"
 #include "cl_GEN_Design_Factory.hpp"
 #include "fn_PRM_GEN_Parameters.hpp"
 
@@ -917,6 +919,96 @@ namespace moris::gen
 
         // Delete mesh pointer
         delete tMesh;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Summed fields", "[gen], [field], [summed_fields]" )
+    {
+        // ADV vector shared by both circles (ADV 1 is used by both)
+        Vector< real > tADVs = { 0.5, 1.0, 2.0, 0.25 };
+
+        // Circle 1: ADV center x (id 0), ADV center y (id 1), constant radius
+        std::shared_ptr< gen::Field > tCircle1 = std::make_shared< gen::Circle >(
+                gen::ADV( tADVs, 0 ),
+                gen::ADV( tADVs, 1 ),
+                gen::ADV( 1.0 ),
+                "Circle 1" );
+
+        // Circle 2: ADV center x (id 2), ADV center y (id 3), ADV radius (id 1)
+        std::shared_ptr< gen::Field > tCircle2 = std::make_shared< gen::Circle >(
+                gen::ADV( tADVs, 2 ),
+                gen::ADV( tADVs, 3 ),
+                gen::ADV( tADVs, 1 ),
+                "Circle 2" );
+
+        Vector< std::shared_ptr< gen::Field > > tFields = { tCircle1, tCircle2 };
+        gen::Summed_Fields                      tSummed( tFields, "Summed" );
+
+        CHECK( tSummed.get_name() == "Summed" );
+
+        Vector< Matrix< DDRMat > > tPoints = { { { 0.0, 0.0 } }, { { 1.0, 1.0 } }, { { 2.5, -1.0 } } };
+
+        for ( uint iPoint = 0; iPoint < tPoints.size(); iPoint++ )
+        {
+            const Matrix< DDRMat >& tPoint = tPoints( iPoint );
+
+            // Values add
+            real tExpectedValue = tCircle1->get_field_value( 0, tPoint ) + tCircle2->get_field_value( 0, tPoint );
+            CHECK( tSummed.get_field_value( 0, tPoint ) == Approx( tExpectedValue ) );
+
+            // Determining ADV IDs concatenate in child order
+            Vector< sint > tIDs1 = tCircle1->get_determining_adv_ids( 0, tPoint );
+            Vector< sint > tIDs2 = tCircle2->get_determining_adv_ids( 0, tPoint );
+            Vector< sint > tIDs  = tSummed.get_determining_adv_ids( 0, tPoint );
+            REQUIRE( tIDs.size() == tIDs1.size() + tIDs2.size() );
+            for ( uint iID = 0; iID < tIDs1.size(); iID++ )
+            {
+                CHECK( tIDs( iID ) == tIDs1( iID ) );
+            }
+            for ( uint iID = 0; iID < tIDs2.size(); iID++ )
+            {
+                CHECK( tIDs( tIDs1.size() + iID ) == tIDs2( iID ) );
+            }
+
+            // ADV sensitivities concatenate in child order
+            Matrix< DDRMat > tSens1 = tCircle1->get_dfield_dadvs( 0, tPoint );
+            Matrix< DDRMat > tSens2 = tCircle2->get_dfield_dadvs( 0, tPoint );
+            Matrix< DDRMat > tSens  = tSummed.get_dfield_dadvs( 0, tPoint );
+            REQUIRE( tSens.numel() == tSens1.numel() + tSens2.numel() );
+            REQUIRE( tSens.numel() == tIDs.size() );
+            for ( uint iEntry = 0; iEntry < tSens1.numel(); iEntry++ )
+            {
+                CHECK( tSens( iEntry ) == Approx( tSens1( iEntry ) ) );
+            }
+            for ( uint iEntry = 0; iEntry < tSens2.numel(); iEntry++ )
+            {
+                CHECK( tSens( tSens1.numel() + iEntry ) == Approx( tSens2( iEntry ) ) );
+            }
+
+            // Coordinate sensitivities sum
+            Matrix< DDRMat > tDCoord1( 1, 2 );
+            Matrix< DDRMat > tDCoord2( 1, 2 );
+            Matrix< DDRMat > tDCoord( 1, 2 );
+            tCircle1->get_dfield_dcoordinates( 0, tPoint, tDCoord1 );
+            tCircle2->get_dfield_dcoordinates( 0, tPoint, tDCoord2 );
+            tSummed.get_dfield_dcoordinates( 0, tPoint, tDCoord );
+            REQUIRE( tDCoord.numel() == tDCoord1.numel() );
+            for ( uint iEntry = 0; iEntry < tDCoord.numel(); iEntry++ )
+            {
+                CHECK( tDCoord( iEntry ) == Approx( tDCoord1( iEntry ) + tDCoord2( iEntry ) ) );
+            }
+        }
+
+        // Hand-computed check at (1,1): circle1 = sqrt(0.25+0)-1 = -0.5, circle2 = sqrt(1+0.5625)-1.0
+        CHECK( tSummed.get_field_value( 0, tPoints( 1 ) ) == Approx( -0.5 + std::sqrt( 1.0 + 0.5625 ) - 1.0 ) );
+
+        // Remeshing of a summed design is unsupported
+        CHECK( tSummed.get_mtk_field() == nullptr );
+
+        // At least one field is required
+        Vector< std::shared_ptr< gen::Field > > tNoFields;
+        CHECK_THROWS( gen::Summed_Fields( tNoFields ) );
     }
 
     //--------------------------------------------------------------------------------------------------------------
