@@ -38,7 +38,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
 | MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 | MB-020 | fixed (abb99ee66) | GEN | Multilinear intersection divides by the norm of the four corner φ values; a cell whose corners are all exactly 0 (order-2 field nonzero only at mid-side/interior nodes) gives NaN residuals → abort "Newton did not converge: Reference residual nan" | lunch_and_learn_xiga X40_cheese_o2 (D-020) |
-| MB-021 | open | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
+| MB-021 | fixed (4ed1e2393) | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
 
 ---
 
@@ -592,24 +592,61 @@ Missing features belong in a study's capability list, not here (exception: a mis
 ```
 
 ## MB-021 · OPT: in-place SDF checkpoints hold the raw trial point, not the redistanced design
-- **Status:** open (fix not written).
+- **Status:** fixed, commit 4ed1e2393 on `fix/xiga-deck-bugs` (2026-10-10), with regression test. Written in worktree `moris-mb021`
+  (branch `fix/mb021-advs-iter`). Verified end to end: `runs/studies/lunch_and_learn_xiga/X82_mb021_check` (X9r_rcp, `max_iter` 4,
+  worktree binary) has 936/950/1032/1091 coefficients at |s| = 0.15 in Iter_1..4 (X9r_rcp: 0 in each), no stray Iter_5, and the
+  objective trace of its 5 evaluations equals X9r_rcp's first 5 to all 15 printed digits. Iter_0 holds the seed in both runs: the
+  in-place redistance first fires in evaluation 1. Main `build_opt` rebuild queued as XIGA job `1950_build_mb021.sh`.
+- **Evidence:** `runs/moris_bugs/MB-021/` — `checkpoint_counts.txt` (per-file clamp counts before/after + objective traces),
+  `ut_prefix.log` / `ut_postfix.log` (the [MB-021] test on the unfixed and fixed source), `mb021_count.py`.
 - **Symptom:** in `reinit_in_place` runs, `ADV_Alg_0_Iter_0..N-1.hdf5` contain no coefficient at the SDF clamp ±0.15; only the last file does
   (X9r_rcp: 0 of 4961 at |s| = 0.15 in Iter_0/1/50/100/150, 1194 in Iter_151; X81_o2_cellorder on 3bc5a1ca3: 0 in Iter_1..150, 725 in
   Iter_151). The redistanced φ = R(ψ) clamps at ±0.15, so the intermediate files are the raw GCMMA trial points ψ.
-- **Code** (`projects/OPT/src/cl_OPT_Algorithm_MMA.cpp:118-142`, `projects/OPT/src/cl_OPT_Algorithm.cpp:453-461`):
-  ```cpp
-  this->write_advs_to_file( tADVs );          // psi -> Iter_k
-  this->compute_design_criteria( tADVs );     // advances gLogger's opt iteration (hypothesis, unverified)
+- **Root cause (confirmed by reading the code):** `write_advs_to_file` names the file from `gLogger.get_opt_iteration()`. The criteria call
+  advances it: `Algorithm::compute_design_criteria` → `communicate_running_status()` → `MORIS_LOG_ITERATION()` for
+  `Task::compute_criteria_forward_analysis` (`projects/OPT/src/cl_OPT_Algorithm.cpp:390-394`). So in `Algorithm_MMA::func` the ψ write
+  went to Iter_k, the φ rewrite to Iter_{k+1}, and the next evaluation's ψ write overwrote Iter_{k+1}. Only the last φ survived, in a
+  stray Iter_N past the last evaluation. The TPL GCMMA wrapper writes once, before the criteria call, so it is not affected.
+- **Fix:** an overload `Algorithm::write_advs_to_file( aADVs, aOptIter )`; `func` captures the index before `compute_design_criteria`
+  and names both writes from it. The one-argument signature delegates with the logger's iteration (other callers unchanged).
+- **Code** (commit 4ed1e2393):
+  ```diff
+  // projects/OPT/src/cl_OPT_Algorithm_MMA.cpp — Algorithm_MMA::func()
+  -        this->write_advs_to_file( tADVs );
+  +        // Capture the index first: compute_design_criteria() advances the optimization iteration (MB-021)
+  +        const uint tOptIter = gLogger.get_opt_iteration();
+  +        this->write_advs_to_file( tADVs, tOptIter );
+  
+           this->compute_design_criteria( tADVs );
   ...
-  this->write_advs_to_file( tADVs );          // phi -> named from gLogger.get_opt_iteration(): Iter_{k+1}, overwritten by psi next call
-  ```
-- **Hypothesis:** `write_advs_to_file` names the file from `gLogger.get_opt_iteration()`, which the criteria evaluation increments, so the
-  rewrite targets the next index. Not confirmed by instrumentation.
-- **Consequences:** warm restarts from Iter_k < N start from ψ (one optimizer step off the redistanced design); per-iteration |∇φ|
-  measurements (`sdf_quality.py`) and coefficient renders from intermediate checkpoints show ψ, not φ (ψ is within one move limit of φ).
-  The final design is correct (the last file holds φ).
-- **Proposed fix:** capture the iteration index before `compute_design_criteria` and pass it to an overload `write_advs_to_file( aADVs, aIter )`
-  for the rewrite; regression test: a 3-iteration native-MMA run with a reinit hook asserts Iter_1 equals the hook's output.
-- **Reproducer:** `runs/studies/lunch_and_learn_xiga/X81_o2_cellorder/results/checkpoints/` (count |s| = 0.15 per file).
-- **Workaround:** use only the final checkpoint as a φ restart; treat intermediate checkpoints as ψ.
+               // checkpoints (and restarts) hold phi = R(psi) rather than the raw trial point psi (written above).
+  -            this->write_advs_to_file( tADVs );
+  +            this->write_advs_to_file( tADVs, tOptIter );
 
+  // projects/OPT/src/cl_OPT_Algorithm.cpp
+       Algorithm::write_advs_to_file( const Vector< real >& aADVs )
+       {
+  -        // Get iteration from global clock
+  -        uint tOptIter = gLogger.get_opt_iteration();
+  +        // Name the file from the iteration of the global clock
+  +        this->write_advs_to_file( aADVs, gLogger.get_opt_iteration() );
+  +    }
+  +
+  +    void
+  +    Algorithm::write_advs_to_file( const Vector< real >& aADVs, uint aOptIter )
+  +    {
+           // Create file name
+           std::string tRestartFileName =
+  -                "ADV_Alg_" + std::to_string( mCurrentOptAlgInd ) + "_Iter_" + std::to_string( tOptIter ) + ".hdf5";
+  +                "ADV_Alg_" + std::to_string( mCurrentOptAlgInd ) + "_Iter_" + std::to_string( aOptIter ) + ".hdf5";
+  ```
+- **Regression test:** `OPT/test/opt_test.cpp` "Native GCMMA in-place redistance checkpoints hold the redistanced design"
+  `[optimization][MB-021]`: native MMA (3 its) with the reinit hook on the Rosenbrock + far-field problem of the MB-013 test; each
+  Iter_k must equal evaluation k's redistanced ADVs and no Iter_N may exist. Unfixed source: 8 of 26 assertions fail; fixed: all pass.
+- **Consequences (before the fix):** warm restarts from Iter_k < N started from ψ (one optimizer step off the redistanced design);
+  per-iteration |∇φ| measurements (`sdf_quality.py`) and coefficient renders from intermediate checkpoints showed ψ, not φ. The final
+  design was correct. After the fix the last evaluation's φ is in Iter_{N-1}, not Iter_N: tooling that picks the newest file
+  (`sort -V | tail -1`) is unaffected, tooling that hard-codes `Iter_<max_iter+1>` must change.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/X81_o2_cellorder/results/checkpoints/` (count |s| = 0.15 per file with
+  `runs/moris_bugs/MB-021/mb021_count.py`).
+- **Workaround (runs on builds before 4ed1e2393):** use only the final checkpoint as a φ restart; treat intermediate checkpoints as ψ.
