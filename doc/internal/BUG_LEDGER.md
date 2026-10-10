@@ -37,6 +37,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-019 | fixed (a0fe9502e) | GEN/WRK | `SIGNED_DISTANCE_IMAGE` field ignored the `name` parameter (named after the image file), so SDF reinit found no design: redistance skipped silently every iteration | L-bracket SDF port 2026-10-10 |
 | MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
 | MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
+| MB-020 | fixed (abb99ee66) | GEN | Multilinear intersection divides by the norm of the four corner φ values; a cell whose corners are all exactly 0 (order-2 field nonzero only at mid-side/interior nodes) gives NaN residuals → abort "Newton did not converge: Reference residual nan" | lunch_and_learn_xiga X40_cheese_o2 (D-020) |
 
 ---
 
@@ -544,6 +545,34 @@ Missing features belong in a study's capability list, not here (exception: a mis
   a design with no ADV positions (workflow slice write).
 - **Verification:** `052_x18sdf_smoke_r2`: `wrote 10404 of 10404` on all 5 redistances.
 - **Regression test:** none yet.
+
+## MB-020 · GEN: multilinear intersection NaN when every corner φ of the cell is zero
+- **Status:** fixed, commit abb99ee66 on `fix/xiga-deck-bugs` (2026-10-10), with regression test. First written in worktree `moris-mb020` (branch `fix/mb020-bilinear-nan`).
+- **Symptom:** abort in the XTK cut (`Node_Hierarchy_Interface::determine_intersected_edges_and_make_requests` → `Level_Set_Geometry::create_intersection_node` → `Intersection_Node_Bilinear`):
+  `Intersection_Node_Bilinear::compute_intersection - Newton did not converge: Reference residual nan Current residual nan Edge coordinate 1.000000e+00`
+  at `projects/GEN/src/ADV/cl_GEN_Level_Set_Geometry.cpp:424`. Only with `use_multilinear_interpolation = true`; the same run with it off (`X40_cheese_o2_nomlin`) completes 151 evals.
+- **Reproducer:** `runs/moris_bugs/MB-020/run_repro.sh <outdir> [MORISROOT]` (config `runs/moris_bugs/MB-020/repro_full.json` = X40_cheese_o2: MBB, order-2 B-spline + Lagrange, multilinear, swiss-cheese seed, native MMA, in-place SDF redistance every step, 13 its). Deterministic: aborts in iteration 12 during "Re-cut on redistanced design", ~80 s, ~0.6 GB.
+- **Evidence:** `runs/moris_bugs/MB-020/` — `signature_excerpt.txt`, `diag_excerpt.txt` (instrumented build: QUAD9 cell x∈[0.325,0.35], y∈[0.15,0.175], corner φ = 0, 0, 0, 0 exactly, mid-side φ = ±5e-18, −0.075, −0.075, centre −0.075; threshold 0; scaling = inf), `after_fix.txt`, `fix.diff`.
+- **Root cause:** `projects/GEN/src/ADV/cl_GEN_Level_Set_Geometry.cpp:227` scales the corner values by `1/norm(tPhiBCNodes)` before any degeneracy check. With all four (eight in 3D) corner values exactly 0, `tPhiScaling = inf`, so `tPhiBCNodes = 0·inf = NaN` and the scaled threshold `0·inf = NaN`. The sign-change test (`NaN > 0` is false) and the coincident-parent test (`|NaN| < eps` is false) both pass through, the Newton residual is NaN for all three initial guesses, and the final guess `1.0` is kept by the `min/max` clamp. Such cells occur at order 2: the corner (knot) values of a quadratic B-spline are averages of neighbouring coefficients, so an alternating coefficient pattern at the ±bound (here ±0.15 after the SDF clamp) is 0 at every corner but nonzero inside. The multilinear model sees φ ≡ 0 on the cell.
+- **Fix:** skip the scaling when the corner norm is zero. The existing checks then classify the edge: both parents on the zero isocontour → coincident-parent branch returns 0.0, and XTK discards edges whose parents are on the interface.
+- **Code:** (trimmed from `git show abb99ee66`)
+  ```diff
+  --- a/projects/GEN/src/ADV/cl_GEN_Level_Set_Geometry.cpp
+  +++ b/projects/GEN/src/ADV/cl_GEN_Level_Set_Geometry.cpp
+  @@ -223,8 +223,12 @@ namespace moris::gen
+  -            // Scale element level set field such that norm equals 1.0
+  -            real tPhiScaling = 1.0 / norm( tPhiBCNodes );
+  +            // Scale element level set field such that norm equals 1.0. If every corner value is zero, the multilinear
+  +            // field vanishes on the whole cell [...]: 1/0 would turn every scaled value into NaN (MB-020), so
+  +            // leave the values unscaled; the checks below then classify the edge (no sign change / coincident parents).
+  +            real tPhiNorm    = norm( tPhiBCNodes );
+  +            real tPhiScaling = tPhiNorm > MORIS_REAL_MIN ? 1.0 / tPhiNorm : 1.0;
+               tPhiBCNodes      = tPhiScaling * tPhiBCNodes;
+               tIsocontourThreshold *= tPhiScaling;
+  ```
+- **Verification:** the reproducer against the worktree build runs all 13 iterations to rc 0 (`runs/moris_bugs/MB-020/repro_fix`), passing iteration 12 with no MB-001 "every vertex on an interface" error.
+- **Regression test:** `Bilinear Intersections with Zero Corner Values` (tag `[MB-020]`) in `projects/GEN/test/ut_GEN_Intersection_Level_Set.cpp`: one QUAD4 with an all-zero nodal field, multilinear on, threshold 0; queues every edge and diagonal through `Geometry_Engine::queue_intersection` and checks the local coordinate is finite and in [-1, 1]. Without the fix it fails with the MB-020 signature (unexpected exception, `Reference residual nan`); with it, it passes (36 assertions), and the full `GEN-test.exe` passes (26 cases). Logs: `runs/moris_bugs/MB-020/unit_test/`.
+- **Workaround:** `use_multilinear_interpolation = false` at order 2 (X40_cheese_o2_nomlin ran clean).
 
 ---
 
