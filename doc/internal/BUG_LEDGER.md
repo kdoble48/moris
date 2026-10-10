@@ -17,7 +17,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | ID | Status | Module | Summary | Found by |
 |---|---|---|---|---|
 | MB-001 | fixed (992639917) | XTK | Segfault building the enriched integration mesh when a cell's vertices all lie on one geometry's interface → now a clear error | lunch_and_learn_xiga B13 |
-| MB-002 | partly fixed (22c3c2799) | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
+| MB-002 | fixed (22c3c2799; residual = MB-011) | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
 | MB-003 | open | GEN/FEM | Static user-defined geometry with `discretization_mesh_index = -2` (analytic) makes design gradients NaN, silently | moment_fitting (2026-07-16) |
 | MB-004 | open | FEM | Perimeter (interface VOLUME IQI) adjoint off by 12–150% on a few small-gradient ADVs | lunch_and_learn_xiga B11 |
 | MB-005 | open | OPT/HMR | Adaptive refinement during optimization: ADV count drifts between remeshes → abort in `compute_design_criteria_gradients` | seeding_impact (2026-07-13) |
@@ -26,6 +26,8 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-008 | open (limitation) | FEM/INT | `IQI_Max_Stress::compute_dQIdu` stops with "not implemented"; decks must switch the whole forward analysis to FD | moris_stress_demo (2026-10-06) |
 | MB-009 | fixed (a856e9c13) | GEN | Design factory rejects a level-set geometry listed before the fields it depends on ("does not recognize geometry type"); properties built on the wrong field | MB-001 regression test |
 | MB-010 | open | XTK | Phase boundary along background grid lines creates no interface facets → phases silently decoupled | MB-001 verification |
+| MB-011 | fixed (06515ef67) | FEM/INT | Cluster-measure FD sensitivities (Nitsche-interface SP) use a base residual from CM/SP caches of the last perturbed geometry → 0.5–15% gradient error next to interfaces | MB-002 verification |
+| MB-012 | open | VIS | STANDARD VIS mesh writes non-finite nodal values (UX/UY/VM) at 11–15% of nodes, mostly void-side but some with φ ≥ 0 | X18 peak extraction |
 
 ---
 
@@ -43,7 +45,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Workaround:** keep fixed-geometry faces off grid lines.
 
 ## MB-002 · FEM: follower parametric coordinates in double-sided FD geometry sensitivities
-- **Status:** partly fixed on `fix/xiga-deck-bugs` (2026-10-09). After the fix the reproducer gives ADVs 262/342/343/349 = −6.58e-3/−6.64e-3/−2.64e-2/−6.93e-4 vs FD −6.93e-3/−7.00e-3/−2.68e-2/−6.21e-4: the 1e8 spikes are gone, signs and magnitudes are right, but 1.7–12% error remains on the grid-aligned interface row. The residual is under investigation (candidates: follower point leaving its element during the FD step, ghost facets on cell edges, the step size chosen from the leader only).
+- **Status:** fixed, commit 22c3c2799 (2026-10-09); the 1e8 defect is gone. The remaining 0.5–15% error near the interface is a separate defect (MB-011), also present in the off-grid pad25 control. After the fix the reproducer gives ADVs 262/342/343/349 = −6.58e-3/−6.64e-3/−2.64e-2/−6.93e-4 vs FD −6.93e-3/−7.00e-3/−2.68e-2/−6.21e-4: the 1e8 spikes are gone, signs and magnitudes are right, but 1.7–12% error remains on the grid-aligned interface row. The residual is under investigation (candidates: follower point leaving its element during the FD step, ghost facets on cell edges, the step size chosen from the leader only).
 - **Symptom:** analytic d(strain energy)/dADV of order 1e7–1e8, sometimes with the wrong sign, for ADVs whose intersection nodes sit on a double-sided interface facet lying along a background-cell edge. Volume and perimeter gradients are fine, because they use explicit FD and don't go through λᵀ∂R/∂p. No NaN and no warning; GCMMA climbs and topology degrades.
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/triage_bridge/sweep_pad20_idx1/`, a bridge with the deck pad's top face on node row J=2. SWEEP ADVs 262/342/343/349: analytic −1.25e8/+1.31e8/+6.9e7/−6.4e6 vs central FD −6.93e-3/−7.00e-3/−2.69e-2/−6.2e-4. The control with the pad face at 2.5h (`sweep_pad25_an`) is clean.
 - **Root cause:** `FEM/INT/src/IWG/cl_FEM_IWG.cpp` `IWG::select_dRdp_FD_geometry_double` computed the perturbed node's ξ in the *leader* IP element and wrote it into the *follower* IG cell's parametric coefficients. That is only valid when both sides share one IP element. Across a cell edge (η = −1 vs +1) the follower point jumped a whole cell, giving an O(1) residual jump divided by δ ≈ 5.6e-9. GEN's dx/dφ was verified correct (the ADV ratio test matches, 1.90).
@@ -110,6 +112,37 @@ Missing features belong in a study's capability list, not here (exception: a mis
   facets on background edges shared by non-cut cells of different bulk phases.
 - **Workaround:** keep static geometry boundaries off grid lines. MB-001 v2 now errors in the worst case (all vertices
   on the interface); partially grid-aligned boundaries are not detected yet.
+
+## MB-011 · FEM: stale CM/SP caches in cluster-measure FD geometry sensitivities
+- **Status:** fixed, commit 06515ef67 (2026-10-10). Falsifier (unfixed binary, central FD): 262/342/343/349 within 8.5e-5/1.4e-4/4.4e-6/9.6e-4 of FD, as
+  predicted. After the fix (default forward FD): the same, and the pad25 control is within 1e-5..1e-3 (was 15%). INT suite passes.
+  Logs: `runs/studies/lunch_and_learn_xiga/queue/logs/005_mb011_falsify.log`, `007_build_mb011.log`.
+- **Symptom:** the analytic objective gradient is off by 0.5–15% on ADVs next to a Nitsche interface whose stabilization
+  depends on cluster measures; the far field is fine. Deterministic, independent of the FD step size, symmetric.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/triage_bridge/sweep_pad25_fd` (ADVs 343/349/397: 0.5%/15%/1.0%) and
+  `sweep_verify_mb002` (262/342/343/349: 5%/5%/1.7%/12%).
+- **Root cause (static analysis):** `IWG::select_dRdp_FD_geometry_double` / `_geometry` restore the coordinates, then
+  call `add_cluster_measure_dRdp_FD_geometry[_double]`. That routine computes its "unperturbed" residual without
+  `reset_eval_flags()`, so the CM flux/traction and SP caches (`cl_FEM_Constitutive_Model.cpp` mFluxEval/mTractionEval)
+  still hold the last perturbed state. With the default one-sided (forward) FD scheme, that stale base enters
+  (∂R/∂x)·(h/3)/MEA·dMEA/dp for every PDV of the cluster. `IQI::add_cluster_measure_dQIdp_FD_geometry` has the same pattern.
+  The elementwise bulk paths already reset (`cl_FEM_IWG.cpp` ~3422, `cl_FEM_IQI.cpp` ~2669).
+- **Fix:** `this->reset_eval_flags()` before the base evaluation in the two IWG routines and the IQI routine.
+- **Workaround:** FEM computation `finite_difference_scheme = POINT_3_CENTRAL` (no base point).
+- **Regression test:** TODO, forward vs central dR/dp on a Nitsche-interface facet with an active PDV (agree to 1e-6).
+
+## MB-012 · VIS: non-finite nodal output values
+- **Status:** open (found 2026-10-10).
+- **Symptom:** nodal IQI fields in the STANDARD VIS exodus (UX, UY, VM) are non-finite at 11–15% of nodes: X9 MBB
+  917/5946, stress demo 409/3735, X18 1605/14667. Of X9's 917, 793 lie in the void (φ < 0) but 124 have φ ≥ 0.
+  Post-processing that takes a max without masking returns NaN; this broke the first X18 σ* calibration
+  (σ* = 0.6 × NaN made design 2 abort with an infinite P-norm).
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/X9_baseline/results/exodus/mbb_levelset.exo` (last step) with the
+  GEN level set `GEN_mbb.e-s.0151`.
+- **Root cause:** not investigated. Possibly nodal averaging with zero weight for nodes of material clusters that no
+  material integration cell touches. Check whether non-finite output is intended as a "no value" marker; if it is, it
+  should be documented and kept out of material nodes.
+- **Workaround:** mask non-finite values in post-processing (`scripts/lbracket_peak.py`).
 
 ---
 
