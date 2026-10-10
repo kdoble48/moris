@@ -28,6 +28,12 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-010 | open | XTK | Phase boundary along background grid lines creates no interface facets → phases silently decoupled | MB-001 verification |
 | MB-011 | fixed (06515ef67) | FEM/INT | Cluster-measure FD sensitivities (Nitsche-interface SP) use a base residual from CM/SP caches of the last perturbed geometry → 0.5–15% gradient error next to interfaces | MB-002 verification |
 | MB-012 | open | VIS | STANDARD VIS mesh writes non-finite nodal values (UX/UY/VM) at 11–15% of nodes, mostly void-side but some with φ ≥ 0 | X18 peak extraction |
+| MB-013 | open (limitation) | WRK/OPT | Every-step in-place SDF redistancing edits the ADV vector between criteria and gradient evaluation → ADV-consistency `MORIS_ERROR` after O(100) iterations (native MMA only; GCMMA cannot use it) | sdf_reinit_sweep (2026-06) |
+| MB-014 | open | WRK | Scheduled-restart SDF apply in `Workflow_HMR_XTK::initialize()` replaces the whole ADV vector with one field's coefficients → silently skipped ("does not match current ADV count") on composite designs (level set + PDVs) | sdf_reinit_sweep (2026-06), review 2026-10-10 |
+| MB-015 | open | WRK | `sdf_reinit_mode = "field_remap"` throws `std::out_of_range` in `Reinitialize_Performer::perform()` | sdf_reinit_sweep (2026-06) |
+| MB-016 | fixed (f6d21bfb7) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
+| MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
+| MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 
 ---
 
@@ -130,7 +136,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Workaround:** `discretization_mesh_index = -1`. Memory note: gen-static-geometry-stored-field.
 
 ## MB-004 · FEM: perimeter adjoint mismatch
-- **Status:** open.
+- **Status:** open. **Re-test after MB-011 (2026-10-10, queue job 091, `runs/studies/lunch_and_learn_xiga/X6_sweep/mb004_retest/`): not fixed by it.** Large-gradient ADVs match FD to 1e-5..2e-3 (416, 1104, 1112, 1113, 3812, 4014); small-gradient ADVs (|g| <= 6e-4) are off by 14-552%, three with the wrong sign (417 +6.02e-4 vs FD +5.27e-4; 1103 +5.42e-5 vs -2.73e-5; 1102 +7.07e-5 vs -1.57e-5; 4016 -5.24e-5 vs +3.13e-5). Volume matches to 1e-8 everywhere.
 - **Evidence:** `runs/moris_bugs/MB-004/` — `perimeter_gradient_table.md` (pre-MB-011 mismatches), raw SWEEP, post-MB-011 diagnostic logs.
 - **Symptom:** X6 SWEEP at the MBB seed. Strain-energy and volume adjoints match central FD (≤ 6.5e-5, ~1e-8). The perimeter criterion (`IQI VOLUME` on `iside_*` sets) is off by 12%, 18% and 150% on 3 of 12 ADVs. FD is stable to 4 digits over steps 1e-5 to 1e-7. The absolute size is ~1e-4 of the largest perimeter gradient.
 - **Reproducer:** `runs/studies/lunch_and_learn_xiga/X6_sweep/` (runB_fd, ADVs 417, 4015, 1103).
@@ -268,6 +274,181 @@ Missing features belong in a study's capability list, not here (exception: a mis
   should be documented and kept out of material nodes.
 - **Code:** defect not located yet; add the excerpt when the root cause is found.
 - **Workaround:** mask non-finite values in post-processing (`scripts/lbracket_peak.py`).
+
+---
+
+## MB-013 · WRK/OPT: every-step in-place SDF redistancing trips the ADV-consistency check
+- **Status:** open (limitation; recorded 2026-10-10 from the 2026-06 sweep).
+- **Symptom:** with `sdf_reinit_every_step = true` (native MMA, `reinit_in_place = true`) the run aborts after O(100)
+  iterations (iteration ~829 in IP_f10): `Problem::compute_design_criteria_gradients - given ADV vector does not match
+  ADVs used to compute design criteria.` (`cl_OPT_Problem.cpp:265`). Before the abort the objective oscillates
+  (0.398–0.55 vs baseline 0.529).
+- **Reproducer:** `runs/studies/sdf_reinit_sweep/IP_f10/` (H18 60×20 box beam, every-step interface reinit, cadence 10).
+- **Evidence:** `runs/moris_bugs/MB-013/` — `assert_excerpt_IP_f10.txt`, `baseline_vs_reinit10.png`, the sweep's
+  `FINDINGS.md`, the deck `IP_f10.cpp`.
+- **Root cause:** the in-place block in `cl_WRK_Workflow_HMR_XTK.cpp` (`perform()`, "Every-step in-place redistance",
+  ~lines 480–530) overwrites `aNewADVs` after the criteria evaluation, so the gradient call sees a different ADV vector
+  than the one the criteria were computed for. Documented in-code as KNOWN LIMITATION (commit d50ede932). GCMMA (TPL)
+  cannot use the mode at all.
+- **Code:**
+  ```cpp
+  // projects/OPT/src/cl_OPT_Problem.cpp:263-267 — the check that fires
+  MORIS_ERROR( std::abs( mADVs( iADVIndex ) - aNewADVs( iADVIndex ) ) <= mADVNormTolerance,
+          "Problem::compute_design_criteria_gradients - given ADV vector does not match ADVs used to compute design criteria.\n" );
+  // projects/WRK/src/cl_WRK_Workflow_HMR_XTK.cpp (perform(), every-step block) — the write between the two calls
+  aNewADVs( tAdvId ) = tCoeffs( iC );
+  ```
+- **Workaround:** use scheduled-restart mode (`sdf_reinit_every_step = false`, redistance every N iterations through a
+  GCMMA restart). Valid for single-field designs; see MB-014 for composite ones.
+
+## MB-014 · WRK: scheduled-restart SDF apply assumes the level set is the whole ADV vector
+- **Status:** open (recorded 2026-10-10).
+- **Symptom:** on a restart after a scheduled redistance, `initialize()` logs `SDF coefficient count (%d) does not match
+  current ADV count (%d) ... Skipping SDF application.` and the redistance is silently dropped whenever the ADV vector
+  also holds other designs or PDVs (H18: 524 level-set coefficients vs 3767 ADVs, so 100% skipped).
+- **Reproducer:** the H18 composite deck of `runs/studies/sdf_reinit_sweep/` with `sdf_reinit_every_step = false`.
+- **Evidence:** `runs/moris_bugs/MB-013/sdf_reinit_sweep_FINDINGS.md` ("Layer 6", "What a complete study needs" 1).
+- **Root cause:** the in-place path was converted to a slice write (d50ede932: coefficients written at
+  `get_design_determining_adv_ids( adv_field )`), but the restart path still builds a full-length ADV vector from the
+  coefficients.
+- **Code:**
+  ```cpp
+  // projects/WRK/src/cl_WRK_Workflow_HMR_XTK.cpp, Workflow_HMR_XTK::initialize() (~lines 131-152)
+  if ( tStoredSize != tExpectedSize ) { MORIS_LOG_WARNING( "SDF coefficient count (%d) does not match current ADV count ..." ); }
+  else
+  {
+      Vector< real > tNewADVs( tCoeffs.n_rows() );          // whole vector = one field's coefficients
+      for ( uint i = 0; i < tCoeffs.n_rows(); ++i ) { tNewADVs( i ) = tCoeffs( i ); }
+      mPerformerManager->mGENPerformer( 0 )->set_advs( tNewADVs );
+  }
+  ```
+- **Fix (proposed):** the same slice write as the in-place path, onto a copy of the current GEN ADVs.
+- **Workaround:** keep the level set as the only design field (no PDVs, static geometries with
+  `discretization_mesh_index = -1`), as `studies/lunch_and_learn_xiga/decks/mbb_levelset.py` does.
+
+## MB-015 · WRK: `field_remap` reinitialization throws `std::out_of_range`
+- **Status:** open (recorded 2026-10-10 from the 2026-06 sweep; not re-reproduced).
+- **Symptom:** `std::out_of_range` from `Reinitialize_Performer::perform()` with `sdf_reinit_mode = "field_remap"` (the default mode).
+- **Reproducer:** the `FR_f*` arms of `runs/studies/sdf_reinit_sweep/` (H18 deck, field_remap mode).
+- **Evidence:** `runs/moris_bugs/MB-013/sdf_reinit_sweep_FINDINGS.md` ("Layer 2").
+- **Root cause:** not investigated.
+- **Code:** defect not located yet; mode selection at `projects/WRK/src/cl_WRK_Reinitialize_Performer.cpp:75` and :125.
+- **Workaround:** use `sdf_reinit_mode = "interface"`.
+
+## MB-016 · XTK: analytic-field cut-cell selection from background corners → nonconforming child meshes → SIGSEGV
+- **Status:** open (2026-10-10)
+- **Symptom:** SIGSEGV "Address not mapped", failing address = <base>+0x1fffffffc ((2^31−1)×4), in `xtk::Integration_Mesh_Generator::construct_subphase_neighborhood` (+0xe8d) ← `Integration_Mesh_Generator::perform` ← `Model::decompose`, right after "XTK - Integration_Mesh_Generator - Creating Facets". Opt build; a debug build would stop at the `MORIS_ASSERT` "Adjacent IG Cell not found" (predicted, build_dbg predates the branch). Seen at GCMMA eval 7 of `runs/studies/gaussian_splat_ls/runs/G-N24`.
+- **Reproducer:** `runs/moris_defects/D-012_G-N24/triage/repro_eval7.json` (crash θ `theta_G-N24_eval7.npy`, max_iter 1, ~10 s); minimal: `triage/synth_N1_crash.json` (one Gaussian, SEGV) vs `triage/synth_N1_control.json` (μ_y + 0.003, runs). Predictor `triage/predict_nonconformal.py` matches 24/24 drop-one runs.
+- **Evidence:** `runs/moris_defects/D-012_G-N24/triage/` (logs, `drop/RESULTS.txt`, θ files); bank to `runs/moris_bugs/MB-016/`.
+- **Root cause:** with ≥ 2 geometries, geometry k > 0 subdivides only background cells flagged by GEN `is_intersected` on the 4 background corner nodes (`projects/GEN/src/cl_GEN_Geometry_Engine.cpp:300-323`; list built at `projects/XTK/src/cl_XTK_Integration_Mesh_Generator.cpp:476`, consumed by `projects/XTK/src/cl_XTK_Node_Hierarchy_Interface.cpp:411-430`). An analytic field (`discretization_mesh_index = -2`) is evaluated exactly at derived vertices (`projects/GEN/src/ADV/fields/cl_GEN_Field_Analytic.hpp:104-108`), so a geometry-0 cut vertex on a shared background edge can carry the opposite geometry-k sign to both endpoints. Only the flagged neighbour splits that edge → an IG facet with one cell → neighbour index left at `MORIS_INDEX_MAX` → unchecked read. B-spline / linear fields cannot produce this (linear along the edge).
+- **Code** (open; `projects/XTK/src/cl_XTK_Integration_Mesh_Generator.cpp:1409-1429`):
+  ```cpp
+  moris_index tNeighborSubphaseIndex = MORIS_INDEX_MAX;
+  for ( const auto& iCell : aFacetConnectivity->mFacetToCell( tIgFacetIndex ) )
+  {
+      if ( iCell->get_index() != tMyIgCellIndex )
+      {
+          tNeighborSubphaseIndex = aCutIntegrationMesh->get_ig_cell_subphase_index( iCell->get_index() );
+      }
+  }
+  MORIS_ASSERT( tNeighborSubphaseIndex != MORIS_INDEX_MAX,
+          "Integration_Mesh_Generator::construct_subphase_neighborhood() - "
+          "Adjacent IG Cell not found." );
+  ...
+  moris_index tNeighborBulkPhaseIndex = aCutIntegrationMesh->get_subphase_bulk_phase( tNeighborSubphaseIndex );   // SIGSEGV: index 2^31-1
+  ```
+- **Fix:** (a) select cells for geometry k > 0 from the current child-mesh vertices (or derive child-vertex regions consistently with the corner test); (b) promote the `MORIS_ASSERT` to `MORIS_ERROR` naming the background cell.
+- **Regression test:** to add — XTK 2D, Box + analytic sliver through a Box-cut edge (synthetic θ above).
+- **Workaround:** `use_multilinear_interpolation = true` on the analytic design geometry (tested: the crash design runs; changes strain energy +11.7% at a sliver-rich design → FD-check gradients before use). σ_min ≥ 2h only lowers the frequency.
+
+## MB-017 · GEN/MRS: `Design_Variable` char ID wraps → analytic ADVs silently aliased
+- **Status:** fix-written (feature/gen-additive @ee83435b7, 2026-10-10)
+- **Symptom:** none at run time — a deck with > ~250 non-constant `Design_Variable`s gets fewer ADVs than variables; variables whose IDs repeat mod 256 share an ADV (value and bounds). Found by static review of the gaussian_splat_ls G-N60 deck (360 variables); D-011.
+- **Reproducer:** `runs/studies/gaussian_splat_ls/runs/compile_G-N60/` (360 Design_Variables; compare the ADV count MORIS reports). Unit test `[mb017]` in GEN-test.exe (300 variables → 300 distinct ADVs).
+- **Evidence:** `runs/moris_defects/D-011_compile_G-N60/`.
+- **Root cause:** `char mID` assigned from `inline static char mCount` (`projects/MRS/CNT/src/cl_Design_Variable.hpp:23,30`, ctors `cl_Design_Variable.cpp:20,35`); `GEN::ADV_Manager::create_adv` returns an alias to an earlier ADV when the ID matches (`projects/GEN/src/ADV/cl_GEN_ADV_Manager.cpp:77-98`).
+- **Code** (fix, `git show ee83435b7`, trimmed):
+  ```diff
+  diff --git a/projects/GEN/src/ADV/cl_GEN_ADV_Manager.hpp b/projects/GEN/src/ADV/cl_GEN_ADV_Manager.hpp
+  --- a/projects/GEN/src/ADV/cl_GEN_ADV_Manager.hpp
+  +++ b/projects/GEN/src/ADV/cl_GEN_ADV_Manager.hpp
+  @@ -21,3 +21,3 @@ namespace moris::gen
+         private:
+  -        Vector< char > mParameterIDs;
+  +        Vector< sint > mParameterIDs;
+           bool mParameterIDsFinalized = false;
+  @@ -47,3 +47,3 @@ namespace moris::gen
+            */
+  -        void register_parameter_ids( const Vector< char >& aParameterIDs );
+  +        void register_parameter_ids( const Vector< sint >& aParameterIDs );
+   
+  diff --git a/projects/GEN/src/ADV/fields/fn_GEN_create_field.cpp b/projects/GEN/src/ADV/fields/fn_GEN_create_field.cpp
+  --- a/projects/GEN/src/ADV/fields/fn_GEN_create_field.cpp
+  +++ b/projects/GEN/src/ADV/fields/fn_GEN_create_field.cpp
+  @@ -240,6 +240,6 @@ namespace moris::gen
+   
+  -    Vector< char > get_active_parameter_ids( const Parameter_List& aFieldParameterList )
+  +    Vector< sint > get_active_parameter_ids( const Parameter_List& aFieldParameterList )
+       {
+           // Vector of parameter IDs
+  -        Vector< char > tParameterIDs;
+  +        Vector< sint > tParameterIDs;
+   
+  diff --git a/projects/MRS/CNT/src/cl_Design_Variable.cpp b/projects/MRS/CNT/src/cl_Design_Variable.cpp
+  --- a/projects/MRS/CNT/src/cl_Design_Variable.cpp
+  +++ b/projects/MRS/CNT/src/cl_Design_Variable.cpp
+  @@ -51,3 +51,3 @@ namespace moris
+   
+  -    char Design_Variable::get_id() const
+  +    sint Design_Variable::get_id() const
+       {
+  diff --git a/projects/MRS/CNT/src/cl_Design_Variable.hpp b/projects/MRS/CNT/src/cl_Design_Variable.hpp
+  --- a/projects/MRS/CNT/src/cl_Design_Variable.hpp
+  +++ b/projects/MRS/CNT/src/cl_Design_Variable.hpp
+  @@ -22,3 +22,3 @@ namespace moris
+         private:
+  -        char mID;
+  +        sint mID;
+           real mValue;
+  @@ -29,3 +29,3 @@ namespace moris
+           // How many design variables have been created, used for having a unique ID
+  -        inline static char mCount = 0;
+  +        inline static sint mCount = 0;
+   
+  @@ -65,3 +65,3 @@ namespace moris
+            */
+  -        char get_id() const;
+  +        sint get_id() const;
+   
+  ```
+- **Fix:** `Design_Variable::mID`/`mCount`/`get_id()` widened `char` → `sint`, and the `Vector< char >` parameter-ID vectors in `ADV_Manager` / `get_active_parameter_ids` → `Vector< sint >`. Types only, no behaviour change; no serialized/MPI/HDF5 use of the ID. Commit ee83435b7 on `feature/gen-additive`.
+- **Regression test:** `TEST_CASE "Design variable IDs beyond 256" [mb017]` in `projects/GEN/test/ut_GEN_Field.cpp` — 300 non-constant variables → 300 distinct ADVs with correct values/bounds (pre-fix: 256), plus same-object aliasing preserved.
+- **Workaround:** keep ≤ 250 non-constant Design_Variables per deck (pymoris `GaussianSplatLevelSet` enforces `MAX_MORIS_ANALYTIC_ADVS = 250`).
+
+---
+
+## MB-016 · OPT: native GCMMA wrote no restart files
+- **Status:** fixed, commit f6d21bfb7 on `fix/xiga-deck-bugs` (2026-10-10). Build green; OPT-test passes (32 assertions) with the new check.
+- **Symptom:** a run with `Optimization_Algorithm_Type::MMA` (the native in-tree GCMMA port) leaves no `ADV_Alg_0_Iter_N.hdf5`
+  at all. Nothing warns; warm restarts (`restart_file`) and post-run tail-velocity checks have nothing to read.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/X27_native_cheese/` (30 its, `"algorithm": "mma"` in the MBB deck): zero
+  checkpoint files; the TPL twin `X25_cheese` writes one per iteration.
+- **Root cause:** `Algorithm_MMA::func()` (`projects/OPT/src/cl_OPT_Algorithm_MMA.cpp`) calls `compute_design_criteria` without
+  `write_advs_to_file`, which the TPL wrapper (`cl_OPT_Algorithm_GCMMA.cpp:235`), ROL, LBFGS and SQP all call first.
+- **Fix / Code** (commit f6d21bfb7):
+  ```diff
+           Vector< real > tADVs( mNumVar );
+           for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = aX[ i ];
+   
+  +        // Write the restart file for this design, as the TPL GCMMA wrapper does before every
+  +        // criteria evaluation (MB-016: the native port wrote none, so no warm restart was possible)
+  +        this->write_advs_to_file( tADVs );
+  +
+           this->compute_design_criteria( tADVs );
+  ```
+- **Regression test:** `projects/OPT/test/opt_test.cpp`, section "MMA native": `REQUIRE( std::ifstream( "ADV_Alg_0_Iter_1.hdf5" ).good() )`.
+- **Related tooling gap (fixed the same day, not MORIS):** native GCMMA logs `MMA - Objective:` where the TPL logs
+  `GCMMA - Objective:`; the workspace merit gate, guard and post-run report matched only the TPL form, so native runs ran unguarded.
 
 ---
 
