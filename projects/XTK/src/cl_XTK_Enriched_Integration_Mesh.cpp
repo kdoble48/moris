@@ -3022,6 +3022,13 @@ namespace moris::xtk
                     // only register non-void clusters, i.e. clusters that have a primary sub-phase
                     if ( tPrimarySubPhase > -1 )
                     {
+                        MORIS_ERROR( tBulkPhaseIndex >= 0 && tBulkPhaseIndex < (moris_index)tNoChildBlockSetOrds.size(),
+                                "Enriched_Integration_Mesh::setup_blockset_with_cell_clusters() - "
+                                "enriched IP cell %d has invalid bulk phase index %d (number of bulk phases: %d).",
+                                tEnrIpCell->get_index(),
+                                tBulkPhaseIndex,
+                                (int)tNoChildBlockSetOrds.size() );
+
                         // sort into block with non-cut clusters
                         if ( tCluster.is_trivial() )
                         {

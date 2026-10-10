@@ -794,12 +794,21 @@ namespace moris::xtk
         // get the current cell's index
         moris_index tIgCellIndex = aCell->get_index();
 
-        // ignore background cells fed into this function
-        // NOTE: QUADs/HEXs should always get their phase from the nodal based phase assignment, as they're not intersected by definition
-        // NOTE: Therefore, they have a clear/trivial phase assignment before.
+        // Background cells (QUADs/HEXs) are not intersected, so they have no cut neighbors to vote with. They only end up
+        // here when EVERY vertex lies on some geometry's interface, e.g. a fixed box exactly one cell thick with its faces on
+        // grid lines. Such a phase boundary runs along background-cell edges, where XTK creates no interface facets, so the
+        // phases on either side would be silently decoupled. Stop with a clear message instead of returning a sentinel that
+        // was later used as a bulk-phase index (segfault in Enriched_Integration_Mesh::setup_blockset_with_cell_clusters).
+        // See moris/doc/internal/BUG_LEDGER.md MB-001 / MB-010.
         if ( (uint)aCell->get_geometry_type() == 4 || (uint)aCell->get_geometry_type() == 2 )
         {
-            return MORIS_INDEX_MAX - 1;
+            MORIS_ERROR( false,
+                    "Integration_Mesh_Generator::deduce_ig_cell_bulk_phase_from_facets() - every vertex of background cell %d "
+                    "(id %d) lies on a geometry interface, so its bulk phase cannot be determined. This happens when a "
+                    "geometry boundary coincides with background-mesh grid lines over a whole cell (e.g. a box exactly one "
+                    "cell thick). Shift the geometry off the grid lines (e.g. by half a cell).",
+                    aCell->get_index(),
+                    aCell->get_id() );
         }
 
         // get the current cell's position in the facet connectivity
