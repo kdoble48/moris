@@ -12,6 +12,8 @@
 
 #include <fstream>
 #include <cstdio>
+#include <limits>
+#include <cmath>
 
 #include "fn_PRM_OPT_Parameters.hpp"
 #include "cl_OPT_Manager.hpp"
@@ -23,6 +25,7 @@
 
 #include "fn_OPT_Rosenbrock.hpp"
 #include "cl_OPT_Algorithm_MMA.hpp"
+#include "cl_OPT_Algorithm_Sweep.hpp"
 #include "cl_Tracer.hpp"
 #include "fn_OPT_Test_Interface.hpp"
 #include "HDF5_Tools.hpp"
@@ -1017,6 +1020,224 @@ namespace moris::opt
 
             // no file past the last evaluation (the rewrite used to land in Iter_{k+1})
             REQUIRE_FALSE( std::ifstream( mb021_restart_file_name( tNumEvaluations ) ).good() );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Failed evaluations (MB-023, MB-024) and SWEEP finite-difference modes (MB-025), on the one-variable quadratic
+    // f(x) = 100 (x - 0.45)^2 started at x = 0.5. A failed evaluation is modelled as a NaN criterion, the signature
+    // of an XTK decomposition failure.
+
+    namespace failed_evaluation
+    {
+        enum class Fault
+        {
+            none,                  ///< every evaluation is finite
+            single_evaluation,     ///< only evaluation number mFaultyEvaluation fails
+            off_initial_design     ///< every design other than the initial x = 0.5 fails
+        };
+
+        Fault mFault             = Fault::none;
+        int   mFaultyEvaluation  = 0;
+        int   mEvaluations       = 0;
+        int   mGradientsOnFailed = 0;
+        bool  mLastFailed        = false;
+
+        void
+        reset( Fault aFault, int aFaultyEvaluation = 0 )
+        {
+            mFault             = aFault;
+            mFaultyEvaluation  = aFaultyEvaluation;
+            mEvaluations       = 0;
+            mGradientsOnFailed = 0;
+            mLastFailed        = false;
+        }
+
+        void
+        initialize(
+                Vector< real >& aADVs,
+                Vector< real >& aLowerBounds,
+                Vector< real >& aUpperBounds )
+        {
+            aADVs        = { 0.5 };
+            aLowerBounds = { 0.0 };
+            aUpperBounds = { 1.0 };
+        }
+
+        Vector< real >
+        get_criteria( const Vector< real >& aADVs )
+        {
+            mEvaluations++;
+            mLastFailed = ( mFault == Fault::single_evaluation and mEvaluations == mFaultyEvaluation )
+                       or ( mFault == Fault::off_initial_design and aADVs( 0 ) != 0.5 );
+
+            if ( mLastFailed )
+            {
+                return { std::numeric_limits< real >::quiet_NaN() };
+            }
+            return { 100.0 * std::pow( aADVs( 0 ) - 0.45, 2 ) };
+        }
+
+        Matrix< DDRMat >
+        get_dcriteria_dadv( const Vector< real >& aADVs )
+        {
+            if ( mLastFailed )
+            {
+                mGradientsOnFailed++;
+            }
+            return { { 200.0 * ( aADVs( 0 ) - 0.45 ) } };
+        }
+
+        Matrix< DDRMat >
+        zero_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 0.0 } };
+        }
+
+        std::shared_ptr< Problem >
+        create_problem()
+        {
+            Parameter_List tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+
+            std::shared_ptr< Criteria_Interface > tInterface =
+                    std::make_shared< Interface_User_Defined >( &initialize, &get_criteria, &get_dcriteria_dadv );
+
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &bimodal::get_constraint_types,
+                    &bimodal::compute_objectives,
+                    &bimodal::compute_constraints,
+                    &zero_dadv,
+                    &bimodal::compute_dobjective_dcriteria,
+                    &zero_dadv,
+                    &bimodal::compute_dconstraint_dcriteria );
+            tProblem->initialize();
+
+            return tProblem;
+        }
+    }    // namespace failed_evaluation
+
+    TEST_CASE( "Native GCMMA rejects a failed conservatism inner trial", "[optimization][MB-023]" )
+    {
+        if ( par_rank() == 0 )
+        {
+            // evaluation 1 is the initial design, 2 the (non-conservative) first trial, 3 the first inner trial
+            failed_evaluation::reset( failed_evaluation::Fault::single_evaluation, 3 );
+            std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
+
+            Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+            tAlgorithmParameterList.set( "max_its", 1 );
+            tAlgorithmParameterList.set( "max_inner_its", 3 );
+            tAlgorithmParameterList.set( "step_size", 0.3 );
+
+            Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+            {
+                Tracer tTracer( "OPT", "Manager", "Perform" );
+                tAlgorithm.solve( 0, tProblem );
+            }
+
+            // the inner loop was entered and its failed trial was evaluated
+            REQUIRE( failed_evaluation::mEvaluations > 3 );
+
+            // ... but never differentiated or committed: the backtrack re-solved to a finite, descending design
+            CHECK( failed_evaluation::mGradientsOnFailed == 0 );
+            const real tX = tProblem->get_advs()( 0 );
+            CHECK( std::isfinite( tProblem->get_objectives()( 0 ) ) );
+            CHECK( tProblem->get_objectives()( 0 ) == Approx( 100.0 * std::pow( tX - 0.45, 2 ) ) );
+        }
+    }
+
+    TEST_CASE( "Native GCMMA restores the accepted state after exhausted backtracking", "[optimization][MB-024]" )
+    {
+        if ( par_rank() == 0 )
+        {
+            // every trial fails, however short the step; only the initial design evaluates
+            failed_evaluation::reset( failed_evaluation::Fault::off_initial_design );
+            std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
+
+            Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+            tAlgorithmParameterList.set( "max_its", 1 );
+            tAlgorithmParameterList.set( "max_inner_its", 0 );
+            tAlgorithmParameterList.set( "step_size", 0.3 );
+
+            Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+            {
+                Tracer tTracer( "OPT", "Manager", "Perform" );
+                tAlgorithm.solve( 0, tProblem );
+            }
+
+            // initial design + first trial + 15 backtracks + the restore evaluation of the held design
+            CHECK( failed_evaluation::mEvaluations == 18 );
+            CHECK( failed_evaluation::mGradientsOnFailed == 0 );
+
+            // the Problem the Manager reads holds the accepted design and its criteria, not the last rejected trial
+            CHECK( tProblem->get_advs()( 0 ) == 0.5 );
+            CHECK( tProblem->get_objectives()( 0 ) == Approx( 0.25 ) );
+        }
+    }
+
+    TEST_CASE( "SWEEP evaluates every requested finite difference scheme", "[optimization][MB-025]" )
+    {
+        // analytic df/dx at x = 0.5; forward/backward FD with eps = 1e-4 differ from it by 100 * eps = 1e-2
+        const real tAnalytic = 10.0;
+
+        // criteria evaluations per mode with one ADV: the base point plus one per perturbed point
+        std::vector< std::pair< std::string, int > > tModes = { { "none", 1 }, { "forward", 2 }, { "backward", 2 }, { "central", 3 }, { "all", 3 } };
+
+        for ( const std::pair< std::string, int >& tMode : tModes )
+        {
+            failed_evaluation::reset( failed_evaluation::Fault::none );
+            std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
+
+            const std::string tFileName = "mb025_sweep_" + tMode.first + ".hdf5";
+
+            Parameter_List tAlgorithmParameterList = moris::prm::create_sweep_parameter_list();
+            tAlgorithmParameterList.set( "custom_adv_evaluations", "0.5" );
+            tAlgorithmParameterList.set( "finite_difference_type", tMode.first );
+            tAlgorithmParameterList.set( "finite_difference_epsilons", "1e-4" );
+            tAlgorithmParameterList.set( "hdf5_path", tFileName );
+            tAlgorithmParameterList.set( "evaluate_constraint_gradients", false );
+
+            Algorithm_Sweep tAlgorithm( tAlgorithmParameterList );
+            {
+                Tracer tTracer( "OPT", "Manager", "Perform" );
+                tAlgorithm.solve( 0, tProblem );
+            }
+
+            if ( par_rank() == 0 )
+            {
+                CHECK( failed_evaluation::mEvaluations == tMode.second );
+
+                // the analytic reference and every requested scheme are saved
+                std::vector< std::string > tSchemes = { "analytical" };
+                if ( tMode.first == "all" )
+                {
+                    tSchemes.insert( tSchemes.end(), { "fd_forward", "fd_backward", "fd_central" } );
+                }
+                else if ( tMode.first != "none" )
+                {
+                    tSchemes.push_back( "fd_" + tMode.first );
+                }
+
+                hid_t  tFileID = open_hdf5_file( tFileName, true, true );
+                herr_t tStatus = 0;
+                for ( const std::string& tScheme : tSchemes )
+                {
+                    std::string tLabel = "objective_gradients eval_1-1 " + tScheme;
+                    if ( tScheme != "analytical" )
+                    {
+                        tLabel = "objective_gradients eval_1-1 epsilon_1-1 " + tScheme;
+                    }
+                    INFO( "mode " << tMode.first << ", dataset '" << tLabel << "'" );
+                    REQUIRE( H5Lexists( tFileID, tLabel.c_str(), H5P_DEFAULT ) > 0 );
+
+                    Matrix< DDRMat > tGradient;
+                    load_matrix_from_hdf5_file( tFileID, tLabel, tGradient, tStatus );
+                    CHECK( tGradient( 0 ) == Approx( tAnalytic ).margin( 1.1e-2 ) );
+                }
+                close_hdf5_file( tFileID );
+            }
         }
     }
 }    // namespace moris::opt
