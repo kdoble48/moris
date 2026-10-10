@@ -50,6 +50,27 @@ namespace moris::gen
         void reset_nodal_data( mtk::Interpolation_Mesh* aMesh ) override;
 
         /**
+         * Gets whether any child field has ADVs.
+         *
+         * @return true if at least one child has ADVs
+         */
+        bool has_advs() override;
+
+        /**
+         * Gets the coefficient ADV IDs of every child, concatenated in child order.
+         *
+         * @return Coefficient ADV IDs
+         */
+        Vector< sint > get_coefficient_adv_ids() override;
+
+        /**
+         * Forwards the updated dependencies to every child field.
+         *
+         * @param aUpdatedFields Other fields that the children may depend on
+         */
+        void update_dependencies( const Vector< std::shared_ptr< Field > >& aUpdatedFields ) override;
+
+        /**
          * Gets the sum of the child field values at a node.
          *
          * @param aNodeIndex Node index
@@ -96,6 +117,7 @@ namespace moris::gen
 
         /**
          * Gets the sum of the child field sensitivities with respect to the nodal coordinates.
+         * NOTE: a B-spline (discrete) child does not support coordinate sensitivities.
          *
          * @param aNodeIndex Node index
          * @param aCoordinates Vector of coordinate values

@@ -856,6 +856,30 @@ namespace moris::gen
 
         CHECK( tSummed.get_name() == "Summed" );
 
+        // ADV dependence is reported from the children
+        CHECK( tSummed.has_advs() );
+
+        // Coefficient ADV IDs are the children's, concatenated in child order
+        Vector< sint > tCoefficientIDs1 = tCircle1->get_coefficient_adv_ids();
+        Vector< sint > tCoefficientIDs2 = tCircle2->get_coefficient_adv_ids();
+        Vector< sint > tCoefficientIDs  = tSummed.get_coefficient_adv_ids();
+        REQUIRE( tCoefficientIDs.size() == tCoefficientIDs1.size() + tCoefficientIDs2.size() );
+        REQUIRE( tCoefficientIDs.size() > 0 );
+        for ( uint iID = 0; iID < tCoefficientIDs1.size(); iID++ )
+        {
+            CHECK( tCoefficientIDs( iID ) == tCoefficientIDs1( iID ) );
+        }
+        for ( uint iID = 0; iID < tCoefficientIDs2.size(); iID++ )
+        {
+            CHECK( tCoefficientIDs( tCoefficientIDs1.size() + iID ) == tCoefficientIDs2( iID ) );
+        }
+
+        // A sum of children without ADVs has no ADVs
+        std::shared_ptr< gen::Field > tConstant1 = std::make_shared< gen::Circle >( gen::ADV( 0.0 ), gen::ADV( 0.0 ), gen::ADV( 1.0 ), "Constant 1" );
+        std::shared_ptr< gen::Field > tConstant2 = std::make_shared< gen::Circle >( gen::ADV( 1.0 ), gen::ADV( 1.0 ), gen::ADV( 2.0 ), "Constant 2" );
+        gen::Summed_Fields            tConstantSum( Vector< std::shared_ptr< gen::Field > >( { tConstant1, tConstant2 } ) );
+        CHECK( not tConstantSum.has_advs() );
+
         Vector< Matrix< DDRMat > > tPoints = { { { 0.0, 0.0 } }, { { 1.0, 1.0 } }, { { 2.5, -1.0 } } };
 
         for ( uint iPoint = 0; iPoint < tPoints.size(); iPoint++ )

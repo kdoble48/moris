@@ -46,6 +46,46 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Summed_Fields::has_advs()
+    {
+        for ( const std::shared_ptr< Field >& iField : mFields )
+        {
+            if ( iField->has_advs() )
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< sint > Summed_Fields::get_coefficient_adv_ids()
+    {
+        Vector< sint > tResult;
+        for ( const std::shared_ptr< Field >& iField : mFields )
+        {
+            Vector< sint > tChildIDs = iField->get_coefficient_adv_ids();
+            for ( sint iID : tChildIDs )
+            {
+                tResult.push_back( iID );
+            }
+        }
+        return tResult;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void Summed_Fields::update_dependencies( const Vector< std::shared_ptr< Field > >& aUpdatedFields )
+    {
+        for ( const std::shared_ptr< Field >& iField : mFields )
+        {
+            iField->update_dependencies( aUpdatedFields );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     real Summed_Fields::get_field_value(
             uint                    aNodeIndex,
             const Matrix< DDRMat >& aCoordinates )
@@ -177,7 +217,7 @@ namespace moris::gen
         for ( uint iFieldIndex = 1; iFieldIndex < mFields.size(); iFieldIndex++ )
         {
             // Children write into a pre-sized buffer, so give each the same size as the caller's
-            Matrix< DDRMat > tChild( aSensitivities.n_rows(), aSensitivities.n_cols() );
+            Matrix< DDRMat > tChild( aSensitivities.n_rows(), aSensitivities.n_cols(), 0.0 );
             mFields( iFieldIndex )->get_dfield_dcoordinates( aNodeIndex, aCoordinates, tChild );
             aSensitivities = aSensitivities + tChild;
         }
