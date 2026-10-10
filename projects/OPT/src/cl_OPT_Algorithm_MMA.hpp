@@ -105,6 +105,29 @@ namespace moris::opt
         /** true if the current trial criteria (f0valnew, fvalnew) are all finite */
         bool criteria_finite() const;
 
+        /** outcome of the NaN-guard backtrack on a trial design */
+        enum class Trial_Status
+        {
+            finite,     ///< the trial criteria are finite (possibly after shrinking the move limit)
+            restart,    ///< the workflow requested an optimization restart during an evaluation
+            failed      ///< still non-finite after the maximum number of backtracks
+        };
+
+        /**
+         * NaN guard for the trial point xmma: while its criteria are non-finite, halve the move limit, re-solve
+         * the subproblem and re-evaluate. Used for the first trial AND every conservatism inner trial, so a failed
+         * evaluation is never tested for conservatism, committed, or differentiated (MB-023).
+         */
+        Trial_Status backtrack_non_finite( int aIter, int& aNumFunc );
+
+        /**
+         * Re-evaluate the accepted design xval after a rejected iteration. Every failed trial evaluation has
+         * overwritten the shared Problem (ADVs, geometry, analysis, criteria) that the Manager reads; this restores
+         * a state consistent with the design the optimizer holds (MB-024). Returns false if the restore evaluation
+         * requested a restart or was itself non-finite.
+         */
+        bool restore_accepted_state( int aIter, int& aNumFunc );
+
         // ================= helpers (ports of the reference functions) =================
 
         /** allocate/size all arrays and set epsimin, a0, a, d (port of initialize.cpp) */
