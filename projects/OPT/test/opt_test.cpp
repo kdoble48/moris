@@ -25,6 +25,7 @@
 #include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_Tracer.hpp"
 #include "fn_OPT_Test_Interface.hpp"
+#include "HDF5_Tools.hpp"
 
 namespace moris::opt
 {
@@ -960,6 +961,113 @@ namespace moris::opt
 
             // negative control: without the shift the jumps collapse the far-field asymptotes onto the floor
             REQUIRE( tUnshifted.mLocked > tReference.mLocked );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // In-place redistance checkpoints (MB-021): with reinit_in_place, the restart file of every criteria evaluation
+    // must hold the design the criteria were evaluated at (the interface's redistanced output), not the raw trial
+    // point. The evaluation advances the optimization iteration, so the rewrite has to target the index captured
+    // before it.
+
+    /** Far-field-jump interface that records the redistanced design returned by every criteria evaluation. */
+    class Interface_Recording_Redistance : public Interface_Farfield_Jump
+    {
+      public:
+        std::vector< std::vector< real > > mRedistanced;
+
+        Vector< real >
+        perform( Vector< real >& aNewADVs ) override
+        {
+            Vector< real > tCriteria = Interface_Farfield_Jump::perform( aNewADVs );
+
+            std::vector< real > tCopy( aNewADVs.size() );
+            for ( uint iADV = 0; iADV < aNewADVs.size(); iADV++ )
+            {
+                tCopy[ iADV ] = aNewADVs( iADV );
+            }
+            mRedistanced.push_back( tCopy );
+
+            return tCriteria;
+        }
+    };
+
+    std::string
+    mb021_restart_file_name( uint aIter )
+    {
+        return "ADV_Alg_0_Iter_" + std::to_string( aIter ) + ".hdf5";
+    }
+
+    std::vector< real >
+    mb021_read_restart_advs( uint aIter )
+    {
+        hid_t  tFileID = open_hdf5_file( mb021_restart_file_name( aIter ), false, true );
+        herr_t tStatus = 0;
+
+        std::vector< real > tADVs;
+        load_vector_from_hdf5_file( tFileID, "ADVs", tADVs, tStatus );
+        close_hdf5_file( tFileID );
+
+        return tADVs;
+    }
+
+    TEST_CASE( "Native GCMMA in-place redistance checkpoints hold the redistanced design", "[optimization][MB-021]" )
+    {
+        Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "max_its", 3 );
+        tAlgorithmParameterList.set( "reinit_in_place", true );
+
+        std::shared_ptr< Interface_Recording_Redistance > tInterface = std::make_shared< Interface_Recording_Redistance >();
+
+        // redistance on every evaluation
+        tInterface->mJump = true;
+
+        std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                tProblemParameterList,
+                tInterface,
+                &get_constraint_types_rosenbrock,
+                &compute_objectives_rosenbrock,
+                &compute_constraints_rosenbrock,
+                &compute_dobjective_dadv_rosenbrock_farfield,
+                &compute_dobjective_dcriteria_rosenbrock,
+                &compute_dconstraint_dadv_rosenbrock_farfield,
+                &compute_dconstraint_dcriteria_rosenbrock );
+        tProblem->initialize();
+
+        // remove stale restart files of earlier tests in this directory
+        for ( uint iIter = 0; iIter < 50; iIter++ )
+        {
+            std::remove( mb021_restart_file_name( iIter ).c_str() );
+        }
+
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+        }
+
+        if ( par_rank() == 0 )
+        {
+            // the initial design plus at least one evaluation per outer iteration
+            const uint tNumEvaluations = tInterface->mRedistanced.size();
+            REQUIRE( tNumEvaluations >= 4 );
+
+            // evaluation k is checkpointed in Iter_k, and the file holds its redistanced design, the last one included
+            for ( uint iEval = 0; iEval < tNumEvaluations; iEval++ )
+            {
+                REQUIRE( std::ifstream( mb021_restart_file_name( iEval ) ).good() );
+
+                std::vector< real > tFileADVs = mb021_read_restart_advs( iEval );
+                REQUIRE( tFileADVs.size() == 4 );
+                for ( uint iADV = 0; iADV < 4; iADV++ )
+                {
+                    CHECK( tFileADVs[ iADV ] == tInterface->mRedistanced[ iEval ][ iADV ] );
+                }
+            }
+
+            // no file past the last evaluation (the rewrite used to land in Iter_{k+1})
+            REQUIRE_FALSE( std::ifstream( mb021_restart_file_name( tNumEvaluations ) ).good() );
         }
     }
 }    // namespace moris::opt

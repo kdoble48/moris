@@ -115,8 +115,10 @@ namespace moris::opt
         for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = aX[ i ];
 
         // Write the restart file for this design, as the TPL GCMMA wrapper does before every
-        // criteria evaluation (MB-016: the native port wrote none, so no warm restart was possible)
-        this->write_advs_to_file( tADVs );
+        // criteria evaluation (MB-016: the native port wrote none, so no warm restart was possible).
+        // Capture the index first: compute_design_criteria() advances the optimization iteration (MB-021)
+        const uint tOptIter = gLogger.get_opt_iteration();
+        this->write_advs_to_file( tADVs, tOptIter );
 
         this->compute_design_criteria( tADVs );
 
@@ -137,8 +139,10 @@ namespace moris::opt
             for ( int i = 0; i < mNumVar; ++i ) mLastRedistanced[ i ] = tADVs( i );
 
             // rewrite this iteration's restart file with the redistanced design the criteria were evaluated at, so
-            // checkpoints (and restarts) hold phi = R(psi) rather than the raw trial point psi (written above)
-            this->write_advs_to_file( tADVs );
+            // checkpoints (and restarts) hold phi = R(psi) rather than the raw trial point psi (written above).
+            // Name it from the index captured before the evaluation: the logger has already advanced to the next
+            // iteration, whose file the next trial point would overwrite (MB-021)
+            this->write_advs_to_file( tADVs, tOptIter );
         }
     }
 
