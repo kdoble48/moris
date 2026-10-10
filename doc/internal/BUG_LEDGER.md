@@ -38,6 +38,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
 | MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 | MB-020 | fixed (abb99ee66) | GEN | Multilinear intersection divides by the norm of the four corner φ values; a cell whose corners are all exactly 0 (order-2 field nonzero only at mid-side/interior nodes) gives NaN residuals → abort "Newton did not converge: Reference residual nan" | lunch_and_learn_xiga X40_cheese_o2 (D-020) |
+| MB-021 | open | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
 
 ---
 
@@ -589,3 +590,26 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Regression test:** test file + tag
 - **Workaround:** deck-level avoidance, if any
 ```
+
+## MB-021 · OPT: in-place SDF checkpoints hold the raw trial point, not the redistanced design
+- **Status:** open (fix not written).
+- **Symptom:** in `reinit_in_place` runs, `ADV_Alg_0_Iter_0..N-1.hdf5` contain no coefficient at the SDF clamp ±0.15; only the last file does
+  (X9r_rcp: 0 of 4961 at |s| = 0.15 in Iter_0/1/50/100/150, 1194 in Iter_151; X81_o2_cellorder on 3bc5a1ca3: 0 in Iter_1..150, 725 in
+  Iter_151). The redistanced φ = R(ψ) clamps at ±0.15, so the intermediate files are the raw GCMMA trial points ψ.
+- **Code** (`projects/OPT/src/cl_OPT_Algorithm_MMA.cpp:118-142`, `projects/OPT/src/cl_OPT_Algorithm.cpp:453-461`):
+  ```cpp
+  this->write_advs_to_file( tADVs );          // psi -> Iter_k
+  this->compute_design_criteria( tADVs );     // advances gLogger's opt iteration (hypothesis, unverified)
+  ...
+  this->write_advs_to_file( tADVs );          // phi -> named from gLogger.get_opt_iteration(): Iter_{k+1}, overwritten by psi next call
+  ```
+- **Hypothesis:** `write_advs_to_file` names the file from `gLogger.get_opt_iteration()`, which the criteria evaluation increments, so the
+  rewrite targets the next index. Not confirmed by instrumentation.
+- **Consequences:** warm restarts from Iter_k < N start from ψ (one optimizer step off the redistanced design); per-iteration |∇φ|
+  measurements (`sdf_quality.py`) and coefficient renders from intermediate checkpoints show ψ, not φ (ψ is within one move limit of φ).
+  The final design is correct (the last file holds φ).
+- **Proposed fix:** capture the iteration index before `compute_design_criteria` and pass it to an overload `write_advs_to_file( aADVs, aIter )`
+  for the rewrite; regression test: a 3-iteration native-MMA run with a reinit hook asserts Iter_1 equals the hook's output.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/X81_o2_cellorder/results/checkpoints/` (count |s| = 0.15 per file).
+- **Workaround:** use only the final checkpoint as a φ restart; treat intermediate checkpoints as ψ.
+
