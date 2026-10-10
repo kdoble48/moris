@@ -900,6 +900,40 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // Regression MB-009 (moris/doc/internal/BUG_LEDGER.md): a geometry listed BEFORE the fields it depends on must be
+    // deferred to a later factory pass, not rejected as an unrecognized geometry type.
+    TEST_CASE( "Combined Field Declared Before Its Fields", "[gen], [field], [combined field]" )
+    {
+        Submodule_Parameter_Lists tParameterLists( "FIELDS" );
+        tParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::COMBINED_FIELDS ) );
+        tParameterLists( 0 ).set( "dependencies", "Circle 1", "Circle 2" );
+        tParameterLists.add_parameter_list( prm::create_field_parameter_list( Field_Type::CIRCLE ) );
+        tParameterLists( 1 ).set( "center_x", 0.0 );
+        tParameterLists( 1 ).set( "center_y", 1.0 );
+        tParameterLists( 1 ).set( "radius", 1.0 );
+        tParameterLists( 1 ).set( "name", "Circle 1" );
+        tParameterLists.add_parameter_list( prm::create_field_parameter_list( Field_Type::CIRCLE ) );
+        tParameterLists( 2 ).set( "center_x", 0.0 );
+        tParameterLists( 2 ).set( "center_y", 2.0 );
+        tParameterLists( 2 ).set( "radius", 2.0 );
+        tParameterLists( 2 ).set( "name", "Circle 2" );
+
+        ADV_Manager                           tADVManager;
+        Design_Factory                        tDesignFactory( tParameterLists, tADVManager );
+        Vector< std::shared_ptr< Geometry > > tGeometries = tDesignFactory.get_geometries();
+        REQUIRE( tGeometries.size() == 1 );
+        std::shared_ptr< Level_Set_Geometry > tCombinedField = std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometries( 0 ) );
+        REQUIRE( tCombinedField != nullptr );
+
+        // same values as "Combined Field": min of the two circle fields
+        Matrix< DDRMat > tCoordinates0 = { { 0.0, 0.0 } };
+        Matrix< DDRMat > tCoordinates1 = { { 1.0, 1.0 } };
+        CHECK( tCombinedField->get_field_value( 0, tCoordinates0 ) == Approx( 0.0 ) );
+        CHECK( tCombinedField->get_field_value( 0, tCoordinates1 ) == Approx( sqrt( 2.0 ) - 2.0 ) );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     TEST_CASE( "Field Array", "[gen], [field], [field array]" )
     {
         SECTION( "Circle Field Array (Number)" )
