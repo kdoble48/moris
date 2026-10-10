@@ -12,6 +12,7 @@
 
 #include <fstream>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <cmath>
 
@@ -1094,6 +1095,21 @@ namespace moris::opt
             return { { 0.0 } };
         }
 
+        /** remove the per-evaluation restart files the native MMA writes into the working directory */
+        void
+        remove_restart_files()
+        {
+            // the iteration counter is global to the process, so the indices depend on the tests run before
+            for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
+            {
+                const std::string tName = tEntry.path().filename().string();
+                if ( tName.rfind( "ADV_Alg_0_Iter_", 0 ) == 0 )
+                {
+                    std::filesystem::remove( tEntry.path() );
+                }
+            }
+        }
+
         std::shared_ptr< Problem >
         create_problem()
         {
@@ -1124,6 +1140,7 @@ namespace moris::opt
         {
             // evaluation 1 is the initial design, 2 the (non-conservative) first trial, 3 the first inner trial
             failed_evaluation::reset( failed_evaluation::Fault::single_evaluation, 3 );
+            failed_evaluation::remove_restart_files();
             std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
 
             Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
@@ -1140,11 +1157,13 @@ namespace moris::opt
             // the inner loop was entered and its failed trial was evaluated
             REQUIRE( failed_evaluation::mEvaluations > 3 );
 
-            // ... but never differentiated or committed: the backtrack re-solved to a finite, descending design
+            // ... but never differentiated or committed: the backtrack re-solved to a finite design
             CHECK( failed_evaluation::mGradientsOnFailed == 0 );
             const real tX = tProblem->get_advs()( 0 );
             CHECK( std::isfinite( tProblem->get_objectives()( 0 ) ) );
             CHECK( tProblem->get_objectives()( 0 ) == Approx( 100.0 * std::pow( tX - 0.45, 2 ) ) );
+
+            failed_evaluation::remove_restart_files();
         }
     }
 
@@ -1154,6 +1173,7 @@ namespace moris::opt
         {
             // every trial fails, however short the step; only the initial design evaluates
             failed_evaluation::reset( failed_evaluation::Fault::off_initial_design );
+            failed_evaluation::remove_restart_files();
             std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
 
             Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
@@ -1174,16 +1194,21 @@ namespace moris::opt
             // the Problem the Manager reads holds the accepted design and its criteria, not the last rejected trial
             CHECK( tProblem->get_advs()( 0 ) == 0.5 );
             CHECK( tProblem->get_objectives()( 0 ) == Approx( 0.25 ) );
+
+            failed_evaluation::remove_restart_files();
         }
     }
 
-    TEST_CASE( "SWEEP evaluates every requested finite difference scheme", "[optimization][MB-025]" )
+    TEST_CASE( "SWEEP evaluates every requested finite difference scheme", "[optimization][MB-025][MB-026]" )
     {
-        // analytic df/dx at x = 0.5; forward/backward FD with eps = 1e-4 differ from it by 100 * eps = 1e-2
-        const real tAnalytic = 10.0;
+        // f(x) = 100 (x - 0.45)^2 is quadratic, so its finite differences are exact up to round-off:
+        // forward f' + 100 eps, backward f' - 100 eps, central f'. Two evaluation points and two epsilons make every
+        // scheme run repeatedly, which exposes a perturbation sign that drifts between calls (MB-026).
+        const std::vector< real > tPoints   = { 0.5, 0.6 };
+        const std::vector< real > tEpsilons = { 1e-3, 1e-4 };
 
-        // criteria evaluations per mode with one ADV: the base point plus one per perturbed point
-        std::vector< std::pair< std::string, int > > tModes = { { "none", 1 }, { "forward", 2 }, { "backward", 2 }, { "central", 3 }, { "all", 3 } };
+        // criteria evaluations per point with one ADV: the base point plus the perturbed points of every epsilon
+        std::vector< std::pair< std::string, int > > tModes = { { "none", 1 }, { "forward", 3 }, { "backward", 3 }, { "central", 5 }, { "all", 5 } };
 
         for ( const std::pair< std::string, int >& tMode : tModes )
         {
@@ -1193,9 +1218,9 @@ namespace moris::opt
             const std::string tFileName = "mb025_sweep_" + tMode.first + ".hdf5";
 
             Parameter_List tAlgorithmParameterList = moris::prm::create_sweep_parameter_list();
-            tAlgorithmParameterList.set( "custom_adv_evaluations", "0.5" );
+            tAlgorithmParameterList.set( "custom_adv_evaluations", "0.5, 0.6" );
             tAlgorithmParameterList.set( "finite_difference_type", tMode.first );
-            tAlgorithmParameterList.set( "finite_difference_epsilons", "1e-4" );
+            tAlgorithmParameterList.set( "finite_difference_epsilons", "1e-3, 1e-4" );
             tAlgorithmParameterList.set( "hdf5_path", tFileName );
             tAlgorithmParameterList.set( "evaluate_constraint_gradients", false );
 
@@ -1207,36 +1232,56 @@ namespace moris::opt
 
             if ( par_rank() == 0 )
             {
-                CHECK( failed_evaluation::mEvaluations == tMode.second );
+                INFO( "mode " << tMode.first );
+                CHECK( failed_evaluation::mEvaluations == 2 * tMode.second );
 
-                // the analytic reference and every requested scheme are saved
-                std::vector< std::string > tSchemes = { "analytical" };
+                // datasets expected: the analytic reference for none/all, and every requested scheme
+                std::vector< std::string > tSchemes;
                 if ( tMode.first == "all" )
                 {
-                    tSchemes.insert( tSchemes.end(), { "fd_forward", "fd_backward", "fd_central" } );
+                    tSchemes = { "fd_forward", "fd_backward", "fd_central" };
                 }
                 else if ( tMode.first != "none" )
                 {
-                    tSchemes.push_back( "fd_" + tMode.first );
+                    tSchemes = { "fd_" + tMode.first };
                 }
+                const bool tAnalytical = tMode.first == "none" or tMode.first == "all";
 
                 hid_t  tFileID = open_hdf5_file( tFileName, true, true );
                 herr_t tStatus = 0;
-                for ( const std::string& tScheme : tSchemes )
+                for ( uint iPoint = 0; iPoint < tPoints.size(); iPoint++ )
                 {
-                    std::string tLabel = "objective_gradients eval_1-1 " + tScheme;
-                    if ( tScheme != "analytical" )
-                    {
-                        tLabel = "objective_gradients eval_1-1 epsilon_1-1 " + tScheme;
-                    }
-                    INFO( "mode " << tMode.first << ", dataset '" << tLabel << "'" );
-                    REQUIRE( H5Lexists( tFileID, tLabel.c_str(), H5P_DEFAULT ) > 0 );
+                    const std::string tEval    = "objective_gradients eval_" + std::to_string( iPoint + 1 ) + "-2";
+                    const real        tExact   = 200.0 * ( tPoints[ iPoint ] - 0.45 );
+                    Matrix< DDRMat >  tGradient;
 
-                    Matrix< DDRMat > tGradient;
-                    load_matrix_from_hdf5_file( tFileID, tLabel, tGradient, tStatus );
-                    CHECK( tGradient( 0 ) == Approx( tAnalytic ).margin( 1.1e-2 ) );
+                    CHECK( ( H5Lexists( tFileID, ( tEval + " analytical" ).c_str(), H5P_DEFAULT ) > 0 ) == tAnalytical );
+
+                    for ( uint iEps = 0; iEps < tEpsilons.size(); iEps++ )
+                    {
+                        for ( const std::string& tScheme : tSchemes )
+                        {
+                            const std::string tLabel = tEval + " epsilon_" + std::to_string( iEps + 1 ) + "-2 " + tScheme;
+                            INFO( "dataset '" << tLabel << "'" );
+                            REQUIRE( H5Lexists( tFileID, tLabel.c_str(), H5P_DEFAULT ) > 0 );
+
+                            real tExpected = tExact;
+                            if ( tScheme == "fd_forward" )
+                            {
+                                tExpected += 100.0 * tEpsilons[ iEps ];
+                            }
+                            else if ( tScheme == "fd_backward" )
+                            {
+                                tExpected -= 100.0 * tEpsilons[ iEps ];
+                            }
+
+                            load_matrix_from_hdf5_file( tFileID, tLabel, tGradient, tStatus );
+                            CHECK( tGradient( 0 ) == Approx( tExpected ).epsilon( 0.0 ).margin( 1e-6 ) );
+                        }
+                    }
                 }
                 close_hdf5_file( tFileID );
+                std::remove( tFileName.c_str() );
             }
         }
     }
