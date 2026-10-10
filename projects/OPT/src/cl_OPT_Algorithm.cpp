@@ -453,12 +453,18 @@ namespace moris::opt
     void
     Algorithm::write_advs_to_file( const Vector< real >& aADVs )
     {
-        // Get iteration from global clock
-        uint tOptIter = gLogger.get_opt_iteration();
+        // Name the file from the iteration of the global clock
+        this->write_advs_to_file( aADVs, gLogger.get_opt_iteration() );
+    }
 
+    // -------------------------------------------------------------------------------------------------------------
+
+    void
+    Algorithm::write_advs_to_file( const Vector< real >& aADVs, uint aOptIter )
+    {
         // Create file name
         std::string tRestartFileName =
-                "ADV_Alg_" + std::to_string( mCurrentOptAlgInd ) + "_Iter_" + std::to_string( tOptIter ) + ".hdf5";
+                "ADV_Alg_" + std::to_string( mCurrentOptAlgInd ) + "_Iter_" + std::to_string( aOptIter ) + ".hdf5";
 
         // Create file
         // Note: only processor 0 creates this file; therefore no parallel name extension is used
