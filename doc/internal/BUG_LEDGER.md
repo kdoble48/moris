@@ -481,7 +481,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
   redistanced design before FEM.
 - **Verification:** `X29_inplace_f1` (same deck, redistance every iteration): `wrote 4961 of 4961`, stays attached,
   strain energy 77.18 at iteration 30 (scheduled-restart arm 77.16, no upkeep 78.42).
-- **Regression test:** none yet (needs a GEN geometry engine with a B-spline field; to add).
+- **Regression test:** `projects/GEN/test/ut_GEN_Field.cpp`, "Design ADV positions" [MB-017]: two named B-spline level sets; positions valid, unique, covering; IDs differ from positions (the test discriminates); a slice write at one design's positions sets only that design's field (partition of unity: 1 vs 0).
 
 ---
 
