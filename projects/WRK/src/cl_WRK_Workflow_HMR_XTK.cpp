@@ -513,6 +513,11 @@ namespace moris::wrk
                         Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
                                 ->get_design_adv_positions( tReinitPerformer->get_adv_field_name() );
 
+                        MORIS_ERROR( tLSAdvIds.size() > 0,
+                                "SDF in-place redistance: GEN has no design named '%s' (the mapping sublist's adv_field), so the "
+                                "redistance cannot be applied (MB-019: this used to be skipped silently every iteration).",
+                                tReinitPerformer->get_adv_field_name().c_str() );
+
                         if ( tLSAdvIds.size() == tCoeffs.n_rows() && tCoeffs.n_rows() > 0 )
                         {
                             uint tWritten = 0;
