@@ -20,7 +20,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-002 | fixed (22c3c2799; residual = MB-011) | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
 | MB-003 | open | GEN/FEM | Static user-defined geometry with `discretization_mesh_index = -2` (analytic) makes design gradients NaN, silently | moment_fitting (2026-07-16) |
 | MB-004 | open | FEM | Perimeter (interface VOLUME IQI) adjoint off by 12–150% on a few small-gradient ADVs | lunch_and_learn_xiga B11 |
-| MB-005 | open | OPT/HMR | Adaptive refinement during optimization: ADV count drifts between remeshes → abort in `compute_design_criteria_gradients` | seeding_impact (2026-07-13) |
+| MB-005 | open (root-caused; native-GCMMA workaround) | OPT/HMR | Adaptive refinement during optimization: ADV count drifts between remeshes → abort in `compute_design_criteria_gradients` | seeding_impact (2026-07-13) |
 | MB-006 | open (suspect) | FEM/INT | Nonconformal branch of `select_dRdp_FD_geometry_double` also copies the leader ξ into the follower row | review of MB-002 |
 | MB-007 | open | FEM/VIS | Requested IQI evaluated on zero sets writes zeros to Exodus with no warning | Hertz contact (2026-07) |
 | MB-008 | open (limitation) | FEM/INT | `IQI_Max_Stress::compute_dQIdu` stops with "not implemented"; decks must switch the whole forward analysis to FD | moris_stress_demo (2026-10-06) |
@@ -158,7 +158,19 @@ Missing features belong in a study's capability list, not here (exception: a mis
           this->compute_dobjective_dcriteria() * mInterface->get_dcriteria_dadv();   // 1x4370 * ... vs 1x4374
   ```
 - **Reproducer:** seeding_impact deck family at 60×20 + refine-1 with remeshing (`studies/seeding_impact/FINDINGS.md`, S3-W2 it.70).
-- **Workaround:** a static uniform mesh.
+- **Root cause (2026-10-10, read from code + the archived S4-W3 log, `runs/studies/seeding_impact/_archive_v1_remeshing/runs/S4-W3/logs/03_running_moris.log` lines 37526-39887):**
+  a double failure. A remesh restart fires, then the first evaluation on the new mesh fails the XTK same-level check
+  again (`check_intersected_background_cell_levels`, `cl_XTK_Integration_Mesh_Generator.cpp:407-430` → NaN + restart flag).
+  The TPL GCMMA wrapper calls the gradient anyway, and `Criteria_Interface::get_dcriteria_dadv` (`cl_OPT_Criteria_Interface.cpp`)
+  returns the cached pre-remesh `mSensitivities` while the restart flag is set (1x4260 vs 1x4475). The native GCMMA
+  (`cl_OPT_Algorithm_MMA.cpp:917`) checks `restart_optimization()` right after the first `func` and exits before `grad`.
+- **Workaround:** a static uniform mesh, or the native GCMMA (`Optimization_Algorithm_Type::MMA`): verified in
+  `runs/studies/lunch_and_learn_xiga/X50_adaptive_smoke` (adaptive refinement + in-place interface SDF + multilinear, one
+  reactive remesh at eval 8, ADVs 13073 → 13246, no abort).
+- **Proposed fix:** `get_dcriteria_dadv` raises `MORIS_ERROR` when the restart flag is set and the cached column count differs
+  from the current ADV count; the TPL GCMMA wrapper checks `restart_optimization()` after its first evaluation, like
+  `Algorithm_MMA::mma_solve`; `Manager::reinitialize` counts consecutive restarts with no successful evaluation (error after 3)
+  and loops instead of recursing.
 
 ## MB-006 · FEM: nonconformal FD geometry sensitivity copies the leader ξ (suspect)
 - **Status:** open (suspect, unverified).
