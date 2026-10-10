@@ -139,12 +139,16 @@ namespace moris::opt
             tAlgorithms.add_parameter_list( tAlgorithmParameterList );
             Manager tManager( tAlgorithms, tProblem );
 
+            // restart files are written per iteration (MB-016); remove a stale one first
+            std::remove( "ADV_Alg_0_Iter_1.hdf5" );
+
             // Solve optimization problem
             tManager.perform();
 
             // Check Solution
             if ( par_rank() == 0 )
             {
+                REQUIRE( std::ifstream( "ADV_Alg_0_Iter_1.hdf5" ).good() );    // MB-016: native GCMMA writes restart files
                 REQUIRE( std::abs( tManager.get_objectives()( 0 ) ) < 2E-7 );    // check value of objective
                 Vector< real > tADVs = tManager.get_advs();
                 for ( auto iADV : tADVs )
