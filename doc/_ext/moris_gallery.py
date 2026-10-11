@@ -86,7 +86,9 @@ def scene_markdown(meta, docname, version="", build="") -> str:
     summary = "\n".join(t for t in meta.get("text", []) if t).strip()
     side = legends + (f'<pre class="moris-summary">{html.escape(summary)}</pre>' if summary else "")
     source = meta.get("source", {})
-    provenance = (f'{meta["caption"]}. Rendered from `{source.get("file", "?")}`'
+    run = {"showcase": " of a full-length showcase run (`MORIS_EXA_MODE=showcase`)",
+           "regression": " of the regression test run"}.get(source.get("run"), "")
+    provenance = (f'{meta["caption"]}. Rendered from `{source.get("file", "?")}`{run}'
                   f'{", written " + source["modified"] if source.get("modified") else ""}'
                   f'{" by " + build if build else ""}.')
     animation = ""

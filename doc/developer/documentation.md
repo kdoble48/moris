@@ -83,6 +83,24 @@ python3 doc/gallery/build_gallery.py --build build_opt --out $MORIS_RUNS_DIR/doc
 python3 doc/gallery/build_gallery.py --build build_opt --out $MORIS_RUNS_DIR/docs_gallery --upload
 ```
 
+#### Full-length runs for the gallery
+
+The examples are regression tests: their optimizations stop after a few iterations. Decks that call
+`exa::pick( <regression>, <showcase> )` (`projects/EXA/runner/EXA_Mode.hpp`) run to their full length
+when `MORIS_EXA_MODE=showcase` is set; ctest never sets it. To render those runs instead of the
+regression output:
+
+```bash
+# queue one full run per showcase-capable example as a low-priority XIGA queue job (zz_gallery_*:
+# started only when no research job is pending, nice 19); each runs in $MORIS_RUNS_DIR/docs_gallery_runs/<Example>
+python3 doc/gallery/build_gallery.py --build build_opt --queue-showcase
+
+# after the jobs finish (each writes DONE), export as above: finished showcase runs replace the regression output
+python3 doc/gallery/build_gallery.py --build build_opt --out $MORIS_RUNS_DIR/docs_gallery
+```
+
+The example pages say which kind of run each scene comes from.
+
 | File | Role |
 |---|---|
 | `doc/gallery/gallery_select.py` | picks the file and field per example: a VIS result field, else the XTK integration mesh by phase, else a GEN field, else the bare mesh |

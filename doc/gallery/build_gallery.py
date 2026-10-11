@@ -80,14 +80,77 @@ def page_title(example: dict) -> str:
     return example["title"]
 
 
-def build_examples(build: Path, only: list[str] | None, overrides: dict) -> list[dict]:
+QUEUE_DIR = Path("/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/queue")
+ENV_SCRIPT = Path("/home/doble/moris_workspace/.claude/skills/moris-case-study/runner/_env.sh")
+MKL_LIB = Path("/home/doble/codes/spack/opt/spack/linux-x86_64_v4/"
+               "intel-oneapi-mkl-2024.2.2-4xeqh62vh6x3j5xlqhlyuawrgkwdquib/mkl/2024.2/lib")
+SHOWCASE_MARK = "exa::pick("   # decks with a showcase setting (projects/EXA/runner/EXA_Mode.hpp)
+RUN_OUTPUTS = re.compile(r"(\.exo|\.e-s\.|^ADV_Alg_|^Parameter_Receipt|\.log$|^xtk_temp)")
+
+
+def showcase_capable(example: dict) -> bool:
+    return any(SHOWCASE_MARK in (ROOT / deck).read_text(errors="replace") for deck in example["decks"])
+
+
+def run_inputs(build_dir: Path, source_dir: Path) -> list[Path]:
+    """What an example's run needs from its build ``bin/``: the deck ``.so`` files and the input files
+    CMake copied from the source directory — never the outputs of earlier runs."""
+    if not build_dir.exists():
+        return []
+    source_names = {p.name for p in source_dir.iterdir()} if source_dir.exists() else set()
+    return sorted(p for p in build_dir.iterdir()
+                  if p.is_file() and (p.suffix == ".so" or (p.name in source_names and not RUN_OUTPUTS.search(p.name))))
+
+
+def showcase_job(example: dict, build: Path, runner: Path, runs_dir: Path) -> str:
+    """A low-priority XIGA queue job: run the example's full (showcase) optimization in its own directory."""
+    bin_dir = build / example["directory"] / "bin"
+    inputs = " ".join(f"'{p}'" for p in run_inputs(bin_dir, ROOT / example["directory"]))
+    run_dir = runs_dir / example["leaf"]
+    return (f"# Docs gallery: full showcase run of {example['leaf']} (MORIS_EXA_MODE=showcase) — "
+            f"low priority, renders only; output {run_dir}\n"
+            f"# mem: 2\n"
+            f"set -u\n"
+            f"source '{ENV_SCRIPT}'\n"
+            f"[ -d '{MKL_LIB}' ] && export LD_LIBRARY_PATH=\"${{LD_LIBRARY_PATH:-}}:{MKL_LIB}\"\n"
+            f"rm -rf '{run_dir}' && mkdir -p '{run_dir}' && cd '{run_dir}'\n"
+            f"cp {inputs} .\n"
+            f"# the example's regression reference checks fail on a full-length run; the output is what counts\n"
+            f"MORIS_EXA_MODE=showcase OMP_NUM_THREADS=1 nice -n 19 '{runner}' '[EXA_{example['name']}]' "
+            f"> run.log 2>&1 || true\n"
+            f"date > DONE\n")
+
+
+def queue_showcase(build: Path, runner: Path, runs_dir: Path, queue: Path, only: list[str] | None) -> list[Path]:
+    """Write one ``zz_gallery_*`` job per showcase-capable example; the name sorts after every numbered
+    research job, so the queue starts them only when nothing else is pending (and nice 19 inside)."""
+    from exa_catalog import collect_examples
+
+    pending = queue / "pending"
+    written = []
+    for example in collect_examples(ROOT):
+        if (only and example["leaf"] not in only) or not showcase_capable(example):
+            continue
+        job = pending / f"zz_gallery_{example['leaf']}.sh"
+        job.write_text(showcase_job(example, build, runner, runs_dir), encoding="utf-8")
+        written.append(job)
+    return written
+
+
+def build_examples(build: Path, only: list[str] | None, overrides: dict,
+                   showcase_runs: Path | None = None) -> list[dict]:
     from exa_catalog import collect_examples, ctest_names
 
     examples = []
     for example in collect_examples(ROOT):
         if only and example["leaf"] not in only:
             continue
-        files = exodus_files(build / example["directory"])
+        files, showcase = [], False
+        run_dir = showcase_runs / example["leaf"] if showcase_runs else None
+        if run_dir and (run_dir / "DONE").exists():
+            files, showcase = exodus_files(run_dir), True      # a finished full-length run wins
+        if not files:
+            files = exodus_files(build / example["directory"])
         if not files:
             continue
         tests = ctest_names(example)
@@ -95,11 +158,13 @@ def build_examples(build: Path, only: list[str] | None, overrides: dict) -> list
         examples.append({
             "interface_value": gallery_select.isocontour_threshold(deck_text),
             "id": example["leaf"], "directory": example["directory"], "category": example["category"],
-            "title": page_title(example), "files": [str(f) for f in files],
+            "title": page_title(example), "files": [str(f) for f in files], "showcase": showcase,
             "override": overrides.get(example["leaf"], {}),
-            "reproduce": [f"ctest -R '^{tests[0]}$' --output-on-failure   # in a build with MORIS_USE_EXAMPLES=ON"
-                          if tests else "# not registered as a ctest",
-                          f"python3 doc/gallery/build_gallery.py --build <build tree> --only {example['leaf']}"],
+            "reproduce": ([f"MORIS_EXA_MODE=showcase EXA-test.exe '[EXA_{example['name']}]'   "
+                           "# in a copy of the example's bin/ directory"] if showcase else
+                          [f"ctest -R '^{tests[0]}$' --output-on-failure   # in a build with MORIS_USE_EXAMPLES=ON"
+                           if tests else "# not registered as a ctest"])
+                         + [f"python3 doc/gallery/build_gallery.py --build <build tree> --only {example['leaf']}"],
         })
     return examples
 
@@ -228,7 +293,27 @@ def main(argv=None) -> int:
     ap.add_argument("--pvpython", default=default_pvpython())
     ap.add_argument("--vendor", action="store_true", help="(re)install trame-vtk into doc/gallery/_vendor first")
     ap.add_argument("--upload", action="store_true", help=f"replace the asset on the '{RELEASE}' release")
+    ap.add_argument("--showcase-runs", type=Path,
+                    default=Path(runs) / "docs_gallery_runs" if runs else None,
+                    help="directory of full-length showcase runs (one per example); finished runs replace the "
+                         "regression output")
+    ap.add_argument("--queue-showcase", action="store_true",
+                    help="instead of exporting: queue a low-priority full run of every showcase-capable example")
+    ap.add_argument("--queue", type=Path, default=QUEUE_DIR)
+    ap.add_argument("--runner", type=Path, help="EXA-test executable (default: <build>/projects/EXA/runner/bin)")
     args = ap.parse_args(argv)
+
+    if args.queue_showcase:
+        runner = args.runner or args.build.resolve() / "projects" / "EXA" / "runner" / "bin" / "EXA-test.exe"
+        if not runner.exists():
+            ap.error(f"EXA runner not found: {runner}")
+        if not args.showcase_runs:
+            ap.error("--showcase-runs is required when MORIS_RUNS_DIR is not set")
+        jobs = queue_showcase(args.build.resolve(), runner, args.showcase_runs.resolve(), args.queue, args.only)
+        print(f"queued {len(jobs)} low-priority showcase runs in {args.queue / 'pending'}:")
+        for job in jobs:
+            print(f"  {job.name}")
+        return 0
 
     if args.vendor or not (HERE / "_vendor" / "trame_vtk").exists():
         vendor()
@@ -238,7 +323,7 @@ def main(argv=None) -> int:
     out.mkdir(parents=True)
     overrides_file = HERE / "overrides.json"
     overrides = json.loads(overrides_file.read_text()) if overrides_file.exists() else {}
-    examples = build_examples(args.build.resolve(), args.only, overrides)
+    examples = build_examples(args.build.resolve(), args.only, overrides, args.showcase_runs)
     for example in examples:
         example["files"] = [to_tool_path(f, args.pvpython) for f in example["files"]]
     examples_json = out / "examples.json"

@@ -19,6 +19,25 @@ def test_exodus_files_skip_parallel_pieces(tmp_path):
     assert [p.name for p in bg.exodus_files(tmp_path)] == ["X.exo.e-s.0003", "mesh.e", "xtk_temp.exo"]
 
 
+def test_run_inputs_and_showcase_job(tmp_path):
+    source, build = tmp_path / "src", tmp_path / "bin"
+    source.mkdir()
+    build.mkdir()
+    for name in ["Deck.cpp", "mesh.e", "Voxel_file.hdf5", "CMakeLists.txt"]:
+        (source / name).write_text("")
+    for name in ["Deck.so", "mesh.e", "Voxel_file.hdf5", "xtk_temp.exo", "Deck.exo.e-s.0003",
+                 "ADV_Alg_0_Iter_3.hdf5", "Parameter_Receipt.xml", "stray.txt"]:
+        (build / name).write_text("")
+    assert [p.name for p in bg.run_inputs(build, source)] == ["Deck.so", "Voxel_file.hdf5", "mesh.e"]
+
+    example = {"leaf": "Deck_Example", "name": "Deck_Example", "directory": "projects/EXA/x/Deck_Example"}
+    job = bg.showcase_job(example, tmp_path / "build_opt", tmp_path / "EXA-test.exe", tmp_path / "runs")
+    assert job.startswith("# Docs gallery: full showcase run of Deck_Example")
+    assert "# mem: 2\n" in job
+    assert "MORIS_EXA_MODE=showcase OMP_NUM_THREADS=1 nice -n 19" in job
+    assert "'[EXA_Deck_Example]'" in job and job.rstrip().endswith("date > DONE")
+
+
 def test_crop_thumbnail_centers_content(tmp_path):
     im = Image.new("RGB", (1600, 1000), "white")
     im.paste(Image.new("RGB", (200, 100), "black"), (100, 100))

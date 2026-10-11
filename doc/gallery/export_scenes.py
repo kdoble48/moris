@@ -282,7 +282,8 @@ def export_example(example, out):
         "scene": f"{base}.vtksz", "scene_bytes": os.path.getsize(os.path.join(out, f"{base}.vtksz")),
         "text": summary, "legends": over["legends"],
         "source": {"file": file_name, "modified": time.strftime(
-            "%Y-%m-%d", time.localtime(os.path.getmtime(choice.path)))},
+            "%Y-%m-%d", time.localtime(os.path.getmtime(choice.path))),
+                   "run": "showcase" if example.get("showcase") else "regression"},
         "reproduce": example.get("reproduce", []),
     }
     se.hide_overlays(view)
