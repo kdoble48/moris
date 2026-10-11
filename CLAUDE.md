@@ -22,6 +22,7 @@ Don't re-derive what's already written — read the relevant doc first:
 | Coding style | `share/doc/Dev_Coding_Style.dox` + `.clang-format` (authoritative) |
 | Adding a library / executable / project | `share/doc/Dev_Adding_Libraries.dox`, `Dev_Adding_Executables.dox`, `Dev_Adding_Projects.dox` |
 | CMake details / known build-system debt | `share/doc/Dev_CMake_*.dox`, `CMAKE_AUDIT.md` |
+| Internal design notes / RFCs / reviews (new ones go here) | `doc/internal/` — never `share/doc/` (that is the Doxygen source tree) |
 | Architecture overview & workflows | `share/doc/Overview.dox`, `Modules.dox`, `Wrk_*_Workflow.dox`, `../.claude/rules/agent-knowledge-overview.md` |
 
 ## Day-one commands
@@ -30,7 +31,7 @@ Env must be active first (see above). Builds are out-of-source (in-source is blo
 (release) and `build_dbg/` (debug) already exist.
 
 ```bash
-cd build_opt && ninja -j4                              # incremental — prefer this; full builds are slow
+cd build_opt && ninja -j1                              # incremental; always -j1 (shared 30 GB box + run queue; see .claude/skills/build-moris/build-rules.md)
 ctest -j2 --output-on-failure                          # all tests (Catch2)
 ctest -L XTK --output-on-failure                       # by label (label == package name)
 ./projects/XTK/test/bin/XTK-test.exe "[ENRICH_1]" -s   # one test by Catch2 tag — fastest dev loop
