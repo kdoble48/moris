@@ -350,6 +350,19 @@ namespace moris::prm
         // Optional full ROL ParameterList XML; empty -> build the list from the curated keys above
         tParameterList.insert( "xml_file", "" );
 
+        // Constraint handling: "rol" = ROL's Type-G Augmented-Lagrangian solver (multipliers update only when
+        // an inner solve converges; L-BFGS memory and TR radius restart every outer iteration);
+        // "persistent" = PHR augmented Lagrangian driven by MORIS: max_its outer iterations of at most
+        // subproblem_iteration_limit Lin-More steps each, one secant and TR radius kept across outers, and
+        // multipliers updated after every outer iteration.
+        tParameterList.insert( "al_mode", "rol" );
+        tParameterList.insert( "al_initial_multiplier", -1.0 );      // persistent: < 0 -> least-squares estimate
+        tParameterList.insert( "al_feasibility_reduction", 0.25 );   // persistent: grow penalty if violation > this x previous
+        tParameterList.insert( "al_max_penalty", 1.0e8 );            // persistent: penalty cap
+
+        // Stop after this many forward (criteria) solves and return the last accepted iterate; <= 0: unlimited
+        tParameterList.insert( "max_forward_solves", 0 );
+
         return tParameterList;
     }
 
