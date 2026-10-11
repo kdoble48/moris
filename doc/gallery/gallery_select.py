@@ -122,6 +122,26 @@ def choose(infos: list[FileInfo], override: dict | None = None) -> Choice | None
     return Choice(best.path, kind, None, None)
 
 
+LEVEL_SET_ARRAYS = ("LVLSET", "LEVELSET", "LS", "Levelset", "LevelsetField", "Level_Set_Field")
+
+
+def interface_array(arrays: list[str]) -> str | None:
+    """The level-set array whose threshold contour is the material interface, if the file has one."""
+    return next((name for name in LEVEL_SET_ARRAYS if name in arrays), None)
+
+
+ISOCONTOUR = re.compile(r'"isocontour_threshold"\s*,\s*([-+0-9.eE]+)')
+
+
+def isocontour_threshold(deck_text: str) -> float:
+    """GEN's ``isocontour_threshold`` set in a deck (the level-set value of the interface); 0 by default."""
+    match = ISOCONTOUR.search(deck_text)
+    try:
+        return float(match.group(1)) if match else 0.0
+    except ValueError:  # a named constant: keep the default rather than guess
+        return 0.0
+
+
 MAX_FRAMES = 60
 
 

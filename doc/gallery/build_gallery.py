@@ -31,6 +31,9 @@ HERE = Path(__file__).resolve().parent
 DOC = HERE.parent
 ROOT = DOC.parent
 sys.path.insert(0, str(DOC / "_ext"))
+sys.path.insert(0, str(HERE))
+
+import gallery_select  # noqa: E402
 
 RELEASE = "gallery-assets"
 REPO = "kdoble48/moris"
@@ -88,7 +91,9 @@ def build_examples(build: Path, only: list[str] | None, overrides: dict) -> list
         if not files:
             continue
         tests = ctest_names(example)
+        deck_text = "\n".join((ROOT / deck).read_text(errors="replace") for deck in example["decks"])
         examples.append({
+            "interface_value": gallery_select.isocontour_threshold(deck_text),
             "id": example["leaf"], "directory": example["directory"], "category": example["category"],
             "title": page_title(example), "files": [str(f) for f in files],
             "override": overrides.get(example["leaf"], {}),

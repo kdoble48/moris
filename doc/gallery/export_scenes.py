@@ -179,6 +179,14 @@ def render(example, choice, out):
         rep.AmbientColor = [0.75, 0.80, 0.86]
     elif choice.kind in ("result", "gen"):
         color_field(rep, source, choice, view)
+    interface = None
+    override = example.get("override", {})
+    level_set = gs.interface_array(list(reader.PointData.keys()))
+    if level_set and choice.kind in ("result", "gen") and not three_d and override.get("interface", True) is not False:
+        value = override["interface"] if isinstance(override.get("interface"), (int, float)) \
+            and not isinstance(override.get("interface"), bool) else example.get("interface_value", 0.0)
+        interface = (level_set, value)
+        add_interface(view, reader, level_set, value, bounds)
     set_camera(view, three_d, face_cut=cutaway is not None)
     step = None
     if len(times) > 1:
@@ -187,7 +195,22 @@ def render(example, choice, out):
             else f"last of {len(times)} steps in the .e-s series"
     if cutaway is not None:
         step = (step + ", " if step else "") + f"cut away at y = {cutaway:.4g}"
-    return view, three_d, cells, step, by_block, source, times
+    return view, three_d, cells, step, by_block, source, times, interface
+
+
+def add_interface(view, reader, array, value, bounds):
+    """The level-set contour ``array = value`` (the material interface) as a black line, lifted slightly
+    toward the camera so it draws over the colored surface; it follows the view time in animations."""
+    contour = pv.Contour(Input=pv.MergeBlocks(Input=reader), ContourBy=["POINTS", array], Isosurfaces=[value])
+    lift = 1e-3 * max(bounds[1] - bounds[0], bounds[3] - bounds[2])
+    lifted = pv.Transform(Input=contour)
+    lifted.Transform.Translate = [0.0, 0.0, lift]
+    rep = pv.Show(lifted, view)
+    pv.ColorBy(rep, None)
+    rep.DiffuseColor = [0.0, 0.0, 0.0]
+    rep.AmbientColor = [0.0, 0.0, 0.0]
+    rep.LineWidth = 3.0
+    return lifted
 
 
 MIN_FRAMES = 3                   # animate only series with at least this many steps
@@ -240,12 +263,14 @@ def export_example(example, out):
     choice = gs.choose(infos, override)
     if choice is None:
         return None, "no file with geometry"
-    view, three_d, cells, step, by_block, source, times = render(example, choice, out)
+    view, three_d, cells, step, by_block, source, times, interface = render(example, choice, out)
     base = example["id"]
     file_name = os.path.basename(choice.path.replace("\\", "/"))
     caption = KIND_CAPTION[choice.kind].format(label=choice.label)
     if choice.kind == "mesh" and by_block:
         caption = "Mesh, colored by element block"
+    if interface:
+        caption += f"; black line: the level-set interface, {interface[0]} = {interface[1]:g}"
     summary = [f"{file_name}" + (f", {step}" if step else ""), f"{cells} cells, {'3D' if three_d else '2D'}"]
     over = se.overlays(view)
     pv.SaveScreenshot(os.path.join(out, f"{base}.png"), view, ImageResolution=SIZE)

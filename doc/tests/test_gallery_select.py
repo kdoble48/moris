@@ -55,6 +55,14 @@ def test_empty_files_and_override():
     assert choice.kind == "xtk"
 
 
+def test_interface_array_and_threshold():
+    assert gs.interface_array(["U", "LVLSET", "PHID"]) == "LVLSET"
+    assert gs.interface_array(["U", "TEMP"]) is None
+    assert gs.isocontour_threshold('aParameterLists.set( "isocontour_threshold", 0.5 );') == 0.5
+    assert gs.isocontour_threshold('set( "isocontour_threshold", tThreshold );') == 0.0
+    assert gs.isocontour_threshold("no GEN threshold here") == 0.0
+
+
 def test_step_labels():
     restart = [BIN + f"R.exo.e-s.{i:04d}" for i in range(11, 17)] + [BIN + "GEN_R.exo.e-s.0011"]
     labels, iterations = gs.step_labels(restart[0], restart, 6)
