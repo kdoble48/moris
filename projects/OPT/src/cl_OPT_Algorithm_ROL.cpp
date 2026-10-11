@@ -834,7 +834,10 @@ namespace moris::opt
                 tDLambda        = std::max( tDLambda, std::abs( tNew - tLambda[ iCon ] ) / std::max( 1.0, std::abs( tNew ) ) );
                 tLambda[ iCon ] = tNew;
             }
-            if ( tViol > mALFeasibilityReduction * tPrevViolation && tViol > mConstraintTol )
+            // grow the penalty only when an INFEASIBLE outer failed to reduce the violation enough; after a feasible
+            // outer (previous violation <= tol) any small overshoot would otherwise ratchet rho up every other outer
+            if ( tPrevViolation > mConstraintTol && tViol > mConstraintTol
+                    && tViol > mALFeasibilityReduction * tPrevViolation )
             {
                 tRho = std::min( tRho * mALPenaltyGrowth, mALMaxPenalty );
             }
