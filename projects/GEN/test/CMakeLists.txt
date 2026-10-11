@@ -15,6 +15,7 @@ set(TEST_SOURCES
 	ut_GEN_Field.cpp
 	ut_GEN_Property.cpp
 	ut_GEN_Intersection_Level_Set.cpp
+	ut_GEN_Intersection_Cell_Order.cpp
 	ut_GEN_Intersection_Surface_Mesh.cpp
 	cl_GEN_Geometry_Engine_Test.cpp
 	fn_GEN_create_simple_mesh.cpp
