@@ -45,6 +45,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-027 | open (fix in progress by another session, jobs 3200-3299) | WRK/OPT | In-place SDF redistance R is not idempotent (each application raises the KS stress aggregate ~0.6 % and the volume ~0.075 %) and is applied to every inner-loop trial, so GCMMA conservativeness compares f(R(ψ)) with an approximation of f(ψ): trials converge to f(R(x_k)) > approximation, the inner loop hits its cap, and the accepted R(x_k) ratchets the constraint up | X18 v8 KS mimic h1 (D-056), perf/x18v8 |
 | MB-028 | merged (#26, 33be1e5c6; was cited as MB-016) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
 | MB-029 | fix-written (feature/gen-additive @ee83435b7; was cited as MB-017) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
+| MB-030 | fix-written (feature/gen-additive @496ac24d2, d3f17589c) | OPT | ROL wrapper: `al_initial_penalty` silently ignored (ROL "Use Default Initial Penalty Parameter" defaults true), and ROL's Type-G AL updates multipliers only when a capped inner solve CONVERGES, so with `subproblem_iteration_limit` the AL silently degenerates to a fixed quadratic penalty with lambda = 0 | gaussian_splat_ls task 34 (code reading; explains the 2026-07 rol_applicability "penalty keys inert" result) |
 | MB-030 | open | GEN | Nested intersection sensitivities use the field gradient projected onto an intersection parent's own edge; wrong once that parent moves off its edge (nesting level ≥ 3): 38–64 % relative error vs FD | MB-022 FD regression test 2026-10-11 |
 
 ---
@@ -585,6 +586,39 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Workaround:** `use_multilinear_interpolation = false` at order 2 (X40_cheese_o2_nomlin ran clean).
 
 ---
+
+## MB-030 · OPT: ROL augmented-Lagrangian keys silently inert (initial penalty ignored; multipliers never update under a capped inner solve)
+- **Status:** fix-written (feature/gen-additive, 2026-10-11: 496ac24d2 + d3f17589c)
+- **Symptom:** in `al_mode = "rol"` (the only mode before the fix) changing `al_initial_penalty` does not change the run, and with
+  `subproblem_iteration_limit` set (default 25) the AL table's multiplier never moves: the inner Lin-More solve exits
+  `Iteration Limit Exceeded` every outer, so the run is a fixed quadratic penalty with lambda = 0 and the final design misses the
+  constraint by O(1/rho). Matches the 2026-07 `runs/studies/rol_applicability/param/` sweep: 15/16 penalty / growth / radius
+  combinations gave the identical design, and the first A/B ended infeasible (+0.035) or under-filled.
+- **Reproducer:** any ROL deck with a constraint and `subproblem_iteration_limit` < the inner iterations needed to reach ROL's inner
+  tolerance (min(1e-2 x initial projected gradient, ...)); e.g. `runs/studies/rol_applicability/param/Lbracket_sm_ROL.cpp`.
+- **Evidence:** `runs/moris_bugs/MB-030/`: R1 (persistent mode, first version) outer log `R1_rolal_outers.log` showing the second
+  defect below (rho 40 -> 2560), config `t34_R1-geo-N80.json`.
+- **Root cause:** Trilinos 15.1.1 `ROL_TypeG_AugmentedLagrangianAlgorithm_Def.hpp:61-62` (`useDefaultInitPen_` true by default, so
+  "Initial Penalty Parameter" is overwritten in `initialize`), and `:255` (`if ( algo->getState()->statusFlag == EXITSTATUS_CONVERGED )`
+  gates the multiplier AND penalty update). The MORIS wrapper (`cl_OPT_Algorithm_ROL.cpp`, rol_solve) set neither flag.
+  Second defect, in the first version of the new persistent mode: the penalty-growth test compared against a previous violation
+  of 0 after a feasible outer, so rho grew 4x after every overshoot (40 -> 2560 in 11 outers) and the L-BFGS model became stiff
+  (steps ~0.07 h; the GS-LS R1 run stalled at SE 5.17).
+- **Fix:** 496ac24d2 sets "Use Default Initial Penalty Parameter" = false so the key takes effect, and adds `al_mode = "persistent"`:
+  a PHR AL driven by MORIS with one secant and TR radius kept across outers and an unconditional multiplier update after each
+  capped inner solve. d3f17589c grows rho only after an infeasible outer that did not cut the violation 4x.
+- **Code:** (fix, `cl_OPT_Algorithm_ROL.cpp`)
+```diff
++                tAugLag.set( "Use Default Initial Penalty Parameter", false );
+                 tAugLag.set( "Initial Penalty Parameter", mALInitialPenalty );
+...
+-            if ( tViol > mALFeasibilityReduction * tPrevViolation && tViol > mConstraintTol )
++            if ( tPrevViolation > mConstraintTol && tViol > mConstraintTol
++                    && tViol > mALFeasibilityReduction * tPrevViolation )
+```
+- **Regression test:** `projects/OPT/test/opt_test.cpp` SECTIONs "ROL persistent augmented Lagrangian (binding constraint)" (the
+  unconstrained minimum is infeasible; converges to (1,1), lambda 2) and "ROL forward-solve budget".
+- **Workaround:** before the fix, pass a full `xml_file` with "Use Default Initial Penalty Parameter" false and an uncapped inner solve.
 
 ## Entry template
 ```
