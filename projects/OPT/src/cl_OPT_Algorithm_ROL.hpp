@@ -52,16 +52,39 @@ namespace moris::opt
         real        mStepTol;                  // status-test step tolerance
         std::string mXmlFile;                  // optional full ROL ParameterList XML (overrides curated keys)
 
-        // --- shared evaluation cache -------------------------------------------------------
-        // ROL calls the objective and (M2) constraint adapters at the same design point; both a
-        // forward criteria solve and an adjoint gradient solve are expensive, so we cache the ADV
-        // vector each was last evaluated at and skip redundant solves. compute_design_criteria and
-        // compute_design_criteria_gradients populate BOTH objective and constraint quantities in a
-        // single solve, so one entry per stage suffices.
-        std::vector< real > mCriteriaADVs;      // ADVs of the last forward (criteria) solve
-        std::vector< real > mGradientADVs;      // ADVs of the last adjoint (gradient) solve
-        bool                mHaveCriteria  = false;
-        bool                mHaveGradients = false;
+        // --- constraint handling / budget (task 34) ----------------------------------------
+        // al_mode "rol": ROL's Type-G Augmented-Lagrangian solver (multipliers update only when the inner
+        //   subproblem CONVERGES, and the L-BFGS memory + TR radius restart every outer iteration).
+        // al_mode "persistent": a PHR augmented Lagrangian driven here; each outer iteration runs a capped
+        //   bound-constrained Lin-More solve on L(x) = f + sum psi(g_i, lambda_i, rho) with ONE secant and
+        //   trust-region radius carried across outers, then updates the multipliers unconditionally.
+        std::string mALMode;                   // "rol" | "persistent"
+        real        mALInitialMultiplier;      // persistent: < 0 -> least-squares estimate at the start design
+        real        mALFeasibilityReduction;   // persistent: grow rho when |violation| > this x previous
+        real        mALMaxPenalty;             // persistent: penalty cap
+        sint        mMaxForwardSolves;         // stop after this many forward (criteria) solves; <= 0 unlimited
+        sint        mNumForwardSolves = 0;     // forward solves so far (this solve)
+
+        // --- evaluation cache: the latest evaluation and the latest ACCEPTED iterate ----------
+        // A rejected trust-region trial overwrites the latest slot; keeping the accepted iterate's criteria
+        // and gradients separately avoids re-solving at x after every rejection (each solve is a full
+        // immersed forward or adjoint analysis).
+        struct Eval_Point
+        {
+            std::vector< real > mADVs;
+            Matrix< DDRMat >    mObjectives;
+            Matrix< DDRMat >    mConstraints;
+            Matrix< DDRMat >    mObjectiveGradients;
+            Matrix< DDRMat >    mConstraintGradients;
+            bool                mHaveCriteria  = false;
+            bool                mHaveGradients = false;
+            sint                mFSolve        = -1;    // forward-solve index (1-based) of this evaluation
+        };
+        Eval_Point          mLatest;
+        Eval_Point          mAccepted;
+        Eval_Point*         mActivePoint = nullptr;
+        std::vector< real > mLastAcceptedADVs;    // last accepted iterate (the result if the budget runs out)
+
 
       public:
         /**
@@ -111,6 +134,20 @@ namespace moris::opt
          *        Triggers an adjoint gradient solve only if aADVs differ from the cached point.
          */
         void ensure_gradients( const std::vector< real >& aADVs );
+
+        /**
+         * @brief Criteria / gradients at the point of the last ensure_criteria / ensure_gradients call
+         *        (served from the evaluation cache; valid until the next ensure_* call).
+         */
+        const Matrix< DDRMat >& cached_objectives() const { return mActivePoint->mObjectives; }
+        const Matrix< DDRMat >& cached_constraints() const { return mActivePoint->mConstraints; }
+        const Matrix< DDRMat >& cached_objective_gradients() const { return mActivePoint->mObjectiveGradients; }
+        const Matrix< DDRMat >& cached_constraint_gradients() const { return mActivePoint->mConstraintGradients; }
+
+        /**
+         * @brief Persistent-secant PHR augmented Lagrangian (al_mode = "persistent"); rank 0 only.
+         */
+        void rol_solve_persistent_al();
     };
 }    // namespace moris::opt
 

@@ -10,7 +10,9 @@
 
 #include <catch.hpp>
 
+#include <cmath>
 #include <fstream>
+#include <string>
 #include <cstdio>
 #include <filesystem>
 #include <limits>
@@ -106,6 +108,101 @@ namespace moris::opt
             return { { 0.0 } };
         }
     }    // namespace bimodal
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Binding-constraint quadratic for the persistent-AL ROL mode (task 34):
+    //   min (x0 - 2)^2 + (x1 - 2)^2  s.t.  x0 + x1 - 2 <= 0,  -3 <= x <= 3
+    // The unconstrained minimum (2,2) is infeasible; the constrained minimizer is (1,1), f* = 2, lambda* = 2.
+    // Criteria = the ADVs themselves.
+
+    namespace binding
+    {
+        void initialize(
+                Vector< real >& aADVs,
+                Vector< real >& aLowerBounds,
+                Vector< real >& aUpperBounds )
+        {
+            if ( par_rank() == 0 )
+            {
+                aADVs        = { 0.0, -1.0 };
+                aLowerBounds = { -3.0, -3.0 };
+                aUpperBounds = { 3.0, 3.0 };
+            }
+        }
+
+        Vector< real > get_criteria( const Vector< real >& aADVs )
+        {
+            if ( par_rank() == 0 )
+            {
+                return { aADVs( 0 ), aADVs( 1 ) };
+            }
+            return { {} };
+        }
+
+        Matrix< DDRMat > get_dcriteria_dadv( const Vector< real >& aADVs )
+        {
+            if ( par_rank() == 0 )
+            {
+                return { { 1.0, 0.0 }, { 0.0, 1.0 } };
+            }
+            return { {} };
+        }
+
+        Matrix< DDSMat > get_constraint_types()
+        {
+            return Matrix< DDSMat >( 1, 1, 1 );
+        }
+
+        Matrix< DDRMat > compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { std::pow( aCriteria( 0 ) - 2.0, 2 ) + std::pow( aCriteria( 1 ) - 2.0, 2 ) } };
+        }
+
+        Matrix< DDRMat > compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { aCriteria( 0 ) + aCriteria( 1 ) - 2.0 } };
+        }
+
+        Matrix< DDRMat > compute_dobjective_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, 2, 0.0 );
+        }
+
+        Matrix< DDRMat > compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 2.0 * ( aCriteria( 0 ) - 2.0 ), 2.0 * ( aCriteria( 1 ) - 2.0 ) } };
+        }
+
+        Matrix< DDRMat > compute_dconstraint_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, 2, 0.0 );
+        }
+
+        Matrix< DDRMat > compute_dconstraint_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 1.0, 1.0 } };
+        }
+
+        std::shared_ptr< Problem >
+        make_problem()
+        {
+            Parameter_List tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+
+            std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                    &initialize, &get_criteria, &get_dcriteria_dadv );
+
+            return std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &get_constraint_types,
+                    &compute_objectives,
+                    &compute_constraints,
+                    &compute_dobjective_dadv,
+                    &compute_dobjective_dcriteria,
+                    &compute_dconstraint_dadv,
+                    &compute_dconstraint_dcriteria );
+        }
+    }    // namespace binding
 
     TEST_CASE( "[optimization]" )
     {
@@ -589,6 +686,64 @@ namespace moris::opt
                 for ( auto iADV : tADVs )
                 {
                     REQUIRE( std::abs( iADV - 1.0 ) < 1E-2 );
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
+        // Persistent-secant PHR augmented Lagrangian (al_mode = "persistent") on a BINDING constraint: the
+        // unconstrained minimum is infeasible, so the multiplier update must actually drive feasibility.
+        SECTION( "ROL persistent augmented Lagrangian (binding constraint)" )
+        {
+            Parameter_List tAlgorithmParameterList = moris::prm::create_rol_parameter_list();
+            tAlgorithmParameterList.set( "al_mode", "persistent" );
+            tAlgorithmParameterList.set( "max_its", 30 );
+            tAlgorithmParameterList.set( "subproblem_iteration_limit", 10 );
+            tAlgorithmParameterList.set( "initial_tr_radius", 1.0 );
+            tAlgorithmParameterList.set( "al_initial_penalty", 1.0 );
+            tAlgorithmParameterList.set( "al_penalty_growth", 10.0 );
+            tAlgorithmParameterList.set( "gradient_tol", 1.0e-8 );
+            tAlgorithmParameterList.set( "constraint_tol", 1.0e-8 );
+
+            Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+            tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+            Manager tManager( tAlgorithms, binding::make_problem() );
+            tManager.perform();
+
+            if ( par_rank() == 0 )
+            {
+                Vector< real > tADVs = tManager.get_advs();
+                REQUIRE( std::abs( tADVs( 0 ) - 1.0 ) < 1E-4 );
+                REQUIRE( std::abs( tADVs( 1 ) - 1.0 ) < 1E-4 );
+                REQUIRE( std::abs( tManager.get_objectives()( 0 ) - 2.0 ) < 1E-4 );
+            }
+        }
+
+        // max_forward_solves stops ROL cleanly and leaves the Problem at the last accepted iterate (both modes).
+        SECTION( "ROL forward-solve budget" )
+        {
+            for ( std::string tMode : { "rol", "persistent" } )
+            {
+                Parameter_List tAlgorithmParameterList = moris::prm::create_rol_parameter_list();
+                tAlgorithmParameterList.set( "al_mode", tMode );
+                tAlgorithmParameterList.set( "max_its", 100 );
+                tAlgorithmParameterList.set( "subproblem_iteration_limit", 10 );
+                tAlgorithmParameterList.set( "initial_tr_radius", 1.0 );
+                tAlgorithmParameterList.set( "max_forward_solves", 3 );
+
+                Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+                tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+                Manager tManager( tAlgorithms, binding::make_problem() );
+                tManager.perform();
+
+                if ( par_rank() == 0 )
+                {
+                    // moved off the start (0, -1) toward the minimizer, and stopped well before converging
+                    Vector< real > tADVs = tManager.get_advs();
+                    real           tF    = tManager.get_objectives()( 0 );
+                    REQUIRE( tF < 13.0 );      // f(start) = 4 + 9 = 13
+                    REQUIRE( std::abs( tADVs( 0 ) - 1.0 ) + std::abs( tADVs( 1 ) - 1.0 ) > 1E-6 );
                 }
             }
         }
