@@ -4,3 +4,6 @@ myst-parser==4.0.0
 furo==2024.8.6
 breathe==4.35.0
 sphinx-copybutton==0.5.2
+sphinx-design==0.6.1
+# the build renders nothing; moris_gallery copies trame-vtk's standalone vtk.js viewer.html
+trame-vtk==2.11.17

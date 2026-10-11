@@ -70,6 +70,40 @@ article table.docutils td:first-child {
     min-width: 7em;
 }
 
+/* Example scenes (moris_gallery.py): vtk.js viewer iframe, static image, HTML legends. */
+iframe.moris-scene {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border: 1px solid var(--color-background-border);
+    border-radius: 6px;
+    background: #ffffff;
+}
+img.moris-static {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--color-background-border);
+    border-radius: 6px;
+    background: #ffffff;
+}
+.moris-side {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+    align-items: flex-start;
+    margin: 0.5rem 0 1rem;
+}
+.moris-legend { min-width: 14rem; font-size: 0.85em; }
+.moris-legend-title { font-weight: 600; margin-bottom: 0.25rem; }
+.moris-bar { height: 0.8rem; border-radius: 3px; border: 1px solid var(--color-background-border); }
+.moris-bar-range { display: flex; justify-content: space-between; font-family: var(--font-stack--monospace); }
+.moris-cats { list-style: none; padding: 0; margin: 0; columns: 2; }
+.moris-cats li { margin: 0.1rem 0; break-inside: avoid; }
+.moris-swatch {
+    display: inline-block; width: 0.9em; height: 0.9em; margin-right: 0.4em;
+    vertical-align: -0.1em; border-radius: 2px; border: 1px solid rgba(0, 0, 0, 0.2);
+}
+pre.moris-summary { margin: 0; font-size: 0.8em; }
+
 /* Wide reference tables scroll instead of overflowing on narrow screens. */
 article table.docutils {
     display: block;

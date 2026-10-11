@@ -64,6 +64,7 @@ user-guide/workflow
 :caption: Gallery
 
 examples/gallery
+examples/example-gallery
 examples/catalog
 ```
 

@@ -38,7 +38,9 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.githubpages",
     "sphinx_copybutton",
+    "sphinx_design",
     "moris_sphinx",
+    "moris_gallery",
     "exa_catalog",
 ]
 if USE_DOXYGEN:
@@ -51,7 +53,9 @@ moris_source_dir = str(SOURCE_DIR)
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 root_doc = "index"
-exclude_patterns = ["_build", "_ext", "**/_generated", "Thumbs.db", ".DS_Store", "README.md"]
+# (exclude_patterns also filter html_static_path: never exclude a bare "gallery", or _static/gallery is lost)
+exclude_patterns = ["_build", "_ext", "gallery/_vendor", "tests", "**/_generated", "Thumbs.db", ".DS_Store",
+                    "README.md"]
 
 myst_enable_extensions = ["colon_fence", "deflist", "dollarmath", "fieldlist", "attrs_inline"]
 myst_heading_anchors = 3

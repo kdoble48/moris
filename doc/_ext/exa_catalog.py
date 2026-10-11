@@ -315,7 +315,10 @@ class ExaSummaryDirective(SphinxDirective):
                            location=self.get_location())
             return []
         self.env.note_dependency(str(source_dir / directory / "CMakeLists.txt"))
-        return self.parse_text_to_nodes(summary_markdown(self.env.app, matches[0]))
+        import moris_gallery  # scenes from the gallery manifest, when one was downloaded or built
+
+        scene = moris_gallery.scene_for(directory, self.env.docname)
+        return self.parse_text_to_nodes(scene + "\n" + summary_markdown(self.env.app, matches[0]))
 
 
 def setup(app):

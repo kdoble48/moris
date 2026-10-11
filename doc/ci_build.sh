@@ -26,10 +26,30 @@ if [ ! -x "$TOOLS_DIR/doxygen/bin/doxygen" ]; then
 fi
 "$TOOLS_DIR/doxygen/bin/doxygen" --version
 
-# Sphinx toolchain
+# Sphinx toolchain (+ pillow/pytest for the gallery tests)
 python3 -m venv "$TOOLS_DIR/venv"
 "$TOOLS_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$TOOLS_DIR/venv/bin/pip" install --quiet -r "$DOC_DIR/requirements.txt"
+"$TOOLS_DIR/venv/bin/pip" install --quiet -r "$DOC_DIR/requirements.txt" pillow pytest
+
+"$TOOLS_DIR/venv/bin/python" -m pytest -q "$DOC_DIR/tests"
+
+# Example-gallery scenes: the gallery-assets release asset (doc/gallery/build_gallery.py --upload).
+# In CI only a missing release is tolerated; any other failure must not deploy a gallery-less site.
+# Locally the step is skipped unless MORIS_DOCS_GALLERY=download (an unpacked doc/_static/gallery is kept).
+if [ -n "${GITHUB_ACTIONS:-}" ] || [ "${MORIS_DOCS_GALLERY:-}" = "download" ]; then
+    rm -rf "$DOC_DIR/_static/gallery"
+    mkdir -p "$DOC_DIR/_static/gallery"
+    if view=$(gh release view gallery-assets 2>&1); then
+        gh release download gallery-assets -p gallery-assets.zip -D "$TOOLS_DIR" --clobber
+        unzip -q -o "$TOOLS_DIR/gallery-assets.zip" -d "$DOC_DIR/_static/gallery"
+        echo "gallery: $(ls "$DOC_DIR/_static/gallery" | grep -c '\.vtksz$') scenes"
+    elif echo "$view" | grep -q "release not found"; then
+        echo "::warning::gallery-assets release not found; building without the example scenes"
+    else
+        echo "$view" >&2
+        exit 1
+    fi
+fi
 
 make -C "$DOC_DIR" html \
     DOXYGEN="$TOOLS_DIR/doxygen/bin/doxygen" \

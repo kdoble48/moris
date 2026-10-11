@@ -64,6 +64,41 @@ reference. Every value on the page comes from the deck, its `example_test_case.c
 `CMakeLists.txt`. A new example without a page still appears in the catalog, linked to its
 source directory.
 
+### Regenerating the example gallery
+
+Each example page carries an interactive 3D scene of the example's own output, and the
+{doc}`../examples/example-gallery` shows them as a card grid. The scenes are static vtk.js files
+(`.vtksz`) shown in an iframe by trame-vtk's standalone `viewer.html`; no server runs anywhere. They
+are generated locally — they need ParaView and a build tree in which the examples have been run — and
+stored outside git, as the `gallery-assets` release asset that the docs workflows download.
+
+```bash
+# 1. run the examples in a build configured with MORIS_USE_EXAMPLES=ON
+ctest --test-dir build_opt -R '<pattern>' --output-on-failure
+
+# 2. export one scene per example (ParaView 6 pvpython; vendors trame-vtk into doc/gallery/_vendor)
+python3 doc/gallery/build_gallery.py --build build_opt --out $MORIS_RUNS_DIR/docs_gallery
+
+# 3. check the thumbnails in the output directory, then publish
+python3 doc/gallery/build_gallery.py --build build_opt --out $MORIS_RUNS_DIR/docs_gallery --upload
+```
+
+| File | Role |
+|---|---|
+| `doc/gallery/gallery_select.py` | picks the file and field per example: a VIS result field, else the XTK integration mesh by phase, else a GEN field, else the bare mesh |
+| `doc/gallery/export_scenes.py` | pvpython: renders the choice and writes `<id>.png`, `<id>-thumb-raw.png`, `<id>.vtksz`, `<id>.json` |
+| `doc/gallery/scene_export.py` | serializes a render view with trame-vtk (partitioned-dataset and categorical-color workarounds) |
+| `doc/gallery/build_gallery.py` | one pvpython process per example, thumbnails, scene validation, `manifest.json`, zip, upload |
+| `doc/gallery/overrides.json` | optional per-example choices: `{"<Example>": {"file": …, "array": …, "skip": true}}` |
+| `doc/_ext/moris_gallery.py` | Sphinx: scenes on the example pages, the gallery cards, `viewer.html` |
+
+`build_gallery.py` runs Windows ParaView 6 through WSL when it is installed, otherwise the `pvpython`
+on the `PATH` (`--pvpython` overrides). To preview without uploading, unzip the archive into
+`doc/_static/gallery/` and build the site; CI downloads the release instead
+(`MORIS_DOCS_GALLERY=download bash doc/ci_build.sh` does the same locally). Each upload changes the
+manifest's timestamp, which the pages append to the asset URLs, so browsers and the GitHub Pages
+cache load the new scenes without renamed files.
+
 Design records — RFCs, reviews, plans — go in `doc/internal/` and are listed on the
 {doc}`../design/index` page.
 
