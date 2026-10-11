@@ -1076,6 +1076,117 @@ namespace moris::opt
     }
 
     //------------------------------------------------------------------------------------------------------------------
+    // Redistance on accepted iterates only (reinit_on_accept_only): with the GCMMA inner loop on, every conservatism trial
+    // must be evaluated at the raw subproblem solution psi (the design the approximation was built for), and only the
+    // accepted iterate is redistanced, by one extra evaluation at that same psi. The interface below redistances (jumps
+    // the far-field variables) only when the optimizer has not suppressed it, and records every call.
+
+    /** Far-field-jump interface that honours the optimizer's redistance suppression and records every call. */
+    class Interface_Suppressible_Redistance : public Interface_Farfield_Jump
+    {
+      public:
+        std::vector< bool >                mSuppressed;    ///< per call: was the redistance suppressed
+        std::vector< std::vector< real > > mInput;         ///< per call: the design handed in (before any redistance)
+
+        Vector< real >
+        perform( Vector< real >& aNewADVs ) override
+        {
+            std::vector< real > tIn( aNewADVs.size() );
+            for ( uint iADV = 0; iADV < aNewADVs.size(); iADV++ )
+            {
+                tIn[ iADV ] = aNewADVs( iADV );
+            }
+            mInput.push_back( tIn );
+            mSuppressed.push_back( this->is_reinit_suppressed() );
+
+            mJump = !this->is_reinit_suppressed();
+            return Interface_Farfield_Jump::perform( aNewADVs );
+        }
+    };
+
+    std::shared_ptr< Interface_Suppressible_Redistance >
+    solve_suppressible_redistance( bool aAcceptOnly )
+    {
+        Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "max_its", 12 );
+        tAlgorithmParameterList.set( "max_inner_its", 5 );
+        tAlgorithmParameterList.set( "step_size", 0.3 );
+        tAlgorithmParameterList.set( "reinit_in_place", true );
+        tAlgorithmParameterList.set( "reinit_on_accept_only", aAcceptOnly );
+
+        std::shared_ptr< Interface_Suppressible_Redistance > tInterface = std::make_shared< Interface_Suppressible_Redistance >();
+
+        std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                tProblemParameterList,
+                tInterface,
+                &get_constraint_types_rosenbrock,
+                &compute_objectives_rosenbrock,
+                &compute_constraints_rosenbrock,
+                &compute_dobjective_dadv_rosenbrock_farfield,
+                &compute_dobjective_dcriteria_rosenbrock,
+                &compute_dconstraint_dadv_rosenbrock_farfield,
+                &compute_dconstraint_dcriteria_rosenbrock );
+        tProblem->initialize();
+
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+        }
+
+        // the suppression flag is never left set after the solve
+        REQUIRE_FALSE( tInterface->is_reinit_suppressed() );
+
+        return tInterface;
+    }
+
+    TEST_CASE( "Native GCMMA redistances only accepted iterates with reinit_on_accept_only", "[optimization][reinit_on_accept_only]" )
+    {
+        std::shared_ptr< Interface_Suppressible_Redistance > tAcceptOnly = solve_suppressible_redistance( true );
+        std::shared_ptr< Interface_Suppressible_Redistance > tEveryEval  = solve_suppressible_redistance( false );
+
+        if ( par_rank() == 0 )
+        {
+            const std::vector< bool >& tS = tAcceptOnly->mSuppressed;
+            REQUIRE( tS.size() >= 3 );
+
+            // the initial evaluation is an accepted iterate: redistanced
+            REQUIRE_FALSE( tS[ 0 ] );
+
+            uint tNumTrials   = 0;
+            uint tNumAccepted = 0;
+            for ( uint iCall = 1; iCall < tS.size(); iCall++ )
+            {
+                if ( tS[ iCall ] )
+                {
+                    tNumTrials++;
+                    continue;
+                }
+
+                // a redistanced evaluation follows a raw trial and re-evaluates exactly that (accepted) design
+                tNumAccepted++;
+                REQUIRE( tS[ iCall - 1 ] );
+                for ( uint iADV = 0; iADV < tAcceptOnly->mInput[ iCall ].size(); iADV++ )
+                {
+                    CHECK( tAcceptOnly->mInput[ iCall ][ iADV ] == tAcceptOnly->mInput[ iCall - 1 ][ iADV ] );
+                }
+            }
+
+            // every outer iteration ended with its accept evaluation, and the inner loop ran: more trials than iterations
+            REQUIRE( !tS.back() );
+            REQUIRE( tNumAccepted >= 1 );
+            REQUIRE( tNumTrials > tNumAccepted );
+
+            // negative control: without the key, no evaluation is suppressed (every trial is redistanced)
+            for ( uint iCall = 0; iCall < tEveryEval->mSuppressed.size(); iCall++ )
+            {
+                REQUIRE_FALSE( tEveryEval->mSuppressed[ iCall ] );
+            }
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
     // Failed evaluations (MB-023, MB-024) and SWEEP finite-difference modes (MB-025), on the one-variable quadratic
     // f(x) = 100 (x - 0.45)^2 started at x = 0.5. A failed evaluation is modelled as a NaN criterion, the signature
     // of an XTK decomposition failure.

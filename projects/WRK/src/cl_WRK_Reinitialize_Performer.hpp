@@ -99,6 +99,7 @@ namespace moris
             real mWeanTol = 0.0;              ///< Wean-off tolerance on the reinit's relative change (0 = disabled)
             bool mLastReinitBelowWeanTol = false;  ///< Set when the most recent reinit's change fell below mWeanTol
             bool mReinitEveryStep = false;    ///< Redistance every iteration in-place (no restart); smooth every reinit_freq
+            bool mDiagnostics     = false;    ///< sdf_reinit_diagnostics: log the footprint of every in-place redistance
 
           public:
             //------------------------------------------------------------------------------
@@ -260,6 +261,41 @@ namespace moris
              */
             bool
             get_reinit_every_step() const { return mReinitEveryStep; }
+
+            /** sdf_reinit_diagnostics: whether to log the footprint of every in-place redistance */
+            bool
+            get_diagnostics() const { return mDiagnostics; }
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * For every Lagrange cell of the ADV field's interpolation mesh, the (local) indices of the design
+             * coefficients that are nonzero on it: the union of the T-matrix coefficient indices of its nodes. These
+             * are the basis functions whose support intersects the (open) cell.
+             */
+            Vector< Vector< moris_index > >
+            get_cell_coefficients( Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer ) const;
+
+            /**
+             * Lagrange nodal values sum_k T_nk c_k of the ADV field's interpolation mesh for coefficients aCoeffs
+             * (same evaluation order as the GEN B-spline field)
+             */
+            Matrix< DDRMat >
+            get_nodal_values(
+                    Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+                    const Matrix< DDRMat >&                            aCoeffs ) const;
+
+            /**
+             * sdf_reinit_diagnostics: log what one in-place redistance changed between the design coefficients
+             * aOldCoeffs (psi) and aNewCoeffs (phi = R(psi)): max |delta c| on the coefficients that touch a cell cut
+             * in psi and on the others, nodal sign flips, and the cut-cell sets (a cell is cut if its Lagrange nodal
+             * values do not all have one sign; zero counts as positive, the redistance's sign rule)
+             */
+            void
+            log_redistance_footprint(
+                    Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+                    const Matrix< DDRMat >&                            aOldCoeffs,
+                    const Matrix< DDRMat >&                            aNewCoeffs ) const;
 
             //------------------------------------------------------------------------------
 

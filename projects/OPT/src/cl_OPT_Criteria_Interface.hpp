@@ -24,6 +24,10 @@ namespace moris::opt
       protected:
         bool mInitializeOptimizationRestart = false;
 
+        /// set by the optimizer for an evaluation whose design must not be redistanced in place (an inner GCMMA trial
+        /// in reinit_on_accept_only mode); read on rank 0 by the workflow and broadcast there
+        bool mReinitSuppressed = false;
+
         uint mReinitializeIterInterval = MORIS_UINT_MAX;
         uint mReinitializeIterFirst    = MORIS_UINT_MAX;
 
@@ -90,6 +94,23 @@ namespace moris::opt
         request_restart_optimization()
         {
             mInitializeOptimizationRestart = true;
+        }
+
+        /**
+         * Suppress (or allow) the in-place SDF redistance for the following criteria evaluations. Used by the native
+         * MMA in reinit_on_accept_only mode: inner conservatism trials are evaluated at the raw subproblem solution,
+         * only the accepted iterate is redistanced. Virtual so that an interface manager can forward it.
+         */
+        virtual void
+        set_reinit_suppressed( bool aSuppressed )
+        {
+            mReinitSuppressed = aSuppressed;
+        }
+
+        bool
+        is_reinit_suppressed() const
+        {
+            return mReinitSuppressed;
         }
 
         void

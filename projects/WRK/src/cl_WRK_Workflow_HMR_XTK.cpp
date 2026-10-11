@@ -10,6 +10,7 @@
 
 #include "cl_WRK_Performer_Manager.hpp"
 #include "cl_WRK_Workflow_HMR_XTK.hpp"
+#include "cl_Communication_Tools.hpp"
 #include "cl_HMR.hpp"
 #include "cl_MTK_Mesh_Manager.hpp"
 #include "cl_MTK_Mesh_Checker.hpp"
@@ -445,11 +446,26 @@ namespace moris::wrk
                 bool tRedistance = tEveryStep ? ( tOptIter > 0 && tOptIter % tReinitFreq == 0 ) : tScheduled;
                 bool tDoSmooth   = tEveryStep ? ( tOptIter % tReinitFreq == 0 ) : true;
 
+                // The native MMA in reinit_on_accept_only mode suppresses the in-place redistance for its inner
+                // conservatism trials (they must be evaluated at the design the approximation was built for). The flag is
+                // set on rank 0 only; broadcast it so that every rank takes the same branch.
+                uint tSuppressMsg = 0;
+                if ( tEveryStep )
+                {
+                    tSuppressMsg = this->is_reinit_suppressed() ? 1 : 0;
+                    broadcast( tSuppressMsg );
+                }
+                bool tSuppressed = tSuppressMsg == 1;
+
                 // Skip SDF reinit on restart pass (first iteration after restart)
                 if ( mSkipNextSDFReinit )
                 {
                     MORIS_LOG_INFO( "Skipping SDF reinit on restart pass" );
                     mSkipNextSDFReinit = false;
+                }
+                else if ( tSuppressed && ( tInitAtStart || tRedistance ) )
+                {
+                    MORIS_LOG_INFO( "SDF redistance suppressed for this evaluation (inner GCMMA trial, reinit_on_accept_only)" );
                 }
                 // Trigger SDF reinit: the one-time start-of-run init, every-step redistance, or schedule
                 else if ( ( tInitAtStart || tRedistance ) && !mSDFReinitPending && !mSDFWeanedOff )
@@ -520,6 +536,21 @@ namespace moris::wrk
 
                         if ( tLSAdvIds.size() == tCoeffs.n_rows() && tCoeffs.n_rows() > 0 )
                         {
+                            if ( tReinitPerformer->get_diagnostics() )
+                            {
+                                // psi: the design coefficients this evaluation was called with, gathered from the same slice
+                                Matrix< DDRMat > tOldCoeffs( tCoeffs.n_rows(), 1, 0.0 );
+                                for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
+                                {
+                                    sint tAdvId = tLSAdvIds( iC );
+                                    if ( tAdvId >= 0 && tAdvId < (sint)aNewADVs.size() )
+                                    {
+                                        tOldCoeffs( iC ) = aNewADVs( tAdvId );
+                                    }
+                                }
+                                tReinitPerformer->log_redistance_footprint( mPerformerManager->mGENPerformer, tOldCoeffs, tCoeffs );
+                            }
+
                             uint tWritten = 0;
                             for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
                             {

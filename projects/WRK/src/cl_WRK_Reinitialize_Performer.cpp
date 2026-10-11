@@ -112,6 +112,9 @@ namespace moris::wrk
         // Redistance every iteration in-place (no GCMMA restart); smooth every reinit_freq
         mReinitEveryStep = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_reinit_every_step" );
 
+        // footprint diagnostics of the in-place redistance
+        mDiagnostics = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_reinit_diagnostics" );
+
         mADVFiledName = tMORISParameterList( 2 )( 0 ).get< std::string >( "adv_field" );
         
         // Reinitialization frequency from mapping params
@@ -790,6 +793,173 @@ namespace moris::wrk
 
         MORIS_LOG_INFO( "SDF reinitialization complete: %d nodes, %d interface facets",
                 tNumNodes, tNumFacets );
+    }
+
+    //------------------------------------------------------------------------------
+
+    namespace
+    {
+        /** the ADV field (by label) among GEN's MTK fields; MORIS_ERROR if absent */
+        std::shared_ptr< mtk::Field >
+        find_adv_field( Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer, const std::string& aLabel )
+        {
+            Vector< std::shared_ptr< mtk::Field > > tFields;
+            tFields.append( aGENPerformer( 0 )->get_mtk_fields() );
+            for ( uint iField = 0; iField < tFields.size(); iField++ )
+            {
+                if ( tFields( iField )->get_label() == aLabel )
+                {
+                    return tFields( iField );
+                }
+            }
+            MORIS_ERROR( false, "Reinitialize_Performer: no GEN field is labelled '%s'.", aLabel.c_str() );
+            return nullptr;
+        }
+    }    // namespace
+
+    //------------------------------------------------------------------------------
+
+    Vector< Vector< moris_index > >
+    Reinitialize_Performer::get_cell_coefficients( Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer ) const
+    {
+        std::shared_ptr< mtk::Field > tField     = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair  = tField->get_mesh_pair();
+        mtk::Interpolation_Mesh*      tMesh      = tMeshPair.get_interpolation_mesh();
+        uint                          tDiscIndex = (uint)tField->get_discretization_mesh_index();
+
+        uint                            tNumCells = tMesh->get_num_elems();
+        Vector< Vector< moris_index > > tCellCoefficients( tNumCells );
+        for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+        {
+            Matrix< IndexMat >      tNodes = tMesh->get_nodes_connected_to_element_loc_inds( (moris_index)iCell );
+            std::set< moris_index > tUnion;
+            for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
+            {
+                Matrix< IndexMat > tCoefficients = tMesh->get_coefficient_indices_of_node( (uint)tNodes( iNode ), tDiscIndex );
+                for ( uint iC = 0; iC < tCoefficients.numel(); iC++ )
+                {
+                    tUnion.insert( tCoefficients( iC ) );
+                }
+            }
+            tCellCoefficients( iCell ).reserve( tUnion.size() );
+            for ( moris_index tIndex : tUnion )
+            {
+                tCellCoefficients( iCell ).push_back( tIndex );
+            }
+        }
+        return tCellCoefficients;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat >
+    Reinitialize_Performer::get_nodal_values(
+            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+            const Matrix< DDRMat >&                            aCoeffs ) const
+    {
+        std::shared_ptr< mtk::Field > tField     = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair  = tField->get_mesh_pair();
+        mtk::Interpolation_Mesh*      tMesh      = tMeshPair.get_interpolation_mesh();
+        uint                          tDiscIndex = (uint)tField->get_discretization_mesh_index();
+
+        uint             tNumNodes = tMesh->get_num_nodes();
+        Matrix< DDRMat > tValues( tNumNodes, 1, 0.0 );
+        for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+        {
+            const Matrix< DDRMat >& tT            = tMesh->get_t_matrix_of_node_loc_ind( iNode, tDiscIndex );
+            Matrix< IndexMat >      tCoefficients = tMesh->get_coefficient_indices_of_node( iNode, tDiscIndex );
+            real                    tValue        = 0.0;
+            for ( uint iC = 0; iC < tCoefficients.numel(); iC++ )
+            {
+                tValue += tT( iC ) * aCoeffs( tCoefficients( iC ) );
+            }
+            tValues( iNode ) = tValue;
+        }
+        return tValues;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Reinitialize_Performer::log_redistance_footprint(
+            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+            const Matrix< DDRMat >&                            aOldCoeffs,
+            const Matrix< DDRMat >&                            aNewCoeffs ) const
+    {
+        std::shared_ptr< mtk::Field > tField    = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair = tField->get_mesh_pair();
+        mtk::Interpolation_Mesh*      tMesh     = tMeshPair.get_interpolation_mesh();
+
+        Vector< Vector< moris_index > > tCellCoefficients = this->get_cell_coefficients( aGENPerformer );
+        Matrix< DDRMat >                tOldNodal         = this->get_nodal_values( aGENPerformer, aOldCoeffs );
+        Matrix< DDRMat >                tNewNodal         = this->get_nodal_values( aGENPerformer, aNewCoeffs );
+
+        uint tNumCells = tCellCoefficients.size();
+        uint tNumNodes = tOldNodal.numel();
+
+        std::vector< bool > tBandCoefficient( aOldCoeffs.numel(), false );
+        std::vector< bool > tBandNode( tNumNodes, false );
+        uint                tCutOld = 0, tCutNew = 0, tCutChanged = 0;
+        for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+        {
+            Matrix< IndexMat > tNodes = tMesh->get_nodes_connected_to_element_loc_inds( (moris_index)iCell );
+            uint               tPosOld = 0, tPosNew = 0;
+            for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
+            {
+                tPosOld += tOldNodal( tNodes( iNode ) ) >= 0.0 ? 1 : 0;
+                tPosNew += tNewNodal( tNodes( iNode ) ) >= 0.0 ? 1 : 0;
+            }
+            bool tIsCutOld = tPosOld > 0 && tPosOld < tNodes.numel();
+            bool tIsCutNew = tPosNew > 0 && tPosNew < tNodes.numel();
+            tCutOld += tIsCutOld ? 1 : 0;
+            tCutNew += tIsCutNew ? 1 : 0;
+            tCutChanged += tIsCutOld != tIsCutNew ? 1 : 0;
+            if ( tIsCutOld )
+            {
+                for ( uint iC = 0; iC < tCellCoefficients( iCell ).size(); iC++ )
+                {
+                    tBandCoefficient[ tCellCoefficients( iCell )( iC ) ] = true;
+                }
+                for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
+                {
+                    tBandNode[ tNodes( iNode ) ] = true;
+                }
+            }
+        }
+
+        real tMaxBand = 0.0, tMaxFar = 0.0;
+        uint tNumBand = 0;
+        for ( uint iC = 0; iC < aOldCoeffs.numel(); iC++ )
+        {
+            real tDelta = std::abs( aNewCoeffs( iC ) - aOldCoeffs( iC ) );
+            if ( tBandCoefficient[ iC ] )
+            {
+                tNumBand++;
+                tMaxBand = std::max( tMaxBand, tDelta );
+            }
+            else
+            {
+                tMaxFar = std::max( tMaxFar, tDelta );
+            }
+        }
+
+        uint tFlips = 0, tFlipsBand = 0;
+        real tMaxNodalBand = 0.0;
+        for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+        {
+            bool tFlip = ( tOldNodal( iNode ) >= 0.0 ) != ( tNewNodal( iNode ) >= 0.0 );
+            tFlips += tFlip ? 1 : 0;
+            if ( tBandNode[ iNode ] )
+            {
+                tFlipsBand += tFlip ? 1 : 0;
+                tMaxNodalBand = std::max( tMaxNodalBand, std::abs( tNewNodal( iNode ) - tOldNodal( iNode ) ) );
+            }
+        }
+
+        MORIS_LOG_INFO( "SDF-FOOTPRINT coeffs=%u band_coeffs=%u max|dc|_band=%.6e max|dc|_far=%.6e max|dphi_node|_band=%.6e "
+                        "nodes=%u sign_flips=%u (band %u) cut_cells psi=%u phi=%u changed=%u",
+                (uint)aOldCoeffs.numel(), tNumBand, tMaxBand, tMaxFar, tMaxNodalBand,
+                tNumNodes, tFlips, tFlipsBand, tCutOld, tCutNew, tCutChanged );
     }
 
     //------------------------------------------------------------------------------
