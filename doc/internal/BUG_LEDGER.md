@@ -45,6 +45,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
 | MB-027 | open (fix in progress by another session, jobs 3200-3299) | WRK/OPT | In-place SDF redistance R is not idempotent (each application raises the KS stress aggregate ~0.6 % and the volume ~0.075 %) and is applied to every inner-loop trial, so GCMMA conservativeness compares f(R(ψ)) with an approximation of f(ψ): trials converge to f(R(x_k)) > approximation, the inner loop hits its cap, and the accepted R(x_k) ratchets the constraint up | X18 v8 KS mimic h1 (D-056), perf/x18v8 |
 | MB-028 | merged (#26, 33be1e5c6; was cited as MB-016) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
 | MB-029 | fix-written (feature/gen-additive @ee83435b7; was cited as MB-017) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
+| MB-030 | open | GEN | Nested intersection sensitivities use the field gradient projected onto an intersection parent's own edge; wrong once that parent moves off its edge (nesting level ≥ 3): 38–64 % relative error vs FD | MB-022 FD regression test 2026-10-11 |
 
 ---
 
@@ -677,7 +678,7 @@ Missing features belong in a study's capability list, not here (exception: a mis
   +            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_second_parent() );
                tSecondParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
   ```
-- **Regression test:** `GEN-test.exe "[linear intersection]"` (`ut_GEN_Intersection_Level_Set.cpp`) checks D(A) = A·D(I) for every derived node with the non-commuting A = [[1, 2], [-3, 0.5]]; on `a3b602862` it fails for nodes 21 and 22 (2 of 510 assertions), with the fix it passes. The three-level fixed-branch coordinate FD test proposed by the audit is not written yet.
+- **Regression test:** `GEN-test.exe "[linear intersection]"` (`ut_GEN_Intersection_Level_Set.cpp`) checks D(A) = A·D(I) for every derived node with the non-commuting A = [[1, 2], [-3, 0.5]]; on `a3b602862` it fails for nodes 21 and 22 (2 of 510 assertions), with the fix it passes. The three-level fixed-branch coordinate FD test is `GEN-test.exe "[MB-022]"` (`Nested Linear Intersections Finite Difference`, PR #32, branch `test/mb022-three-level-fd`): P1/P2 → Q → R on ADV-driven lines vs central FD of the coordinates; max rel. error ≤ 1.7e-10 with the fix, 0.30 at R (9 failed assertions) with the fix reverted. Logs: `runs/moris_bugs/MB-022/fd_test/`. Writing it exposed MB-030.
 - **Workaround / scope:** Until the fix is in the production build: The manual recipe cuts ADV-free pads first and the moving geometry afterward, avoiding the affected moving-parent recursion. Restrict nesting until fixed; this audit does not establish a failing recipe gradient.
 
 
@@ -819,3 +820,21 @@ Missing features belong in a study's capability list, not here (exception: a mis
   ```
 - **Regression test:** none yet (the fix session owns it).
 - **Workaround:** deck switch `XIGA_SDF_FREQ=0` (Lbracket_Stress_Xiga.cpp, 2026-10-11) turns the in-place redistance off and keeps the recipe's phases and native MMA; `XIGA_SDF_FREQ=k` redistances every k-th evaluation only.
+
+## MB-030 · GEN: nested-intersection d(xi)/d(parent) uses the edge-projected field gradient
+- **Status:** open (found 2026-10-11 while writing the MB-022 FD regression).
+- **Symptom:** Silent. Analytic intersection-coordinate sensitivities (`Node_Manager::append_dcoordinate_dadv_from_derived_node`) of a level ≥ 3 intersection node disagree with finite differences of its coordinates in the columns of ADVs that move a parent off its own parent edge: max relative error 0.38 (level 3) and 0.64 (level 4) in the reproducer. Levels 1 and 2 are exact. Example: node R, d R_x/d c0x analytic 0.486 vs FD 0.131.
+- **Reproducer:** `GEN-test.exe "[MB-030]"` (hidden case `Nested Linear Intersections Finite Difference Off-Edge Parent`, `projects/GEN/test/ut_GEN_Intersection_Level_Set.cpp`, PR #32): four ADV-driven LINE geometries on one QUAD4, chain P1/P2 (line 0) → Q (line 1 on P1→P2, Q lies on line 0) → R (line 2 on Q→corner) → T (line 3 on P1→R).
+- **Evidence:** `runs/moris_bugs/MB-030/`: `mb030_offedge_develop.log` (Catch output on develop de7990fc2 + this test, 26 failed assertions), `projected_gradient_repro.py/.txt` (independent numpy chain: with the edge-projected gradient it reproduces MORIS's analytic 0.4860, -0.0582 exactly; with the full gradient it reproduces the FD 0.1307, -0.4357).
+- **Root cause:** `projects/GEN/src/ADV/cl_GEN_Level_Set_Geometry.cpp:598-630`, `get_dfield_dcoordinates( aParentNode, ... )`, called from `Intersection_Node_Linear::get_dxi_dcoordinate_{first,second}_parent`. For an intersection-node parent it returns Δφ·v/|v|² over the parent's own locator edge v, i.e. the projection of ∇φ onto v. The chain term d(xi)/d(X_parent)·dX_parent/dADV is then exact only when dX_parent ∥ v. A level-2 node's parents sit on fixed background edges, so this holds there (existing tests pass); from level 3 a parent's edge itself moves (e.g. Q on a moving interface), and the component of ∇φ normal to v is dropped.
+- **Fix:** not written. For analytic fields the full gradient is available (`Field_Analytic::get_dfield_dcoordinates`); for discrete/interpolated fields the consistent derivative of the derived-node value has to be defined (needs a theory decision on how φ at a derived node is represented).
+- **Code** (open, `cl_GEN_Level_Set_Geometry.cpp:625-629` on de7990fc2):
+  ```cpp
+  // Sensitivities: dPhi/dx_i  = delta(Phi) / L_i where L_i = PaerentVectorLenth^2 / (ParentVector * e_i)
+  for ( uint tCoordinateIndex = 0; tCoordinateIndex < tNumDim; tCoordinateIndex++ )
+  {
+      aSensitivities( tCoordinateIndex ) = tDeltaPhi * tParentVector( tCoordinateIndex ) / ( tParentLengthSquared + MORIS_REAL_EPS );
+  }
+  ```
+- **Regression test:** `GEN-test.exe "[MB-030]"`, hidden (`[.]`) until fixed; remove the tag with the fix.
+- **Workaround / scope:** Affects only intersections on intersections on intersections (≥ 3 levels of ADV-dependent nesting) whose intermediate parent moves transversally to its edge. Single-geometry XTK cuts and two-level nesting are unaffected.
