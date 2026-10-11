@@ -891,6 +891,20 @@ namespace moris::wrk
             return;    // taper not configured
         }
 
+        // an empty accepted vector: accepted at the inner-loop cap, not a convergence sample
+        if ( aAccepted.size() == 0 )
+        {
+            bool tWeanedCapped = mWeanMonitor->update_capped();
+            MORIS_LOG_INFO( "SDF taper: accepted iterate %u at the inner-loop cap (not counted as a small change)%s",
+                    mWeanMonitor->mAccepted, tWeanedCapped ? " -> weaned off" : "" );
+            if ( tWeanedCapped )
+            {
+                MORIS_LOG_INFO( "SDF in-place redistance weaned off: %s; no further redistances", mWeanMonitor->mReason.c_str() );
+                mSDFWeanedOff = true;
+            }
+            return;
+        }
+
         real tNumer = 0.0;
         real tDenom = 0.0;
         for ( uint iADV = 0; iADV < aPrevious.size() && iADV < aAccepted.size(); iADV++ )

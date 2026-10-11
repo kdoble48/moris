@@ -1238,15 +1238,22 @@ namespace moris::opt
                     nfunc - tNumFuncAtStart );
 
             // SDF taper: tell the workflow about the accepted iterate (its step from the committed design, before any
-            // redistance) so that it can wean the in-place redistance off
+            // redistance) so that it can wean the in-place redistance off. An iterate accepted at the inner-loop cap is
+            // reported with an EMPTY accepted vector: its step was shrunk by failing conservatism tests, not by
+            // convergence, and must not count as a small change (MB-027: with the plain redistance every capped step is
+            // ~1e-7 relative, which weaned the redistance off at the third iteration)
             if ( mReinitHook )
             {
+                const bool     tCapped = mMaxInnerIter > 0 && !tConservative;
                 Vector< real > tPrevious( mNumVar );
-                Vector< real > tAccepted( mNumVar );
+                Vector< real > tAccepted( tCapped ? 0 : mNumVar );
                 for ( int i = 0; i < mNumVar; ++i )
                 {
                     tPrevious( i ) = xval[ i ];
-                    tAccepted( i ) = xmma[ i ];
+                    if ( !tCapped )
+                    {
+                        tAccepted( i ) = xmma[ i ];
+                    }
                 }
                 mProblem->notify_accepted_iterate( tPrevious, tAccepted );
             }

@@ -114,7 +114,8 @@ namespace moris
             /**
              * SDF taper (in-place every-step mode): feeds the relative step ||aAccepted - aPrevious|| / ||aPrevious|| of
              * an accepted optimizer iterate to the wean monitor; weans the redistance off for the rest of the run once it
-             * fires. Rank 0 (the optimizer's rank); perform() broadcasts the result.
+             * fires. Rank 0 (the optimizer's rank); perform() broadcasts the result. An empty aAccepted marks an iterate
+             * accepted at the inner-loop cap (not a convergence sample: resets the run of small changes).
              */
             void notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted ) override;
 

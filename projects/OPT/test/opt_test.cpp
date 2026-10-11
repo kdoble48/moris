@@ -1202,11 +1202,15 @@ namespace moris::opt
         void
         notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted ) override
         {
+            // an empty aAccepted marks an iterate accepted at the inner-loop cap
             std::vector< real > tPrev( aPrevious.size() ), tAcc( aAccepted.size() );
             for ( uint iADV = 0; iADV < aPrevious.size(); iADV++ )
             {
                 tPrev[ iADV ] = aPrevious( iADV );
-                tAcc[ iADV ]  = aAccepted( iADV );
+            }
+            for ( uint iADV = 0; iADV < aAccepted.size(); iADV++ )
+            {
+                tAcc[ iADV ] = aAccepted( iADV );
             }
             mNotifiedPrevious.push_back( tPrev );
             mNotifiedAccepted.push_back( tAcc );

@@ -16,6 +16,7 @@
  */
 
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <utility>
 
@@ -232,8 +233,8 @@ namespace moris::wrk
                 preserve_interface_test::Result tPreserved = preserve_interface_test::run( tOrder, true, 8 );
                 preserve_interface_test::Result tPlain     = preserve_interface_test::run( tOrder, false, 8 );
 
-                MORIS_LOG_INFO( "order %u: %u cut cells, %u edge points; preserved: %u of %u coefficients frozen, far-field change %.3e; "
-                                "plain: max point move %.3e",
+                std::printf( "[MB-027] order %u: %u cut cells, %u edge points; preserved: %u of %u coefficients frozen, far-field change %.3e; "
+                             "plain: max point move %.3e\n",
                         tOrder, tPreserved.mCutCells, tPreserved.mPoints, tPreserved.mFrozen, tPreserved.mNumCoeffs,
                         tPreserved.mMaxFarChange, tPlain.mMaxPointMove );
 
@@ -298,5 +299,32 @@ namespace moris::wrk
         CHECK_FALSE( tMonitor.update( 1.0 ) );
         CHECK( tMonitor.update( 1.0 ) );
         CHECK( tMonitor.mReason.find( "sdf_reinit_stop_iter" ) != std::string::npos );
+    }
+}    // namespace moris::wrk
+
+namespace moris::wrk
+{
+    TEST_CASE( "SDF taper: iterates accepted at the inner-loop cap are not convergence samples", "[WRK][sdf_taper]" )
+    {
+        SDF_Wean_Monitor tMonitor;
+        tMonitor.mTol      = 1.0e-3;
+        tMonitor.mPatience = 3;
+        tMonitor.mStopIter = 10;
+
+        // small, small, capped (resets), small, small: not weaned
+        CHECK_FALSE( tMonitor.update( 1.0e-7 ) );
+        CHECK_FALSE( tMonitor.update( 1.0e-7 ) );
+        CHECK_FALSE( tMonitor.update_capped() );
+        CHECK( tMonitor.mBelow == 0 );
+        CHECK_FALSE( tMonitor.update( 1.0e-7 ) );
+        CHECK_FALSE( tMonitor.update( 1.0e-7 ) );
+
+        // capped iterates still count toward the hard stop
+        for ( uint iIter = 0; iIter < 4; iIter++ )
+        {
+            CHECK_FALSE( tMonitor.update_capped() );
+        }
+        CHECK( tMonitor.update_capped() );
+        CHECK( tMonitor.mAccepted == 10 );
     }
 }    // namespace moris::wrk

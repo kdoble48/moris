@@ -73,6 +73,28 @@ namespace moris
             bool        mWeaned    = false;
             std::string mReason;
 
+            /**
+             * record one accepted iterate that is NOT a convergence sample (accepted at the inner-loop cap, where the step
+             * was shrunk by a failing conservatism test, not by convergence): counts toward the stop iteration, resets the
+             * run of small changes. Returns true once weaned off (sticky).
+             */
+            bool
+            update_capped()
+            {
+                if ( mWeaned )
+                {
+                    return true;
+                }
+                mBelow = 0;
+                mAccepted++;
+                if ( mStopIter > 0 && mAccepted >= mStopIter )
+                {
+                    mWeaned = true;
+                    mReason = "sdf_reinit_stop_iter reached (" + std::to_string( mAccepted ) + " accepted iterates)";
+                }
+                return mWeaned;
+            }
+
             /** record one accepted iterate; returns true once weaned off (sticky) */
             bool
             update( real aRelativeChange )
