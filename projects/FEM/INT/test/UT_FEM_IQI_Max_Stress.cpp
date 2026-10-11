@@ -139,8 +139,10 @@ TEST_CASE( "IQI_Max_Stress P-norm and KS", "[moris],[fem],[IQI_Max_Stress],[KS]"
                 tCM->set_property( tPropEMod, "YoungsModulus" );
                 tCM->set_property( tPropNu, "PoissonRatio" );
                 tCM->set_local_properties();
-                tCM->set_space_dim( tSpaceDim );
+                // model type before space dim: set_space_dim sizes the strain/stress storage for the stored plane type
+                // (cf. cl_FEM_Model_Initializer_Phasebased.cpp:202, "must come before set_space_dim")
                 tCM->set_model_type( tModelTypes( iModel ) );
+                tCM->set_space_dim( tSpaceDim );
 
                 // set
                 MSI::Equation_Set* tSet = new fem::Set();
