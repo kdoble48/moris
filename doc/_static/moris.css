@@ -64,6 +64,11 @@ article table.docutils td {
     overflow-wrap: anywhere;
     font-size: 0.9em;
 }
+/* first column (labels, example titles): wrap only between words */
+article table.docutils td:first-child {
+    overflow-wrap: normal;
+    min-width: 7em;
+}
 
 /* Wide reference tables scroll instead of overflowing on narrow screens. */
 article table.docutils {

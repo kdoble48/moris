@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 from sphinx.util import logging
+from sphinx.util.docutils import SphinxDirective
 
 LOGGER = logging.getLogger(__name__)
 
@@ -154,8 +155,26 @@ def _github_url(app, relative_path, directory=False):
     return f"{repository}/{kind}/{branch}/{relative_path}" if repository else None
 
 
+def _built_directories(exa_dir):
+    """Directories reachable from projects/EXA/CMakeLists.txt through uncommented add_subdirectory()."""
+    reached, pending = set(), [exa_dir]
+    while pending:
+        directory = pending.pop()
+        if directory in reached:
+            continue
+        reached.add(directory)
+        cmake_file = directory / "CMakeLists.txt"
+        if not cmake_file.exists():
+            continue
+        text = _strip_cmake_comments(cmake_file.read_text(errors="replace"))
+        for name in re.findall(r"add_subdirectory\s*\(\s*([^\s)]+)", text):
+            pending.append((directory / name).resolve())
+    return reached
+
+
 def collect_examples(source_dir):
     exa_dir = source_dir / "projects" / "EXA"
+    built = _built_directories(exa_dir.resolve())
     examples = []
     for cmake_file in sorted(exa_dir.rglob("CMakeLists.txt")):
         calls = _parse_add_example(cmake_file.read_text(errors="replace"))
@@ -176,6 +195,10 @@ def collect_examples(source_dir):
                 "title": title if len(calls) == 1 and title else directory.name.replace("_", " "),
                 "directory": directory.relative_to(source_dir).as_posix(),
                 "decks": [deck.relative_to(source_dir).as_posix() for deck in decks if deck.exists()],
+                "leaf": directory.name,
+                "built": directory.resolve() in built,
+                "test_base": test_base,
+                "no_procs_suffix": "NO_PROCS_SUFFIX" in call,
                 "procs": call.get("PROCS", []),
                 "cases": call.get("CASES", []),
                 "features": features,
@@ -186,6 +209,39 @@ def collect_examples(source_dir):
 
 def _cell(text):
     return text.replace("|", "\\|")
+
+
+def page_docname(example):
+    """Docname of the example's own page: examples/exa/<category>/<leaf directory>."""
+    return f"examples/exa/{example['category']}/{example['leaf']}"
+
+
+def ctest_names(example):
+    """The ctest names moris_add_example registers for this example."""
+    bases = ([f"{example['test_base']}_{case}" for case in example["cases"]]
+             if example["cases"] else [example["test_base"]])
+    if example["no_procs_suffix"]:
+        return bases
+    return [f"{base}-{procs}-procs" for base in bases for procs in example["procs"]]
+
+
+def summary_markdown(app, example):
+    """The generated facts block shown at the top of each example page."""
+    tags = " ".join(f'<span class="exa-tag">{tag}</span>' for tag in example["tags"])
+    decks = ", ".join(f"[{Path(deck).name}]({_github_url(app, deck)})" for deck in example["decks"])
+    tests = ", ".join(f"`{name}`" for name in ctest_names(example))
+    if not example["built"]:
+        tests = ("**not built** — its directory is commented out of the parent `CMakeLists.txt`, "
+                 f"so these tests are not registered: {tests}")
+    source = _github_url(app, example["directory"], directory=True)
+    rows = [
+        ("Source", f"[`{example['directory']}`]({source})"),
+        ("Decks", decks or "—"),
+        ("ctest", tests or "—"),
+        ("Detected features", tags or "—"),
+    ]
+    lines = ["| | |", "|---|---|"] + [f"| **{key}** | {value} |" for key, value in rows]
+    return "\n".join(lines)
 
 
 def render_markdown(app, examples):
@@ -203,7 +259,12 @@ def render_markdown(app, examples):
                   "| Example | Features | Decks | Tests |", "|---|---|---|---|"]
         for example in sorted(members, key=lambda item: (item["group"], item["title"].lower())):
             directory_url = _github_url(app, example["directory"], directory=True)
-            title = f"[{_cell(example['title'])}]({directory_url})" if directory_url else _cell(example["title"])
+            if (Path(app.srcdir) / f"{page_docname(example)}.md").exists():
+                title = f"{{doc}}`{_cell(example['title'])} </{page_docname(example)}>`"
+            elif directory_url:
+                title = f"[{_cell(example['title'])}]({directory_url})"
+            else:
+                title = _cell(example["title"])
             if example["group"]:
                 title += f"<br><small>{example['group']}</small>"
             features = " ".join(f'<span class="exa-tag">{tag}</span>' for tag in example["tags"])
@@ -214,6 +275,8 @@ def render_markdown(app, examples):
             tests = ", ".join(f"{procs} proc{'s' if procs != '1' else ''}" for procs in example["procs"])
             if example["cases"]:
                 tests += f"<br>cases {', '.join(example['cases'])}"
+            if not example["built"]:
+                tests = "not built"
             lines.append(f"| {title} | {features or '—'} | {decks or '—'} | {tests or '—'} |")
         lines.append("")
     return "\n".join(lines)
@@ -236,7 +299,27 @@ def write_catalog(app):
         target.write_text(text)
 
 
+class ExaSummaryDirective(SphinxDirective):
+    """```{exa-summary} projects/EXA/<category>/.../<Example>``` — generated facts table."""
+
+    required_arguments = 1
+    has_content = False
+
+    def run(self):
+        source_dir = Path(self.config.moris_source_dir)
+        directory = self.arguments[0].strip().rstrip("/")
+        matches = [example for example in collect_examples(source_dir)
+                   if example["directory"] == directory]
+        if not matches:
+            LOGGER.warning("exa-summary: no moris_add_example registered in %s", directory,
+                           location=self.get_location())
+            return []
+        self.env.note_dependency(str(source_dir / directory / "CMakeLists.txt"))
+        return self.parse_text_to_nodes(summary_markdown(self.env.app, matches[0]))
+
+
 def setup(app):
     app.add_config_value("moris_source_dir", "", "env")
     app.connect("builder-inited", write_catalog)
+    app.add_directive("exa-summary", ExaSummaryDirective)
     return {"parallel_read_safe": True, "parallel_write_safe": True}

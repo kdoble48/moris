@@ -45,6 +45,25 @@ Python requirements and runs `make -C doc html`:
    `[text](../user-guide/interlinks.md#heading-anchor)` (anchors are generated for `#` to
    `###` headings).
 
+### Example pages
+
+Every example under `projects/EXA` has a page at `doc/examples/exa/<category>/<Example>.md`, where
+`<category>` is the first directory level (`optimization`, `structure`, `thermal`, `fluid`,
+`mesh_generation`) and `<Example>` the example's directory name. A page opens with a summary
+paragraph and the generated facts block,
+
+````md
+```{exa-summary} projects/EXA/structure/linear/Plane_Strain
+```
+````
+
+which lists the decks, the ctest names, and the features detected in the deck source. It
+continues with **Problem**, **Setup in MORIS** (one paragraph per configured module), **What the
+test checks**, and **Run it**; `doc/examples/exa/optimization/LevelSet_Boxbeam_NewIO.md` is the
+reference. Every value on the page comes from the deck, its `example_test_case.cpp`, or its
+`CMakeLists.txt`. A new example without a page still appears in the catalog, linked to its
+source directory.
+
 Design records — RFCs, reviews, plans — go in `doc/internal/` and are listed on the
 {doc}`../design/index` page.
 

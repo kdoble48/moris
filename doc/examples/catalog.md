@@ -6,3 +6,13 @@ starting point for a new problem is the example closest to it (see
 
 ```{include} _generated/exa_catalog.md
 ```
+
+```{toctree}
+:hidden:
+
+exa/optimization/index
+exa/structure/index
+exa/thermal/index
+exa/fluid/index
+exa/mesh_generation/index
+```
