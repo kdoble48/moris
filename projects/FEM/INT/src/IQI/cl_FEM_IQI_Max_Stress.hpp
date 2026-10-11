@@ -41,6 +41,7 @@ namespace moris::fem
             REFERENCE_VALUE,
             EXPONENT,
             SHIFT,
+            KS_PARAMETER,
             MAX_ENUM
         };
 
@@ -93,13 +94,10 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
-         * compute the derivative of the quantity of interest wrt dof types
+         * compute the derivative of the quantity of interest wrt dof types (von Mises stress only)
          * @param[ in ] aWStar weight associated to the evaluation point
          */
-        void compute_dQIdu( real aWStar ) override
-        {
-            MORIS_ERROR( false, "IQI_Max_Stress::compute_dQIdu - not implemented." );
-        }
+        void compute_dQIdu( real aWStar ) override;
 
         //------------------------------------------------------------------------------
         /**
@@ -121,6 +119,41 @@ namespace moris::fem
          * @param[ out ] tStressVector vector with 6 entries containing the normal and shear stress values
          */
         Matrix< DDRMat > get_stress_vector();
+
+        //------------------------------------------------------------------------------
+        /**
+         * evaluate the selected stress measure (von Mises, principal, normal or shear)
+         */
+        real eval_stress_value();
+
+        //------------------------------------------------------------------------------
+        /**
+         * read the aggregation properties: ReferenceValue (required), Exponent (required for the P-norm form),
+         * Shift (default 1.0) and KSParameter (optional; > 0 selects the Kreisselmeier-Steinhauser form)
+         */
+        void get_aggregation_parameters( real& aRefValue, real& aExponent, real& aShift, real& aKSParameter );
+
+        //------------------------------------------------------------------------------
+        /**
+         * pointwise integrand of the aggregate:
+         *   P-norm (default):        ( sigma / sigma_ref - shift )^p
+         *   KS (KSParameter = rho):  exp( rho ( sigma / sigma_ref - shift ) )
+         * The global P-norm / KS value is assembled from the integral in the input deck.
+         */
+        real eval_integrand( real aStressValue );
+
+        //------------------------------------------------------------------------------
+        /**
+         * derivative of the integrand wrt the stress measure
+         */
+        real eval_dintegrand_dstress( real aStressValue );
+
+        //------------------------------------------------------------------------------
+        /**
+         * derivative of the von Mises stress wrt the CM flux components (CM flux ordering)
+         * @param[ in ] aVonMises the von Mises stress at the evaluation point
+         */
+        Matrix< DDRMat > eval_dVonMisesdFlux( real aVonMises );
 
         //------------------------------------------------------------------------------
         /**
