@@ -25,7 +25,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
 DOC = HERE.parent
@@ -144,7 +144,44 @@ def collect_manifest(out_dir, commit, build_label) -> dict:
 
 
 def listed_files(manifest) -> list[str]:
-    return sorted({name for v in manifest["views"] for name in (v["png"], v["thumb"], v["scene"])})
+    names = set()
+    for v in manifest["views"]:
+        names.update((v["png"], v["thumb"], v["scene"]))
+        if v.get("animation"):
+            names.add(v["animation"]["file"])
+    return sorted(names)
+
+
+def make_animation(frame_paths, dst, labels=None, width=960, frame_ms=250, hold_ms=1500, margin=0.04,
+                   threshold=8) -> None:
+    """Animated WebP from PNG frames, cropped to the union of their non-white content; ``labels`` are
+    stamped in the top-left corner of each frame (above the content: the crop leaves a label band)."""
+    frames = [Image.open(p).convert("RGB") for p in frame_paths]
+    box = None
+    for im in frames:
+        diff = ImageChops.difference(im, Image.new("RGB", im.size, (255, 255, 255))).convert("L")
+        b = diff.point(lambda v: 255 if v > threshold else 0).getbbox()
+        if b:
+            box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+    box = box or (0, 0, *frames[0].size)
+    pad_x, pad_y = round((box[2] - box[0]) * margin), round((box[3] - box[1]) * margin)
+    box = (max(box[0] - pad_x, 0), max(box[1] - pad_y, 0),
+           min(box[2] + pad_x, frames[0].width), min(box[3] + pad_y, frames[0].height))
+    scale = min(1.0, width / (box[2] - box[0]))
+    size = (round((box[2] - box[0]) * scale), round((box[3] - box[1]) * scale))
+    frames = [im.crop(box).resize(size, Image.LANCZOS) for im in frames]
+    if labels:
+        band = 34
+        font = ImageFont.load_default(size=22)
+        stamped = []
+        for im, text in zip(frames, labels):
+            canvas = Image.new("RGB", (im.width, im.height + band), (255, 255, 255))
+            canvas.paste(im, (0, band))
+            ImageDraw.Draw(canvas).text((6, 5), text, fill=(40, 40, 40), font=font)
+            stamped.append(canvas)
+        frames = stamped
+    durations = [frame_ms] * (len(frames) - 1) + [hold_ms]
+    frames[0].save(dst, save_all=True, append_images=frames[1:], duration=durations, loop=0, quality=80, method=4)
 
 
 def pack(out_dir, manifest, zip_path) -> list[str]:
@@ -225,6 +262,9 @@ def main(argv=None) -> int:
     manifest = collect_manifest(out, _git_commit(ROOT), build_label)
     for v in manifest["views"]:
         crop_thumbnail(out / v["thumb_raw"], out / v["thumb"])
+        if v.get("animation"):
+            make_animation([out / "frames" / f for f in v["animation"]["frames"]], out / v["animation"]["file"],
+                           v["animation"].get("labels"))
         validate_scene(out / v["scene"])
         size = (out / v["scene"]).stat().st_size
         if size > SCENE_WARN_BYTES:

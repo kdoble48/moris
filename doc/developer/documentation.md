@@ -86,9 +86,9 @@ python3 doc/gallery/build_gallery.py --build build_opt --out $MORIS_RUNS_DIR/doc
 | File | Role |
 |---|---|
 | `doc/gallery/gallery_select.py` | picks the file and field per example: a VIS result field, else the XTK integration mesh by phase, else a GEN field, else the bare mesh |
-| `doc/gallery/export_scenes.py` | pvpython: renders the choice and writes `<id>.png`, `<id>-thumb-raw.png`, `<id>.vtksz`, `<id>.json` |
+| `doc/gallery/export_scenes.py` | pvpython: renders the choice and writes `<id>.png`, `<id>-thumb-raw.png`, `<id>.vtksz`, `<id>.json`; for a series of three or more steps (an `.e-s.NNNN` optimization series, or a transient run) also one frame per step, up to 60, under one color range |
 | `doc/gallery/scene_export.py` | serializes a render view with trame-vtk (partitioned-dataset and categorical-color workarounds) |
-| `doc/gallery/build_gallery.py` | one pvpython process per example, thumbnails, scene validation, `manifest.json`, zip, upload |
+| `doc/gallery/build_gallery.py` | one pvpython process per example, thumbnails, the animated WebP from the frames, scene validation, `manifest.json`, zip, upload |
 | `doc/gallery/overrides.json` | optional per-example choices: `{"<Example>": {"file": …, "array": …, "skip": true}}` |
 | `doc/_ext/moris_gallery.py` | Sphinx: scenes on the example pages, the gallery cards, `viewer.html` |
 

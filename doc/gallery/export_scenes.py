@@ -35,7 +35,8 @@ PHASE_COLORS = [                 # one color per phase index; phase 0 light gray
 KIND_CAPTION = {
     "result": "Solution field {label} from the VIS output",
     "gen": "Geometry field {label} from the GEN output",
-    "xtk": "XTK integration mesh, colored by element block (phase)",
+    "xtk": "XTK integration mesh, colored by phase: cut cells subdivided into triangles along the interface, "
+           "uncut cells whole",
     "mesh": "Mesh",
 }
 
@@ -166,16 +167,69 @@ def render(example, choice, out):
         rep.EdgeColor = [0.55, 0.55, 0.55]
     if by_block:
         color_blocks(rep, reader, view)
-    elif choice.kind == "mesh":
+    if choice.kind == "xtk":
+        # name the mesh in the image itself: the triangles are the cut, not the background discretization
+        tag = pv.Text(Text="Integration mesh (XTK)")
+        tag_rep = pv.Show(tag, view)
+        tag_rep.WindowLocation = "Upper Left Corner"
+        tag_rep.FontSize = 28
+        tag_rep.Color = [0.15, 0.15, 0.15]
+    elif choice.kind == "mesh" and not by_block:
         rep.DiffuseColor = [0.75, 0.80, 0.86]
         rep.AmbientColor = [0.75, 0.80, 0.86]
-    else:
+    elif choice.kind in ("result", "gen"):
         color_field(rep, source, choice, view)
     set_camera(view, three_d, face_cut=cutaway is not None)
-    step = f"time step {len(times)} of {len(times)}" if len(times) > 1 else None
+    step = None
+    if len(times) > 1:
+        labels, _ = gs.step_labels(choice.path, [], len(times))  # summary: the last step
+        step = labels[-1] if not gs.SERIES.match(os.path.basename(choice.path.replace("\\", "/"))) \
+            else f"last of {len(times)} steps in the .e-s series"
     if cutaway is not None:
         step = (step + ", " if step else "") + f"cut away at y = {cutaway:.4g}"
-    return view, three_d, cells, step, by_block
+    return view, three_d, cells, step, by_block, source, times
+
+
+MIN_FRAMES = 3                   # animate only series with at least this many steps
+sample_indices = gs.sample_indices
+
+
+def export_frames(view, source, choice, times, base, out, all_paths):
+    """One overlay-free PNG per sampled step, fixed camera, one color range spanning all frames.
+
+    Returns ``{"frames", "labels", "unit", "steps", "legend"}`` or None for a series too short to
+    animate; build_gallery.py stamps the labels and assembles the animation."""
+    if len(times) < MIN_FRAMES:
+        return None
+    indices = sample_indices(len(times))
+    name = (choice.label if choice.vector else choice.array) if choice.kind in ("result", "gen") else None
+    legend = None
+    if name:
+        lo, hi = math.inf, -math.inf
+        for i in indices:
+            source.UpdatePipeline(times[i])
+            r = source.PointData[name].GetRange(-1)
+            lo, hi = min(lo, r[0]), max(hi, r[1])
+        lut = pv.GetColorTransferFunction(name)
+        if lo < 0 < hi:
+            bound = max(-lo, hi)
+            lo, hi = -bound, bound
+        lut.RescaleTransferFunction(lo, hi)
+        lut.AutomaticRescaleRangeMode = "Never"
+        legend = se._legend(name, lut)
+    se.hide_overlays(view)
+    step_labels, iterations = gs.step_labels(choice.path, all_paths, len(times))
+    frames_dir = os.path.join(out, "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    files, labels = [], []
+    for k, i in enumerate(indices, start=1):
+        view.ViewTime = times[i]
+        name_k = f"{base}-frame-{k:03d}.png"
+        pv.SaveScreenshot(os.path.join(frames_dir, name_k), view, ImageResolution=SIZE)
+        files.append(name_k)
+        labels.append(step_labels[i])
+    return {"frames": files, "labels": labels, "unit": "iteration" if iterations else "time step",
+            "steps": len(times), "iterations": iterations, "legend": legend}
 
 
 def export_example(example, out):
@@ -186,7 +240,7 @@ def export_example(example, out):
     choice = gs.choose(infos, override)
     if choice is None:
         return None, "no file with geometry"
-    view, three_d, cells, step, by_block = render(example, choice, out)
+    view, three_d, cells, step, by_block, source, times = render(example, choice, out)
     base = example["id"]
     file_name = os.path.basename(choice.path.replace("\\", "/"))
     caption = KIND_CAPTION[choice.kind].format(label=choice.label)
@@ -208,6 +262,11 @@ def export_example(example, out):
     }
     se.hide_overlays(view)
     pv.SaveScreenshot(os.path.join(out, meta["thumb_raw"]), view, ImageResolution=SIZE)
+    # the animation runs after the scene and images are written: its fixed color range changes the LUT
+    if not override.get("no_animation"):
+        animation = export_frames(view, source, choice, times, base, out, example["files"])
+        if animation:
+            meta["animation"] = dict(animation, file=f"{base}-anim.webp")
     pv.Delete(view)
     for proxy in list(pv.GetSources().values()):
         pv.Delete(proxy)

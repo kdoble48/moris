@@ -39,6 +39,22 @@ def test_scene_markdown_paths_and_cache_tag():
     assert "linear-gradient(90deg, #0000ff 0.0%, #ff0000 100.0%)" in md
 
 
+def test_animation_tab_and_xtk_note():
+    anim = {"file": "Laplace_2D-anim.webp", "frames": ["a", "b", "c"], "unit": "iteration", "steps": 21,
+            "iterations": 21, "legend": META["legends"][0]}
+    md = mg.scene_markdown(dict(META, animation=anim), "examples/exa/thermal/Laplace_2D", "v1")
+    assert md.index("{tab-item} Interactive") < md.index("{tab-item} Animation") < md.index("{tab-item} Static")
+    assert 'src="../../../_static/gallery/Laplace_2D-anim.webp?v=v1"' in md
+    assert "3 frames over 21 optimization iterations, one color range across all frames." in md
+    mach = mg.scene_markdown(dict(META, animation=dict(anim, frames=list("abcdef"), steps=6, iterations=2)),
+                             "x/y")
+    assert "6 frames over 2 optimization iterations (3 time steps each)" in mach
+    assert "integration mesh" not in md
+    xtk = mg.scene_markdown(dict(META, kind="xtk", legends=[]), "examples/exa/thermal/Laplace_2D")
+    assert "XTK **integration mesh**, not the background (HMR) mesh" in xtk
+    assert "{tab-item} Animation" not in xtk
+
+
 def test_categorical_legend_collapses_long_lists():
     entries = [{"value": str(i), "label": f"phase {i}", "rgb": [0.5, 0.5, 0.5]} for i in range(13)]
     out = mg.legend_html({"array": "object_id", "kind": "categorical", "entries": entries})

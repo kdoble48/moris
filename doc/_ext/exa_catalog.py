@@ -317,6 +317,8 @@ class ExaSummaryDirective(SphinxDirective):
         self.env.note_dependency(str(source_dir / directory / "CMakeLists.txt"))
         import moris_gallery  # scenes from the gallery manifest, when one was downloaded or built
 
+        # a new gallery build (manifest.json) must re-render every example page, not only edited ones
+        self.env.note_dependency(str(Path(self.env.srcdir) / moris_gallery.ASSETS / "manifest.json"))
         scene = moris_gallery.scene_for(directory, self.env.docname)
         return self.parse_text_to_nodes(scene + "\n" + summary_markdown(self.env.app, matches[0]))
 

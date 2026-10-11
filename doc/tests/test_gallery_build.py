@@ -30,6 +30,19 @@ def test_crop_thumbnail_centers_content(tmp_path):
     assert thumb.getpixel((2, 2)) == (255, 255, 255)      # white margin
 
 
+def test_make_animation_crops_and_labels(tmp_path):
+    paths = []
+    for k in range(3):
+        im = Image.new("RGB", (1600, 1000), "white")
+        im.paste(Image.new("RGB", (400, 200), (0, 0, 80 * k)), (600, 400))
+        paths.append(tmp_path / f"f{k}.png")
+        im.save(paths[-1])
+    bg.make_animation(paths, tmp_path / "a.webp", labels=["it 1", "it 2", "it 3"])
+    anim = Image.open(tmp_path / "a.webp")
+    assert anim.n_frames == 3
+    assert anim.width < 600 and anim.height < 300      # cropped to the content (+ label band)
+
+
 def _scene(tmp_path, scene, hashes=True):
     path = tmp_path / "s.vtksz"
     with zipfile.ZipFile(path, "w") as z:

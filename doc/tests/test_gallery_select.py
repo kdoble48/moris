@@ -55,6 +55,27 @@ def test_empty_files_and_override():
     assert choice.kind == "xtk"
 
 
+def test_step_labels():
+    restart = [BIN + f"R.exo.e-s.{i:04d}" for i in range(11, 17)] + [BIN + "GEN_R.exo.e-s.0011"]
+    labels, iterations = gs.step_labels(restart[0], restart, 6)
+    assert iterations == 6 and labels[0] == "iteration 11 of 16" and labels[-1] == "iteration 16 of 16"
+    mach = [BIN + "M.exo.e-s.0001", BIN + "M.exo.e-s.0002"]
+    labels, iterations = gs.step_labels(mach[0], mach, 6)
+    assert iterations == 2
+    assert labels[:4] == ["iteration 1 of 2, time step 1 of 3", "iteration 1 of 2, time step 2 of 3",
+                          "iteration 1 of 2, time step 3 of 3", "iteration 2 of 2, time step 1 of 3"]
+    labels, iterations = gs.step_labels(BIN + "T.exo", [], 20)
+    assert iterations is None and labels[-1] == "time step 20 of 20"
+
+
+def test_animation_frames():
+    assert gs.frame_unit(BIN + "X.exo.e-s.0007") == "iteration"
+    assert gs.frame_unit(BIN + "X.exo") == "time step"
+    assert gs.sample_indices(5) == [0, 1, 2, 3, 4]
+    picked = gs.sample_indices(151, 60)
+    assert len(picked) == 60 and picked[0] == 0 and picked[-1] == 150
+
+
 def test_block_phase_labels():
     assert gs.block_phase("hmr_dummy_c_p2") == (2, "phase 2 (cut)")
     assert gs.block_phase("HMR_dummy_n_p10") == (10, "phase 10 (uncut)")

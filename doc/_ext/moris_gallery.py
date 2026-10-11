@@ -89,10 +89,35 @@ def scene_markdown(meta, docname, version="", build="") -> str:
     provenance = (f'{meta["caption"]}. Rendered from `{source.get("file", "?")}`'
                   f'{", written " + source["modified"] if source.get("modified") else ""}'
                   f'{" by " + build if build else ""}.')
+    animation = ""
+    anim = meta.get("animation")
+    if anim:
+        frames = len(anim["frames"])
+        if anim.get("iterations"):
+            what = "optimization iterations"
+            per = anim["steps"] // anim["iterations"]
+            sampled = (f'{frames} frames over {anim["iterations"]} {what}'
+                       + (f' ({per} time steps each)' if per > 1 else ""))
+        else:
+            what = "time steps"
+            sampled = f'{frames} of {anim["steps"]} {what}' if frames < anim["steps"] else f'all {anim["steps"]} {what}'
+        anim_legend = (f'```{{raw}} html\n<div class="moris-side">{legend_html(anim["legend"])}</div>\n```\n\n'
+                       if anim.get("legend") else "")
+        animation = (f'````{{tab-item}} Animation\n'
+                     f'<img class="moris-static" src="{prefix}{ASSETS}/{anim["file"]}{_tag(version)}" '
+                     f'alt="Animation over the {what}: {html.escape(meta["title"])}">\n\n'
+                     f'{anim_legend}{sampled}, one color range across all frames.\n````\n')
+    note = ""
+    if meta.get("kind") == "xtk":
+        note = ("```{note}\nThis is the XTK **integration mesh**, not the background (HMR) mesh: each cell the "
+                "interface crosses is subdivided into triangles that conform to the interface, and uncut cells "
+                "are kept whole.\n```\n\n")
     return (f'`````{{tab-set}}\n'
             f'````{{tab-item}} Interactive\n{iframe}\n\n{hint}\n````\n'
+            f'{animation}'
             f'````{{tab-item}} Static\n{image}\n````\n'
             f'`````\n\n'
+            + note
             + (f'```{{raw}} html\n<div class="moris-side">{side}</div>\n```\n\n' if side else "")
             + f'{provenance}\n')
 

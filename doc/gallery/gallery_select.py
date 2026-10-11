@@ -122,6 +122,53 @@ def choose(infos: list[FileInfo], override: dict | None = None) -> Choice | None
     return Choice(best.path, kind, None, None)
 
 
+MAX_FRAMES = 60
+
+
+def frame_unit(path: str) -> str:
+    """An ``.e-s.NNNN`` series holds one optimization iteration per file; otherwise steps are time steps."""
+    return "iteration" if SERIES.match(PurePath(path.replace("\\", "/")).name) else "time step"
+
+
+def series_numbers(path: str, all_paths: list[str]) -> list[int]:
+    """Sorted ``NNNN`` indices of the ``.e-s.NNNN`` series ``path`` belongs to (empty if not a series)."""
+    match = SERIES.match(PurePath(path.replace("\\", "/")).name)
+    if not match:
+        return []
+    numbers = set()
+    for other in all_paths:
+        m = SERIES.match(PurePath(other.replace("\\", "/")).name)
+        if m and m["stem"] == match["stem"]:
+            numbers.add(int(m["index"]))
+    return sorted(numbers)
+
+
+def step_labels(path: str, all_paths: list[str], steps: int) -> tuple[list[str], int | None]:
+    """A label per reader time step, and the number of optimization iterations (None for a transient run).
+
+    The IOSS reader opens a whole ``.e-s.NNNN`` series as one time series: one file per optimization
+    iteration, each holding one or more time steps. Labels use the real file numbers, so a restarted
+    run reads ``iteration 11`` rather than ``1``."""
+    numbers = series_numbers(path, all_paths)
+    if not numbers or steps % len(numbers):
+        return [f"time step {i + 1} of {steps}" for i in range(steps)], None
+    per = steps // len(numbers)
+    labels = []
+    for i in range(steps):
+        label = f"iteration {numbers[i // per]} of {numbers[-1]}"
+        if per > 1:
+            label += f", time step {i % per + 1} of {per}"
+        labels.append(label)
+    return labels, len(numbers)
+
+
+def sample_indices(count: int, limit: int = MAX_FRAMES) -> list[int]:
+    """Up to ``limit`` evenly spaced indices into ``count`` steps, always including the first and last."""
+    if count <= limit:
+        return list(range(count))
+    return sorted({round(i * (count - 1) / (limit - 1)) for i in range(limit)})
+
+
 PHASE = re.compile(r"_(?P<cut>[cn])_p(?P<phase>\d+)$", re.IGNORECASE)
 
 
