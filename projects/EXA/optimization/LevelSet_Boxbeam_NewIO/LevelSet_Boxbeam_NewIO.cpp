@@ -36,6 +36,7 @@
 #include "cl_Input_Deck.hpp"
 #include "cl_Input_Deck_Vocabulary.hpp"
 #include "fn_FEM_Presets.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 namespace
 {
@@ -71,7 +72,7 @@ namespace
     max_iterations()
     {
         const char* tEnvMaxIts = std::getenv( "BOXBEAM_MAX_ITS" );
-        return tEnvMaxIts != nullptr ? std::atoi( tEnvMaxIts ) : 2;
+        return tEnvMaxIts != nullptr ? std::atoi( tEnvMaxIts ) : exa::pick( 2, 150 );
     }
 
     // GCMMA step size: legacy default, overridable for smoke tuning

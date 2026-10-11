@@ -22,6 +22,7 @@
 #include "fn_equal_to.hpp"
 
 #include "AztecOO.h"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -435,7 +436,7 @@ namespace moris
         aParameterLists.set( "library", "./SIMP.so" );
 
         aParameterLists( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::GCMMA );
-        aParameterLists.set( "max_its", 2 );
+        aParameterLists.set( "max_its", moris::exa::pick( 2, 100 ) );
     }
 
     void

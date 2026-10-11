@@ -30,6 +30,7 @@
 #include "BelosLinearProblem.hpp"
 #include "BelosEpetraAdapter.hpp"
 #include "BelosBlockGmresSolMgr.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,7 +81,7 @@ namespace moris
 
     real tMMAPenalty  = 5.0;
     real tMMAStepSize = 0.021;
-    int  tMMAMaxIter  = 20;
+    int  tMMAMaxIter  = moris::exa::pick( 20, 150 );    // showcase: past the density-shift ramp (20..120)
 
     real tInitialStrainEnergy = 1437.01;
     real tMaxMass             = 400;
