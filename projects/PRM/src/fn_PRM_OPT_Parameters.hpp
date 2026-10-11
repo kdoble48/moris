@@ -21,7 +21,8 @@ namespace moris::opt
         LBFGS,
         SQP,
         SWEEP,
-        ROL
+        ROL,
+        ADAM_PROJ
     };
 }
 
@@ -380,6 +381,35 @@ namespace moris::prm
         return tParameterList;
     }
 
+    inline Parameter_List
+    create_adam_proj_parameter_list()
+    {
+        // Adam with an exact one-constraint projection (Algorithm_Adam_Projected; 3DGS-style first-order method)
+        Parameter_List tParameterList( "ADAM_PROJ" );
+
+        tParameterList.insert( "algorithm", "adam_proj" );    // Algorithm name, don't change
+        tParameterList.insert( "restart_index", 0 );          // Restart iteration index
+        tParameterList.insert( "max_its", 300 );              // iterations (each: >= 1 forward + 1 adjoint solve)
+
+        tParameterList.insert( "learning_rate", 0.5 );            // initial base learning rate, ADV units
+        tParameterList.insert( "learning_rate_pattern", "" );     // per-ADV multipliers cycled over ADVs ("" = all 1)
+        tParameterList.insert( "lr_decay_final", 0.01 );          // exponential decay: lr(last) = this x lr(first)
+        tParameterList.insert( "adam_beta1", 0.9 );
+        tParameterList.insert( "adam_beta2", 0.999 );
+        tParameterList.insert( "adam_epsilon", 1.0e-8 );
+
+        tParameterList.insert( "projection_mask", "" );           // 0/1 (or weights) cycled over ADVs ("" = all)
+        tParameterList.insert( "projection_direction", "uniform" );  // "uniform" (the mask) | "gradient" (masked dg/dx)
+        tParameterList.insert( "projection_mode", "equality" );   // "equality": g = 0 always; "inequality": only if g > 0
+        tParameterList.insert( "projection_tol", 2.0e-4 );        // |g| tolerance of the 1D root find
+        tParameterList.insert( "projection_max_its", 4 );         // secant corrections (forward solves) per iteration
+        tParameterList.insert( "tangent_moments", true );         // Adam on the objective gradient tangent to g
+
+        return tParameterList;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     /**
      * Creates an optimization algorithm parameter list depending on the optimziation algorithm type given.
      *
@@ -402,6 +432,8 @@ namespace moris::prm
                 return create_sweep_parameter_list();
             case opt::Optimization_Algorithm_Type::ROL:
                 return create_rol_parameter_list();
+            case opt::Optimization_Algorithm_Type::ADAM_PROJ:
+                return create_adam_proj_parameter_list();
             default:
                 MORIS_ERROR( false, "Unknown optimization algorithm type provided." );
                 return Parameter_List( "Error" );

@@ -20,6 +20,7 @@ set(HEADERS
     cl_OPT_Algorithm_SQP.hpp
     cl_OPT_Algorithm_Sweep.hpp
     cl_OPT_Algorithm_ROL.hpp
+    cl_OPT_Algorithm_Adam_Projected.hpp
     cl_OPT_Manager.hpp
     cl_OPT_Problem.hpp
     cl_OPT_Criteria_Interface.hpp
@@ -41,6 +42,7 @@ set(LIB_SOURCES
     cl_OPT_Algorithm_SQP.cpp
     cl_OPT_Algorithm_Sweep.cpp
     cl_OPT_Algorithm_ROL.cpp
+    cl_OPT_Algorithm_Adam_Projected.cpp
     cl_OPT_Manager.cpp
     cl_OPT_Problem.cpp
     cl_OPT_Criteria_Interface.cpp
