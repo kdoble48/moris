@@ -22,7 +22,10 @@
 #include "paths.hpp"
 
 #include "fn_OPT_Rosenbrock.hpp"
+#include "cl_OPT_Algorithm_MMA.hpp"
+#include "cl_Tracer.hpp"
 #include "fn_OPT_Test_Interface.hpp"
+#include "HDF5_Tools.hpp"
 
 namespace moris::opt
 {
@@ -139,12 +142,16 @@ namespace moris::opt
             tAlgorithms.add_parameter_list( tAlgorithmParameterList );
             Manager tManager( tAlgorithms, tProblem );
 
+            // restart files are written per iteration (MB-016); remove a stale one first
+            std::remove( "ADV_Alg_0_Iter_1.hdf5" );
+
             // Solve optimization problem
             tManager.perform();
 
             // Check Solution
             if ( par_rank() == 0 )
             {
+                REQUIRE( std::ifstream( "ADV_Alg_0_Iter_1.hdf5" ).good() );    // MB-016: native GCMMA writes restart files
                 REQUIRE( std::abs( tManager.get_objectives()( 0 ) ) < 2E-7 );    // check value of objective
                 Vector< real > tADVs = tManager.get_advs();
                 for ( auto iADV : tADVs )
@@ -802,5 +809,265 @@ namespace moris::opt
         }
 
         // ---------------------------------------------------------------------------------------------------------
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Warm restart across an in-place redistance (MB-013): Rosenbrock in (x0, x1) plus two far-field variables
+    // (x2, x3) that no criterion depends on. A test interface overwrites x2, x3 with bound-scale jumps on every
+    // evaluation, the way the workflow's in-place SDF redistance rewrites far-field level-set coefficients.
+
+    void
+    initialize_rosenbrock_farfield( Vector< real >& aADVs, Vector< real >& aLowerBounds, Vector< real >& aUpperBounds )
+    {
+        if ( par_rank() == 0 )
+        {
+            aADVs        = { 0.8, 1.2, 0.5, -0.5 };
+            aLowerBounds = { -2.0, -2.0, -2.0, -2.0 };
+            aUpperBounds = { 2.0, 2.0, 2.0, 2.0 };
+        }
+    }
+
+    Matrix< DDRMat >
+    get_dcriteria_dadv_rosenbrock_farfield( const Vector< real >& aADVs )
+    {
+        if ( par_rank() == 0 )
+        {
+            Matrix< DDRMat > tDCriteria( 2, 4, 0.0 );
+            tDCriteria( 0, 0 ) = -1;
+            tDCriteria( 1, 0 ) = -2 * aADVs( 0 );
+            tDCriteria( 1, 1 ) = 1;
+            return tDCriteria;
+        }
+        return { {} };
+    }
+
+    Matrix< DDRMat >
+    compute_dobjective_dadv_rosenbrock_farfield( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+    {
+        Matrix< DDRMat > tD2 = compute_dobjective_dadv_rosenbrock( aADVs, aCriteria );
+        Matrix< DDRMat > tD4( 1, 4, 0.0 );
+        tD4( 0 ) = tD2( 0 );
+        tD4( 1 ) = tD2( 1 );
+        return tD4;
+    }
+
+    Matrix< DDRMat >
+    compute_dconstraint_dadv_rosenbrock_farfield( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+    {
+        Matrix< DDRMat > tD2 = compute_dconstraint_dadv_rosenbrock( aADVs, aCriteria );
+        Matrix< DDRMat > tD4( 2, 4, 0.0 );
+        for ( uint iRow = 0; iRow < 2; iRow++ )
+        {
+            tD4( iRow, 0 ) = tD2( iRow, 0 );
+            tD4( iRow, 1 ) = tD2( iRow, 1 );
+        }
+        return tD4;
+    }
+
+    /** User-defined interface that rewrites the far-field variables after every criteria evaluation. */
+    class Interface_Farfield_Jump : public Interface_User_Defined
+    {
+      public:
+        bool mJump  = false;
+        uint mCalls = 0;
+
+        Interface_Farfield_Jump()
+                : Interface_User_Defined( &initialize_rosenbrock_farfield, &get_criteria_rosenbrock, &get_dcriteria_dadv_rosenbrock_farfield )
+        {
+        }
+
+        Vector< real >
+        perform( Vector< real >& aNewADVs ) override
+        {
+            Vector< real > tCriteria = Interface_User_Defined::perform( aNewADVs );
+            if ( mJump && aNewADVs.size() == 4 )
+            {
+                mCalls++;
+                aNewADVs( 2 ) = ( mCalls % 2 == 0 ) ? 1.8 : -1.8;    // far-field "redistance": large, alternating
+                aNewADVs( 3 ) = ( mCalls % 3 == 0 ) ? 1.5 : -1.5;
+            }
+            return tCriteria;
+        }
+    };
+
+    struct Farfield_Result
+    {
+        real mX0       = 0.0;
+        real mX1       = 0.0;
+        real mObjective = 0.0;
+        int  mLocked   = 0;
+    };
+
+    Farfield_Result
+    solve_rosenbrock_farfield( bool aJump, bool aShift )
+    {
+        Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "norm_drop", 2.5e-5 );
+        tAlgorithmParameterList.set( "asymp_adaptc", 1.1 );
+        tAlgorithmParameterList.set( "reinit_in_place", true );
+
+        std::shared_ptr< Interface_Farfield_Jump > tInterface = std::make_shared< Interface_Farfield_Jump >();
+        tInterface->mJump = aJump;
+
+        std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                tProblemParameterList,
+                tInterface,
+                &get_constraint_types_rosenbrock,
+                &compute_objectives_rosenbrock,
+                &compute_constraints_rosenbrock,
+                &compute_dobjective_dadv_rosenbrock_farfield,
+                &compute_dobjective_dcriteria_rosenbrock,
+                &compute_dconstraint_dadv_rosenbrock_farfield,
+                &compute_dconstraint_dcriteria_rosenbrock );
+        tProblem->initialize();
+
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        tAlgorithm.set_shift_history( aShift );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );    // solve() books its iteration on the Manager's trace, as in Manager::perform()
+            tAlgorithm.solve( 0, tProblem );
+        }
+
+        Farfield_Result tResult;
+        if ( par_rank() == 0 )
+        {
+            Vector< real > tADVs = tProblem->get_advs();
+            tResult.mX0        = tADVs( 0 );
+            tResult.mX1        = tADVs( 1 );
+            tResult.mObjective = tProblem->get_objectives()( 0 );
+            tResult.mLocked    = tAlgorithm.get_num_locked_asymptotes();
+        }
+        return tResult;
+    }
+
+    TEST_CASE( "Native GCMMA warm restart across an in-place redistance", "[optimization][MB-013]" )
+    {
+        Farfield_Result tReference = solve_rosenbrock_farfield( false, true );    // no redistance
+        Farfield_Result tShifted   = solve_rosenbrock_farfield( true, true );     // redistance + history shift
+        Farfield_Result tUnshifted = solve_rosenbrock_farfield( true, false );    // redistance, old behaviour
+
+        if ( par_rank() == 0 )
+        {
+            // the optimum is reached either way (the far-field variables carry no sensitivity)
+            REQUIRE( std::abs( tReference.mX0 - 1.0 ) < 1E-4 );
+            REQUIRE( std::abs( tShifted.mX0 - 1.0 ) < 1E-4 );
+
+            // with the shift the redistance is invisible: same trajectory, no extra locked asymptotes
+            REQUIRE( std::abs( tShifted.mX0 - tReference.mX0 ) < 1E-8 );
+            REQUIRE( std::abs( tShifted.mX1 - tReference.mX1 ) < 1E-8 );
+            REQUIRE( std::abs( tShifted.mObjective - tReference.mObjective ) < 1E-10 );
+            REQUIRE( tShifted.mLocked == tReference.mLocked );
+
+            // negative control: without the shift the jumps collapse the far-field asymptotes onto the floor
+            REQUIRE( tUnshifted.mLocked > tReference.mLocked );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // In-place redistance checkpoints (MB-021): with reinit_in_place, the restart file of every criteria evaluation
+    // must hold the design the criteria were evaluated at (the interface's redistanced output), not the raw trial
+    // point. The evaluation advances the optimization iteration, so the rewrite has to target the index captured
+    // before it.
+
+    /** Far-field-jump interface that records the redistanced design returned by every criteria evaluation. */
+    class Interface_Recording_Redistance : public Interface_Farfield_Jump
+    {
+      public:
+        std::vector< std::vector< real > > mRedistanced;
+
+        Vector< real >
+        perform( Vector< real >& aNewADVs ) override
+        {
+            Vector< real > tCriteria = Interface_Farfield_Jump::perform( aNewADVs );
+
+            std::vector< real > tCopy( aNewADVs.size() );
+            for ( uint iADV = 0; iADV < aNewADVs.size(); iADV++ )
+            {
+                tCopy[ iADV ] = aNewADVs( iADV );
+            }
+            mRedistanced.push_back( tCopy );
+
+            return tCriteria;
+        }
+    };
+
+    std::string
+    mb021_restart_file_name( uint aIter )
+    {
+        return "ADV_Alg_0_Iter_" + std::to_string( aIter ) + ".hdf5";
+    }
+
+    std::vector< real >
+    mb021_read_restart_advs( uint aIter )
+    {
+        hid_t  tFileID = open_hdf5_file( mb021_restart_file_name( aIter ), false, true );
+        herr_t tStatus = 0;
+
+        std::vector< real > tADVs;
+        load_vector_from_hdf5_file( tFileID, "ADVs", tADVs, tStatus );
+        close_hdf5_file( tFileID );
+
+        return tADVs;
+    }
+
+    TEST_CASE( "Native GCMMA in-place redistance checkpoints hold the redistanced design", "[optimization][MB-021]" )
+    {
+        Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "max_its", 3 );
+        tAlgorithmParameterList.set( "reinit_in_place", true );
+
+        std::shared_ptr< Interface_Recording_Redistance > tInterface = std::make_shared< Interface_Recording_Redistance >();
+
+        // redistance on every evaluation
+        tInterface->mJump = true;
+
+        std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                tProblemParameterList,
+                tInterface,
+                &get_constraint_types_rosenbrock,
+                &compute_objectives_rosenbrock,
+                &compute_constraints_rosenbrock,
+                &compute_dobjective_dadv_rosenbrock_farfield,
+                &compute_dobjective_dcriteria_rosenbrock,
+                &compute_dconstraint_dadv_rosenbrock_farfield,
+                &compute_dconstraint_dcriteria_rosenbrock );
+        tProblem->initialize();
+
+        // remove stale restart files of earlier tests in this directory
+        for ( uint iIter = 0; iIter < 50; iIter++ )
+        {
+            std::remove( mb021_restart_file_name( iIter ).c_str() );
+        }
+
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+        }
+
+        if ( par_rank() == 0 )
+        {
+            // the initial design plus at least one evaluation per outer iteration
+            const uint tNumEvaluations = tInterface->mRedistanced.size();
+            REQUIRE( tNumEvaluations >= 4 );
+
+            // evaluation k is checkpointed in Iter_k, and the file holds its redistanced design, the last one included
+            for ( uint iEval = 0; iEval < tNumEvaluations; iEval++ )
+            {
+                REQUIRE( std::ifstream( mb021_restart_file_name( iEval ) ).good() );
+
+                std::vector< real > tFileADVs = mb021_read_restart_advs( iEval );
+                REQUIRE( tFileADVs.size() == 4 );
+                for ( uint iADV = 0; iADV < 4; iADV++ )
+                {
+                    CHECK( tFileADVs[ iADV ] == tInterface->mRedistanced[ iEval ][ iADV ] );
+                }
+            }
+
+            // no file past the last evaluation (the rewrite used to land in Iter_{k+1})
+            REQUIRE_FALSE( std::ifstream( mb021_restart_file_name( tNumEvaluations ) ).good() );
+        }
     }
 }    // namespace moris::opt
