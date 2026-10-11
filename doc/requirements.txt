@@ -1,0 +1,6 @@
+# Python requirements for building the documentation site (doc/).
+sphinx==8.1.3
+myst-parser==4.0.0
+furo==2024.8.6
+breathe==4.35.0
+sphinx-copybutton==0.5.2

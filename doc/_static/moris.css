@@ -1,0 +1,22 @@
+/* Site tweaks on top of the Furo theme. */
+
+/* Breathe signatures: keep long template signatures readable. */
+dl.cpp > dt.sig {
+    font-size: 0.85em;
+    overflow-x: auto;
+}
+
+/* Folded "Subclassed by" lists on API pages (see conf.py). */
+details.moris-subclasses {
+    margin: 0.5em 0 1em;
+}
+details.moris-subclasses > summary {
+    cursor: pointer;
+    color: var(--color-foreground-secondary);
+}
+
+/* Wide reference tables scroll instead of overflowing on narrow screens. */
+article table.docutils {
+    display: block;
+    overflow-x: auto;
+}
