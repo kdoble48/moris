@@ -16,34 +16,35 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 | ID | Status | Module | Summary | Found by |
 |---|---|---|---|---|
-| MB-001 | fixed (992639917) | XTK | Segfault building the enriched integration mesh when a cell's vertices all lie on one geometry's interface → now a clear error | lunch_and_learn_xiga B13 |
-| MB-002 | fixed (22c3c2799; residual = MB-011) | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
+| MB-001 | merged (#25, 82b186bf7; fixed 992639917) | XTK | Segfault building the enriched integration mesh when a cell's vertices all lie on one geometry's interface → now a clear error | lunch_and_learn_xiga B13 |
+| MB-002 | merged (#25, 82b186bf7; fixed 22c3c2799; residual = MB-011) | FEM/INT | Double-sided FD geometry sensitivity uses the leader's parametric coords for the follower → dR/dp ~1e8 on interfaces along cell edges | lunch_and_learn_xiga B12 |
 | MB-003 | open | GEN/FEM | Static user-defined geometry with `discretization_mesh_index = -2` (analytic) makes design gradients NaN, silently | moment_fitting (2026-07-16) |
 | MB-004 | open | FEM | Perimeter (interface VOLUME IQI) adjoint off by 12–150% on a few small-gradient ADVs | lunch_and_learn_xiga B11 |
 | MB-005 | open (root-caused; native-GCMMA workaround) | OPT/HMR | Adaptive refinement during optimization: ADV count drifts between remeshes → abort in `compute_design_criteria_gradients` | seeding_impact (2026-07-13) |
 | MB-006 | open (suspect) | FEM/INT | Nonconformal branch of `select_dRdp_FD_geometry_double` also copies the leader ξ into the follower row | review of MB-002 |
 | MB-007 | open | FEM/VIS | Requested IQI evaluated on zero sets writes zeros to Exodus with no warning | Hertz contact (2026-07) |
 | MB-008 | open (limitation) | FEM/INT | `IQI_Max_Stress::compute_dQIdu` stops with "not implemented"; decks must switch the whole forward analysis to FD | moris_stress_demo (2026-10-06) |
-| MB-009 | fixed (a856e9c13) | GEN | Design factory rejects a level-set geometry listed before the fields it depends on ("does not recognize geometry type"); properties built on the wrong field | MB-001 regression test |
+| MB-009 | merged (#25, 82b186bf7; fixed a856e9c13) | GEN | Design factory rejects a level-set geometry listed before the fields it depends on ("does not recognize geometry type"); properties built on the wrong field | MB-001 regression test |
 | MB-010 | open | XTK | Phase boundary along background grid lines creates no interface facets → phases silently decoupled | MB-001 verification |
-| MB-011 | fixed (06515ef67) | FEM/INT | Cluster-measure FD sensitivities (Nitsche-interface SP) use a base residual from CM/SP caches of the last perturbed geometry → 0.5–15% gradient error next to interfaces | MB-002 verification |
+| MB-011 | merged (#25, 82b186bf7; fixed 06515ef67) | FEM/INT | Cluster-measure FD sensitivities (Nitsche-interface SP) use a base residual from CM/SP caches of the last perturbed geometry → 0.5–15% gradient error next to interfaces | MB-002 verification |
 | MB-012 | open | VIS | STANDARD VIS mesh writes non-finite nodal values (UX/UY/VM) at 11–15% of nodes, mostly void-side but some with φ ≥ 0 | X18 peak extraction |
 | MB-013 | open (limitation) | WRK/OPT | Every-step in-place SDF redistancing edits the ADV vector between criteria and gradient evaluation → ADV-consistency `MORIS_ERROR` after O(100) iterations (native MMA only; GCMMA cannot use it) | sdf_reinit_sweep (2026-06) |
 | MB-014 | open | WRK | Scheduled-restart SDF apply in `Workflow_HMR_XTK::initialize()` replaces the whole ADV vector with one field's coefficients → silently skipped ("does not match current ADV count") on composite designs (level set + PDVs) | sdf_reinit_sweep (2026-06), review 2026-10-10 |
 | MB-015 | open | WRK | `sdf_reinit_mode = "field_remap"` throws `std::out_of_range` in `Reinitialize_Performer::perform()` | sdf_reinit_sweep (2026-06) |
-| MB-016 | fixed (f6d21bfb7) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
-| MB-017 | fixed (7a3115ee7) | GEN/WRK | Every-step in-place SDF redistance wrote coefficients at their global ADV IDs instead of ADV-vector positions → design shifted by one coefficient per redistance ("wrote 4960 of 4961"), MBB cut off its load pad | warm-restart work 2026-10-10 (D-015) |
-| MB-018 | fixed (a0fe9502e) | GEN | `Stored_Field::get_mtk_field()` built an MTK field on a null mesh pair → segfault in `mtk::Field::Field` whenever SDF reinit (or the remeshing restart) asked GEN for its MTK fields with a static stored geometry | L-bracket SDF port 2026-10-10 |
-| MB-019 | fixed (a0fe9502e) | GEN/WRK | `SIGNED_DISTANCE_IMAGE` field ignored the `name` parameter (named after the image file), so SDF reinit found no design: redistance skipped silently every iteration | L-bracket SDF port 2026-10-10 |
+| MB-017 | fixed (7a3115ee7; on work/develop-local, develop PR after #20) | GEN/WRK | Every-step in-place SDF redistance wrote coefficients at their global ADV IDs instead of ADV-vector positions → design shifted by one coefficient per redistance ("wrote 4960 of 4961"), MBB cut off its load pad | warm-restart work 2026-10-10 (D-015) |
+| MB-018 | fixed (a0fe9502e; on work/develop-local, develop PR after #20) | GEN | `Stored_Field::get_mtk_field()` built an MTK field on a null mesh pair → segfault in `mtk::Field::Field` whenever SDF reinit (or the remeshing restart) asked GEN for its MTK fields with a static stored geometry | L-bracket SDF port 2026-10-10 |
+| MB-019 | fixed (a0fe9502e; on work/develop-local, develop PR after #20) | GEN/WRK | `SIGNED_DISTANCE_IMAGE` field ignored the `name` parameter (named after the image file), so SDF reinit found no design: redistance skipped silently every iteration | L-bracket SDF port 2026-10-10 |
 | MB-016 | open | XTK | Per-geometry cut-cell selection uses only background corner nodes; an analytic field evaluated at Box-cut child vertices splits a shared edge on one side only → nonconforming IG facets → SIGSEGV in `construct_subphase_neighborhood` (opt) | gaussian_splat_ls G-N24 (D-012) |
-| MB-017 | fix-written (feature/gen-additive @ee83435b7) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
-| MB-020 | fixed (abb99ee66) | GEN | Multilinear intersection divides by the norm of the four corner φ values; a cell whose corners are all exactly 0 (order-2 field nonzero only at mid-side/interior nodes) gives NaN residuals → abort "Newton did not converge: Reference residual nan" | lunch_and_learn_xiga X40_cheese_o2 (D-020) |
-| MB-021 | fixed (4ed1e2393) | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
-| MB-022 | fix-written (fix/mb022-025-audit @307236d81) | GEN | Nested intersection recursion drops the incoming sensitivity factor | implementation audit 2026-10-10 (D-028) |
-| MB-023 | fix-written (fix/mb022-025-audit @307236d81) | OPT | Native GCMMA accepts NaN criteria in the conservativeness inner loop | implementation audit 2026-10-10 (D-029) |
-| MB-024 | fix-written (fix/mb022-025-audit @307236d81, 7a947d669) | OPT | Exhausted MMA backtracking leaves Problem on the rejected trial | implementation audit 2026-10-10 (D-030) |
-| MB-025 | fix-written (fix/mb022-025-audit @307236d81, 7a947d669) | OPT | SWEEP single finite-difference modes silently skip all perturbations | implementation audit 2026-10-10 (D-031) |
-| MB-026 | fix-written (fix/mb022-025-audit @7a947d669) | OPT | FD perturbation sign toggles on every backward call: SWEEP fd_forward/fd_backward swapped for every second (point, epsilon) call | code review of fix/mb022-025-audit, 2026-10-10 |
+| MB-020 | merged (#25, 82b186bf7; fixed abb99ee66) | GEN | Multilinear intersection divides by the norm of the four corner φ values; a cell whose corners are all exactly 0 (order-2 field nonzero only at mid-side/interior nodes) gives NaN residuals → abort "Newton did not converge: Reference residual nan" | lunch_and_learn_xiga X40_cheese_o2 (D-020) |
+| MB-021 | merged (#26, 33be1e5c6; fixed 4ed1e2393) | OPT | Native GCMMA in-place SDF mode: the "redistanced checkpoint" rewrite (3ebdd8050) lands in the NEXT iteration's file and is then overwritten by the raw trial point, so Iter_0..N-1 hold ψ, never φ = R(ψ); only the last file holds φ | lunch_and_learn_xiga theory manual audit (X9r_rcp, X81_o2_cellorder) |
+| MB-022 | fix-written (PR #29: ef9f2a0c0, dc1935cad; on work/develop-local) | GEN | Nested intersection recursion drops the incoming sensitivity factor | implementation audit 2026-10-10 (D-028) |
+| MB-023 | fix-written (PR #29: ef9f2a0c0, dc1935cad; on work/develop-local) | OPT | Native GCMMA accepts NaN criteria in the conservativeness inner loop | implementation audit 2026-10-10 (D-029) |
+| MB-024 | fix-written (PR #29: ef9f2a0c0, dc1935cad; on work/develop-local) | OPT | Exhausted MMA backtracking leaves Problem on the rejected trial | implementation audit 2026-10-10 (D-030) |
+| MB-025 | fix-written (PR #29: ef9f2a0c0, dc1935cad; on work/develop-local) | OPT | SWEEP single finite-difference modes silently skip all perturbations | implementation audit 2026-10-10 (D-031) |
+| MB-026 | fix-written (PR #29: ef9f2a0c0, dc1935cad; on work/develop-local) | OPT | FD perturbation sign toggles on every backward call: SWEEP fd_forward/fd_backward swapped for every second (point, epsilon) call | code review of fix/mb022-025-audit, 2026-10-10 |
+| MB-027 | open (fix in progress by another session, jobs 3200-3299) | WRK/OPT | In-place SDF redistance R is not idempotent (each application raises the KS stress aggregate ~0.6 % and the volume ~0.075 %) and is applied to every inner-loop trial, so GCMMA conservativeness compares f(R(ψ)) with an approximation of f(ψ): trials converge to f(R(x_k)) > approximation, the inner loop hits its cap, and the accepted R(x_k) ratchets the constraint up | X18 v8 KS mimic h1 (D-056), perf/x18v8 |
+| MB-028 | merged (#26, 33be1e5c6; was cited as MB-016) | OPT | Native in-tree GCMMA (`algorithm = "mma"`) wrote no `ADV_Alg_0_Iter_N.hdf5` restart files: no warm restart, no post-run tail-velocity check, silently | native-GCMMA validation 2026-10-10 |
+| MB-029 | fix-written (feature/gen-additive @ee83435b7; was cited as MB-017) | GEN/MRS | `Design_Variable` ID is a `char` from a static counter; `ADV_Manager::create_adv` aliases any non-constant variable whose ID repeats → >~250 analytic Design_Variables silently share ADVs | gaussian_splat_ls G-N60 (D-011) |
 
 ---
 
@@ -383,7 +384,8 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Regression test:** to add — XTK 2D, Box + analytic sliver through a Box-cut edge (synthetic θ above).
 - **Workaround:** `use_multilinear_interpolation = true` on the analytic design geometry (tested: the crash design runs; changes strain energy +11.7% at a sliver-rich design → FD-check gradients before use). σ_min ≥ 2h only lowers the frequency.
 
-## MB-017 · GEN/MRS: `Design_Variable` char ID wraps → analytic ADVs silently aliased
+## MB-029 · GEN/MRS: `Design_Variable` char ID wraps → analytic ADVs silently aliased
+- **Renumbered** 2026-10-11 from MB-017 (duplicate ID; MB-017 is the SDF redistance bug). Commit ee83435b7 on `feature/gen-additive` still says "MB-017".
 - **Status:** fix-written (feature/gen-additive @ee83435b7, 2026-10-10)
 - **Symptom:** none at run time — a deck with > ~250 non-constant `Design_Variable`s gets fewer ADVs than variables; variables whose IDs repeat mod 256 share an ADV (value and bounds). Found by static review of the gaussian_splat_ls G-N60 deck (360 variables); D-011.
 - **Reproducer:** `runs/studies/gaussian_splat_ls/runs/compile_G-N60/` (360 Design_Variables; compare the ADV count MORIS reports). Unit test `[mb017]` in GEN-test.exe (300 variables → 300 distinct ADVs).
@@ -449,7 +451,8 @@ Missing features belong in a study's capability list, not here (exception: a mis
 
 ---
 
-## MB-016 · OPT: native GCMMA wrote no restart files
+## MB-028 · OPT: native GCMMA wrote no restart files
+- **Renumbered** 2026-10-11 from MB-016 (duplicate ID; MB-016 is the XTK cut-cell bug). Commit f6d21bfb7, PR #26 and a comment in `cl_OPT_Algorithm_MMA.cpp` still say "MB-016".
 - **Status:** fixed, commit f6d21bfb7 on `fix/xiga-deck-bugs` (2026-10-10). Build green; OPT-test passes (32 assertions) with the new check.
 - **Symptom:** a run with `Optimization_Algorithm_Type::MMA` (the native in-tree GCMMA port) leaves no `ADV_Alg_0_Iter_N.hdf5`
   at all. Nothing warns; warm restarts (`restart_file`) and post-run tail-velocity checks have nothing to read.
@@ -795,3 +798,24 @@ Missing features belong in a study's capability list, not here (exception: a mis
 - **Regression test:** `OPT-test.exe "[MB-026]"` (shared with MB-025): exact forward/backward/central values at two points and two epsilons.
 - **Affected outputs:** any pre-fix SWEEP output read for `fd_forward`/`fd_backward` at an even-numbered call. In this workspace: `runs/studies/lunch_and_learn_xiga/triage_bridge/scripts/fd_table.py:12` prints `fwd e2`/`bwd e2` from `eval_1-1 epsilon_2-4`, the swapped pair, so its two one-sided columns are exchanged (its central columns and the analytic gradient are correct). The 27 in-repo EXA SWEEP decks that use `all` may store swapped forward/backward gold values for their 2nd+ epsilon.
 - **Workaround (builds before 7a947d669):** use `fd_central` only, or one epsilon and one evaluation point per sweep.
+
+
+## MB-027 · WRK/OPT: non-idempotent in-place SDF redistance defeats the GCMMA inner loop
+- **Status:** open. The fix (redistance only accepted iterates; interface-preserving redistance) is being written in another session (queue jobs 3200-3299). This entry records the diagnosis.
+- **Symptom:** native GCMMA with `reinit_in_place` + `sdf_reinit_every_step` + `max_inner_its` 10 (X18 v8 KS mimic, h = 0.01): 145 of 558 iterations hit the inner-loop cap (11 evaluations each, 1598 of 3760 evaluations). In capped stretches (iterations 496-519) the trial step goes to ~0 but every trial reads the same constraint, above the approximation, e.g. iteration 504 trials 1.05306 → 1.05350 against an accepted 503 value of 1.04467; the accepted design's KS constraint climbs 1.01 → 1.14 monotonically while the volume rises 0.2291 → 0.2318. Signature: runs of `n_evals = max_inner_its + 1` in `studies/lunch_and_learn_xiga/scripts/inner_loop_stats.py <console.log> --cap 11`.
+- **Reproducer:** `runs/studies/lunch_and_learn_xiga/perf/x18v8/rchain` (queue job 3104): restart from the iteration-500 design (`perf/x18v8/restarts/ks_v2_iter500_ckpt3270.hdf5`), MMA step 1e-8, no inner loop, 8 iterations. The design does not move, so evaluation k reads f(R^(k-1) x): KS aggregate pn 1.02362 → 1.02997 → 1.03636 → 1.04286 → 1.04930 → 1.05563 → 1.06177 → 1.06778 → 1.07368 (+0.0064 per application) and volume 0.147839 → 0.148721 (+0.00011 per application).
+- **Evidence:** `runs/studies/lunch_and_learn_xiga/perf/x18v8/` (PROFILE.md "Inner-loop root cause"; arms `ab_inner/a_asis` and `ab_inner/b_sdf_off`). With the redistance off (b), the same 30 iterations from iteration 495 take 5.13 evaluations per iteration (6 capped) and lower the volume 0.2279 → 0.2049 at a constraint of 1.000; as-is (a) takes 6.13 (8 capped) and reaches 0.2226. The arm with no inner loop (c) diverges (KS 1.03 → 2.2, residual > 1e20 at evaluation 7, D-057), so the inner loop is needed; the redistance is what defeats it.
+- **Root cause:** (1) `Reinitialize_Performer::compute_sdf_from_interface` (nodal distance to the linear-chord cut facets, then an L2 projection onto the quadratic B-splines) does not reproduce the zero contour of an already-signed-distance field, so R(R(x)) != R(x); the drift is systematic (thickening, higher peak stress). (2) `Workflow_HMR_XTK::perform` applies R on every criteria evaluation, including inner-loop trials, while `Algorithm_MMA::is_conservative` compares the criteria of R(xmma) with the approximation built for xmma. When the subproblem step is small the R drift dominates, no trial is conservative, and the trial accepted at the cap is R(x_k): the run then iterates x ← R(x).
+- **Code:** `projects/WRK/src/cl_WRK_Workflow_HMR_XTK.cpp:444-445` (moris-xiga-ks, feature/ks-stress-iqi fbf62f3cb)
+  ```cpp
+  bool tEveryStep  = tReinitPerformer->get_reinit_every_step();
+  bool tRedistance = tEveryStep ? ( tOptIter > 0 && tOptIter % tReinitFreq == 0 ) : tScheduled;   // every evaluation, trials included
+  ```
+  `projects/OPT/src/cl_OPT_Algorithm_MMA.cpp:222-227`
+  ```cpp
+  if ( ( f0app + epsimin ) < f0valnew ) return false;                 // f0valnew, fvalnew are criteria of R(xmma)
+  for ( int j = 0; j < mNumCon; ++j )
+      if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) return false;     // fapp is the approximation at xmma
+  ```
+- **Regression test:** none yet (the fix session owns it).
+- **Workaround:** deck switch `XIGA_SDF_FREQ=0` (Lbracket_Stress_Xiga.cpp, 2026-10-11) turns the in-place redistance off and keeps the recipe's phases and native MMA; `XIGA_SDF_FREQ=k` redistances every k-th evaluation only.
