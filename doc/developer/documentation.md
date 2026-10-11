@@ -27,8 +27,14 @@ The Sphinx step runs with warnings as errors, as CI does. From a configured CMak
 
 ## Publishing
 
-`.github/workflows/docs.yml` builds the site on every pull request that touches `doc/` or a
-header, and publishes it to GitHub Pages on every push to `develop`.
+Two workflows share the build script `doc/ci_build.sh`, which installs the pinned Doxygen and the
+Python requirements and runs `make -C doc html`:
+
+- `.github/workflows/docs.yml` builds the site as a check on every pull request that touches
+  `doc/` or a header. It uses no action besides `actions/checkout`.
+- `.github/workflows/docs-deploy.yml` builds and publishes the site to GitHub Pages on every
+  push to `develop`. It needs Pages enabled with source "GitHub Actions" and the Pages actions
+  on the repository's Actions allow-list.
 
 ## Adding a page
 

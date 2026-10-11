@@ -1,8 +1,8 @@
 name: Documentation
 
-# Builds the Sphinx site (doc/) on pull requests and publishes it to GitHub Pages
-# on pushes to develop. Runs on GitHub-hosted runners: the docs need only
-# Doxygen and Python, not the MORIS dependency stack.
+# Builds the Sphinx site (doc/) as a check on pull requests and pushes.
+# Publishing to GitHub Pages is the separate docs-deploy.yml workflow.
+# Uses only actions/checkout; doc/ci_build.sh installs the pinned toolchain.
 
 on:
   push:
@@ -11,7 +11,6 @@ on:
     paths:
       - "doc/**"
       - "projects/**/*.hpp"
-      - "CMakeLists.txt"
       - ".github/workflows/docs.yml"
   pull_request:
     branches:
@@ -25,10 +24,6 @@ on:
 permissions:
   contents: read
 
-env:
-  DOXYGEN_VERSION: 1.12.0
-  DOXYGEN_SHA256: 3c42c3f3fb206732b503862d9c9c11978920a8214f223a3950bbf2520be5f647
-
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
@@ -40,55 +35,5 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: doc/requirements.txt
-
-      # Pinned (the apt package lags): the site builds with warnings as errors,
-      # and Breathe output depends on the Doxygen version.
-      - name: Install Doxygen ${{ env.DOXYGEN_VERSION }}
-        run: |
-          curl -sSLf -o doxygen.tgz "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
-          echo "${DOXYGEN_SHA256}  doxygen.tgz" | sha256sum --check
-          mkdir -p "$RUNNER_TEMP/doxygen"
-          tar xzf doxygen.tgz -C "$RUNNER_TEMP/doxygen" --strip-components=1
-          rm doxygen.tgz
-          "$RUNNER_TEMP/doxygen/bin/doxygen" --version
-
-      - name: Install Sphinx toolchain
-        run: pip install -r doc/requirements.txt
-
       - name: Build site
-        run: make -C doc html DOXYGEN="$RUNNER_TEMP/doxygen/bin/doxygen"
-
-      - name: Upload Doxygen warnings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: doxygen-warnings
-          path: doc/_build/doxygen/doxygen-warnings.log
-          if-no-files-found: ignore
-
-      - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: doc/_build/html
-
-  deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+        run: bash doc/ci_build.sh

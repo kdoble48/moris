@@ -1,0 +1,58 @@
+name: Documentation deploy
+
+# Publishes the Sphinx site (doc/) to GitHub Pages on pushes to develop.
+#
+# Requires (repository settings):
+#   - Pages enabled with source "GitHub Actions";
+#   - the Actions allow-list to include actions/upload-pages-artifact@v3,
+#     actions/upload-artifact@v4 (used inside it), and actions/deploy-pages@v4.
+# Kept separate from docs.yml so the PR build check runs under the
+# checkout-only allow-list.
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "doc/**"
+      - "projects/**/*.hpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build site
+        run: bash doc/ci_build.sh
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/_build/html
+
+  deploy:
+    if: github.ref == 'refs/heads/develop'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
