@@ -15,6 +15,56 @@ details.moris-subclasses > summary {
     color: var(--color-foreground-secondary);
 }
 
+/* Results gallery: responsive card grid of figures. */
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+    gap: 1.5rem;
+    margin: 1rem 0 2rem;
+}
+.gallery-grid.gallery-wide {
+    grid-template-columns: 1fr;
+}
+.gallery-grid figure {
+    margin: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--color-background-border);
+    border-radius: 6px;
+    background: var(--color-background-secondary);
+}
+.gallery-grid figure img {
+    width: 100%;
+    height: auto;
+    border-radius: 3px;
+    background: #f6f5f0;
+}
+.gallery-grid figcaption {
+    text-align: left;
+    font-size: 0.85em;
+    line-height: 1.45;
+    margin-top: 0.6rem;
+}
+.gallery-grid figcaption p {
+    margin: 0;
+}
+
+/* Example catalog: feature tags as compact pills; deck names may wrap. */
+.exa-tag {
+    display: inline-block;
+    white-space: nowrap;
+    font-size: 0.72em;
+    line-height: 1.5;
+    padding: 0 0.45em;
+    margin: 0.1em 0.1em 0.1em 0;
+    border-radius: 0.8em;
+    background: var(--color-background-hover);
+    border: 1px solid var(--color-background-border);
+}
+article table.docutils td {
+    overflow-wrap: anywhere;
+    font-size: 0.9em;
+}
+
 /* Wide reference tables scroll instead of overflowing on narrow screens. */
 article table.docutils {
     display: block;

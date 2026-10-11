@@ -13,6 +13,7 @@ fork and tracks its `develop` branch.
 
 | If you want to… | Read |
 |---|---|
+| see what MORIS computes | {doc}`examples/gallery` · {doc}`examples/catalog` |
 | build MORIS and run an example | {doc}`getting-started/index` |
 | write or debug an input deck | {doc}`user-guide/index` |
 | understand why a deck fails silently | {doc}`user-guide/interlinks` |
@@ -56,6 +57,14 @@ user-guide/modules
 user-guide/interlinks
 user-guide/deck-api-v2
 user-guide/workflow
+```
+
+```{toctree}
+:hidden:
+:caption: Gallery
+
+examples/gallery
+examples/catalog
 ```
 
 ```{toctree}

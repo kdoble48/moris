@@ -39,16 +39,19 @@ extensions = [
     "sphinx.ext.githubpages",
     "sphinx_copybutton",
     "moris_sphinx",
+    "exa_catalog",
 ]
 if USE_DOXYGEN:
     extensions.append("breathe")
 
 # moris_sphinx: render placeholder notes for Breathe directives without Doxygen XML
 moris_doxygen_available = USE_DOXYGEN
+# exa_catalog: the repository scanned for projects/EXA
+moris_source_dir = str(SOURCE_DIR)
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 root_doc = "index"
-exclude_patterns = ["_build", "_ext", "Thumbs.db", ".DS_Store", "README.md"]
+exclude_patterns = ["_build", "_ext", "**/_generated", "Thumbs.db", ".DS_Store", "README.md"]
 
 myst_enable_extensions = ["colon_fence", "deflist", "dollarmath", "fieldlist", "attrs_inline"]
 myst_heading_anchors = 3

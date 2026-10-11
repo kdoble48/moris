@@ -1,0 +1,13 @@
+{
+  "mbb_final.png": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/renders_v001/x9_final.png",
+  "mbb_frames.png": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/renders_v001/x9_frames.png",
+  "mbb_cheese_final.png": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/anims_v001/mbb_cheese_sdf_final.png",
+  "mbb_refinement.png": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/renders_v004/refinement_grid_rcp.png",
+  "mbb_adaptive.png": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/renders_v006/adaptive_L2_final.png",
+  "cantilever_bridge.png": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/renders_v005/slide15_rcp.png",
+  "lbracket_order.png": "/home/doble/moris_workspace/runs/benchmarks/plato_vs_torchtopo/renders/lbracket_ls_order_compare.png",
+  "boxbeam_3d.jpg": "/home/doble/moris_workspace/runs/studies/boxbeam_3d_frameless_lean/final_230.png",
+  "kirsch_order.png": "/home/doble/moris_workspace/runs/_validation/figures/kirsch_order_refine.png",
+  "hertz_profile.png": "/home/doble/moris_workspace/runs/studies/hertz_contact/figures/hertz_profile.png",
+  "mbb_evolution.webp": "/home/doble/moris_workspace/runs/studies/lunch_and_learn_xiga/renders_v001/x9_evolution.webp"
+}
