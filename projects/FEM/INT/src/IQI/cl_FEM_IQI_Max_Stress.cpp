@@ -34,6 +34,7 @@ namespace moris::fem
         mPropertyMap[ "ReferenceValue" ] = static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE );
         mPropertyMap[ "Exponent" ]       = static_cast< uint >( IQI_Property_Type::EXPONENT );
         mPropertyMap[ "Shift" ]          = static_cast< uint >( IQI_Property_Type::SHIFT );
+        mPropertyMap[ "KSParameter" ]    = static_cast< uint >( IQI_Property_Type::KS_PARAMETER );
 
         // set size for the constitutive model pointer cell
         mLeaderCM.resize( static_cast< uint >( IQI_Constitutive_Type::MAX_ENUM ), nullptr );
@@ -47,61 +48,8 @@ namespace moris::fem
     void
     IQI_Max_Stress::compute_QI( Matrix< DDRMat >& aQI )
     {
-        // check if dof index was set
-        if ( ( mLeaderDofTypes( 0 ).size() > 1 ) &&    //
-                ( mStressType != Stress_Type::VON_MISES_STRESS ) )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
-
-            MORIS_ERROR( mIQITypeIndex >= 0 && mIQITypeIndex <= 2,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
-        }
-
-        // initialize stress value
-        real tStressValue = 0.0;
-
-        // switch for different stress types
-        switch ( mStressType )
-        {
-            case Stress_Type::VON_MISES_STRESS:
-                tStressValue = this->eval_Von_Mises_stress();
-                break;
-
-            case Stress_Type::PRINCIPAL_STRESS:
-                tStressValue = this->eval_principal_stress( mIQITypeIndex + 1 );
-                break;
-
-            case Stress_Type::NORMAL_STRESS:
-                tStressValue = this->eval_normal_stress( mIQITypeIndex + 1 );
-                break;
-
-            case Stress_Type::SHEAR_STRESS:
-                tStressValue = this->eval_shear_stress( mIQITypeIndex + 1 );
-                break;
-
-            default:
-                MORIS_ERROR( false, "IQI_Max_Stress::compute_QI - Unknown Stress Type." );
-        }
-
-        // check if properties set
-        MORIS_ERROR( mLeaderProp( static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE ) ) != nullptr,
-                "IQI_Max_Stress - no reference value set" );
-
-        MORIS_ERROR( mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) ) != nullptr,
-                "IQI_Max_Stress - no exponent set" );
-
-        // get property values
-        real tRefValue = mLeaderProp( static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE ) )->val()( 0 );
-        real tExponent = mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) )->val()( 0 );
-
-        real tShift = 1.0;
-
-        if ( mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) ) != nullptr )
-            tShift = mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) )->val()( 0 );
-
         // evaluate the QI
-        aQI = { { std::pow( 1.0 / tRefValue * tStressValue - tShift, tExponent ) } };
+        aQI = { { this->eval_integrand( this->eval_stress_value() ) } };
     }
 
     //------------------------------------------------------------------------------
@@ -112,6 +60,60 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
+        // evaluate the QI
+        mSet->get_QI()( tQIIndex ) += aWStar * this->eval_integrand( this->eval_stress_value() );
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI_Max_Stress::compute_dQIdu( real aWStar )
+    {
+        MORIS_ERROR( mStressType == Stress_Type::VON_MISES_STRESS,
+                "IQI_Max_Stress::compute_dQIdu - analytic dQIdu is implemented for the von Mises stress only." );
+
+        // get index for QI
+        sint tQIIndex = mSet->get_QI_assembly_index( mName );
+
+        // get the elasticity CM
+        const std::shared_ptr< Constitutive_Model >& tCMElasticity =
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) );
+
+        // von Mises stress and its derivative wrt the CM flux components
+        real             tStressValue = this->eval_Von_Mises_stress();
+        Matrix< DDRMat > tdVMdFlux    = this->eval_dVonMisesdFlux( tStressValue );
+
+        // derivative of the integrand wrt the von Mises stress
+        real tdQIdVM = this->eval_dintegrand_dstress( tStressValue );
+
+        // get the number of leader dof type dependencies
+        uint tNumDofDependencies = mRequestedLeaderGlobalDofTypes.size();
+
+        for ( uint iDof = 0; iDof < tNumDofDependencies; iDof++ )
+        {
+            // get the treated dof type
+            const Vector< MSI::Dof_Type >& tDofType = mRequestedLeaderGlobalDofTypes( iDof );
+
+            // get leader index for residual dof type, indices for assembly
+            uint tLeaderDofIndex      = mSet->get_dof_index_for_type( tDofType( 0 ), mtk::Leader_Follower::LEADER );
+            uint tLeaderDepStartIndex = mSet->get_res_dof_assembly_map()( tLeaderDofIndex )( 0, 0 );
+            uint tLeaderDepStopIndex  = mSet->get_res_dof_assembly_map()( tLeaderDofIndex )( 0, 1 );
+
+            // if the elasticity CM depends on the dof type
+            if ( tCMElasticity->check_dof_dependency( tDofType ) )
+            {
+                mSet->get_residual()( tQIIndex )(
+                        { tLeaderDepStartIndex, tLeaderDepStopIndex } ) +=
+                        aWStar * tdQIdVM * trans( tCMElasticity->dFluxdDOF( tDofType ) ) * tdVMdFlux;
+            }
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    real
+    IQI_Max_Stress::eval_stress_value()
+    {
         // check if dof index was set
         if ( ( mLeaderDofTypes( 0 ).size() > 1 ) &&    //
                 ( mStressType != Stress_Type::VON_MISES_STRESS ) )
@@ -123,48 +125,147 @@ namespace moris::fem
                     "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
         }
 
-        // initialize stress value
-        real tStressValue = 0.0;
-
         // switch for different stress types
         switch ( mStressType )
         {
             case Stress_Type::VON_MISES_STRESS:
-                tStressValue = this->eval_Von_Mises_stress();
-                break;
+                return this->eval_Von_Mises_stress();
 
             case Stress_Type::PRINCIPAL_STRESS:
-                tStressValue = this->eval_principal_stress( mIQITypeIndex + 1 );
-                break;
+                return this->eval_principal_stress( mIQITypeIndex + 1 );
 
             case Stress_Type::NORMAL_STRESS:
-                tStressValue = this->eval_normal_stress( mIQITypeIndex + 1 );
-                break;
+                return this->eval_normal_stress( mIQITypeIndex + 1 );
 
             case Stress_Type::SHEAR_STRESS:
-                tStressValue = this->eval_shear_stress( mIQITypeIndex + 1 );
-                break;
+                return this->eval_shear_stress( mIQITypeIndex + 1 );
 
             default:
                 MORIS_ERROR( false, "IQI_Max_Stress::compute_QI - Unknown Stress Type." );
+                return 0.0;
         }
+    }
 
+    //------------------------------------------------------------------------------
+
+    void
+    IQI_Max_Stress::get_aggregation_parameters(
+            real& aRefValue,
+            real& aExponent,
+            real& aShift,
+            real& aKSParameter )
+    {
         // check if properties set
         MORIS_ERROR( mLeaderProp( static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE ) ) != nullptr,
                 "IQI_Max_Stress - no reference value set" );
 
-        MORIS_ERROR( mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) ) != nullptr,
-                "IQI_Max_Stress - no exponent set" );
+        const std::shared_ptr< Property >& tPropKS = mLeaderProp( static_cast< uint >( IQI_Property_Type::KS_PARAMETER ) );
 
-        // get property values
-        real tRefValue = mLeaderProp( static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE ) )->val()( 0 );
-        real tExponent = mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) )->val()( 0 );
-        real tShift    = 1.0;
+        // the exponent is required by the P-norm form only
+        MORIS_ERROR( tPropKS != nullptr || mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) ) != nullptr,
+                "IQI_Max_Stress - no exponent set (needed unless KSParameter is set)" );
+
+        aRefValue = mLeaderProp( static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE ) )->val()( 0 );
+
+        aExponent = 0.0;
+        if ( mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) ) != nullptr )
+        {
+            aExponent = mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) )->val()( 0 );
+        }
+
+        aShift = 1.0;
         if ( mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) ) != nullptr )
-            tShift = mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) )->val()( 0 );
+        {
+            aShift = mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) )->val()( 0 );
+        }
 
-        // evaluate the QI
-        mSet->get_QI()( tQIIndex ) += aWStar * ( std::pow( 1.0 / tRefValue * tStressValue - tShift, tExponent ) );
+        // KS parameter rho > 0 selects the Kreisselmeier-Steinhauser integrand; 0 = P-norm integrand
+        aKSParameter = 0.0;
+        if ( tPropKS != nullptr )
+        {
+            aKSParameter = tPropKS->val()( 0 );
+            MORIS_ERROR( aKSParameter > 0.0, "IQI_Max_Stress - KSParameter must be positive, got %e", aKSParameter );
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    real
+    IQI_Max_Stress::eval_integrand( real aStressValue )
+    {
+        real tRefValue, tExponent, tShift, tKS;
+        this->get_aggregation_parameters( tRefValue, tExponent, tShift, tKS );
+
+        if ( tKS > 0.0 )
+        {
+            // shifted KS integrand exp( rho ( sigma / sigma_ref - shift ) ); with the default shift = 1 it is <= 1
+            // wherever sigma <= sigma_ref, so the integral cannot overflow at a feasible design
+            return std::exp( tKS * ( aStressValue / tRefValue - tShift ) );
+        }
+
+        // P-norm integrand ( sigma / sigma_ref - shift )^p
+        return std::pow( aStressValue / tRefValue - tShift, tExponent );
+    }
+
+    //------------------------------------------------------------------------------
+
+    real
+    IQI_Max_Stress::eval_dintegrand_dstress( real aStressValue )
+    {
+        real tRefValue, tExponent, tShift, tKS;
+        this->get_aggregation_parameters( tRefValue, tExponent, tShift, tKS );
+
+        if ( tKS > 0.0 )
+        {
+            return tKS / tRefValue * std::exp( tKS * ( aStressValue / tRefValue - tShift ) );
+        }
+
+        return tExponent / tRefValue * std::pow( aStressValue / tRefValue - tShift, tExponent - 1.0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat >
+    IQI_Max_Stress::eval_dVonMisesdFlux( real aVonMises )
+    {
+        // standardized stress vector ( s11, s22, s33, s23, s13, s12 )
+        Matrix< DDRMat > tS = this->get_stress_vector();
+
+        // d sigma_vm / d s_i in the standardized ordering
+        Matrix< DDRMat > tdVMdS( 6, 1, 0.0 );
+        if ( aVonMises > MORIS_REAL_EPS )
+        {
+            real tScale = 0.5 / aVonMises;
+            tdVMdS( 0 ) = tScale * ( 2.0 * tS( 0 ) - tS( 1 ) - tS( 2 ) );
+            tdVMdS( 1 ) = tScale * ( 2.0 * tS( 1 ) - tS( 2 ) - tS( 0 ) );
+            tdVMdS( 2 ) = tScale * ( 2.0 * tS( 2 ) - tS( 0 ) - tS( 1 ) );
+            tdVMdS( 3 ) = tScale * 6.0 * tS( 3 );
+            tdVMdS( 4 ) = tScale * 6.0 * tS( 4 );
+            tdVMdS( 5 ) = tScale * 6.0 * tS( 5 );
+        }
+
+        // map back to the CM flux components (inverse of get_stress_vector)
+        uint tNumStressComponents =
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux().length();
+        switch ( tNumStressComponents )
+        {
+            // 2D plane stress
+            case 3:
+                return { { tdVMdS( 0 ) }, { tdVMdS( 1 ) }, { tdVMdS( 5 ) } };
+
+            // 2D plane strain
+            case 4:
+                return { { tdVMdS( 0 ) }, { tdVMdS( 1 ) }, { tdVMdS( 2 ) }, { tdVMdS( 5 ) } };
+
+            // 3D
+            case 6:
+                return tdVMdS;
+
+            default:
+                MORIS_ERROR( false,
+                        "IQI_Max_Stress::eval_dVonMisesdFlux - CM stress vector of unknown size; 3, 4 or 6 components expected." );
+                return tdVMdS;
+        }
     }
 
     //------------------------------------------------------------------------------
