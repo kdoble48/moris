@@ -788,6 +788,12 @@ namespace moris::opt
 
         Moris_ROL_AL_Objective tALObjective( this, tLambda, tRho, tTypes );
 
+        // per-outer radius floor: the immersed response has small discontinuities (cut-topology / snapping events) that
+        // the ratio test cannot step across once the radius has collapsed; restarting each outer at no less than this
+        // floor lets the next inner solve take steps whose predicted decrease exceeds the jump. Read from the XML
+        // ("Step" / "Trust Region" / "MORIS Minimum Outer Radius"), default 1e-8 x initial_tr_radius (= no floor).
+        const real tRadiusFloor = tParameterList.sublist( "Step" ).sublist( "Trust Region" ).get( "MORIS Minimum Outer Radius", 1.0e-8 * mInitialTRRadius );
+
         real tRadius = mInitialTRRadius;
         bool tBudget = false;
         uint tOuter  = 0;
@@ -805,7 +811,7 @@ namespace moris::opt
                 tAlgorithm->run( tX, tALObjective, *tBounds, std::cout );
                 tInnerIterations = tAlgorithm->getState()->iter;
                 tGNorm           = tAlgorithm->getState()->gnorm;
-                tRadius          = std::max( tAlgorithm->getState()->searchSize, 1.0e-8 * mInitialTRRadius );
+                tRadius          = std::max( tAlgorithm->getState()->searchSize, tRadiusFloor );
             }
             catch ( const ROL_Budget_Exhausted& )
             {
