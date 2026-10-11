@@ -1237,10 +1237,25 @@ namespace moris::opt
                     (int)iter, innerit, (int)mMaxInnerIter, tConservative ? ", conservative" : ", NOT conservative (cap reached)",
                     nfunc - tNumFuncAtStart );
 
+            // SDF taper: tell the workflow about the accepted iterate (its step from the committed design, before any
+            // redistance) so that it can wean the in-place redistance off
+            if ( mReinitHook )
+            {
+                Vector< real > tPrevious( mNumVar );
+                Vector< real > tAccepted( mNumVar );
+                for ( int i = 0; i < mNumVar; ++i )
+                {
+                    tPrevious( i ) = xval[ i ];
+                    tAccepted( i ) = xmma[ i ];
+                }
+                mProblem->notify_accepted_iterate( tPrevious, tAccepted );
+            }
+
             // accept-only redistance: the trials were evaluated at the raw design; redistance the accepted xmma once and
             // re-evaluate there, so that the committed design, its criteria and (below) its gradient all belong to
             // phi = R(xmma). The trial criteria are no longer needed: f0valnew/fvalnew are overwritten with those at phi.
-            if ( this->accept_only_redistance() )
+            // (skipped once the redistance is tapered off: the trial evaluation at xmma is then the committed one)
+            if ( this->accept_only_redistance() && mProblem->is_reinit_active() )
             {
                 const real            tF0Psi = f0valnew;
                 std::vector< double > tFPsi  = fvalnew;

@@ -17,6 +17,8 @@
 #include "cl_Tracer.hpp"
 #include "cl_Logger.hpp"
 #include "cl_MTK_Mesh_Pair.hpp"
+#include "cl_MTK_Interpolation_Mesh.hpp"
+#include "cl_Communication_Tools.hpp"
 
 #include "cl_MTK_Field.hpp"
 #include "cl_MTK_Field_Discrete.hpp"
@@ -109,11 +111,18 @@ namespace moris::wrk
         // Wean-off tolerance on the reinit's relative change to the field
         mWeanTol = tOPTParameterList( 0 )( 0 ).get< real >( "sdf_reinit_wean_tol" );
 
+        // in-place taper: patience (consecutive accepted iterates below the tolerance) and hard cutoff
+        mWeanPatience = (uint)std::max( 1, (int)tOPTParameterList( 0 )( 0 ).get< sint >( "sdf_reinit_wean_patience" ) );
+        mStopIter     = (uint)std::max( 0, (int)tOPTParameterList( 0 )( 0 ).get< sint >( "sdf_reinit_stop_iter" ) );
+
         // Redistance every iteration in-place (no GCMMA restart); smooth every reinit_freq
         mReinitEveryStep = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_reinit_every_step" );
 
         // footprint diagnostics of the in-place redistance
         mDiagnostics = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_reinit_diagnostics" );
+
+        // interface-preserving in-place redistance (freeze every coefficient that can reach a cut cell)
+        mPreserveInterface = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_preserve_interface" );
 
         mADVFiledName = tMORISParameterList( 2 )( 0 ).get< std::string >( "adv_field" );
         
@@ -820,22 +829,17 @@ namespace moris::wrk
     //------------------------------------------------------------------------------
 
     Vector< Vector< moris_index > >
-    Reinitialize_Performer::get_cell_coefficients( Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer ) const
+    Reinitialize_Performer::cell_coefficients( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex )
     {
-        std::shared_ptr< mtk::Field > tField     = find_adv_field( aGENPerformer, mADVFiledName );
-        mtk::Mesh_Pair                tMeshPair  = tField->get_mesh_pair();
-        mtk::Interpolation_Mesh*      tMesh      = tMeshPair.get_interpolation_mesh();
-        uint                          tDiscIndex = (uint)tField->get_discretization_mesh_index();
-
-        uint                            tNumCells = tMesh->get_num_elems();
+        uint                            tNumCells = aMesh->get_num_elems();
         Vector< Vector< moris_index > > tCellCoefficients( tNumCells );
         for ( uint iCell = 0; iCell < tNumCells; iCell++ )
         {
-            Matrix< IndexMat >      tNodes = tMesh->get_nodes_connected_to_element_loc_inds( (moris_index)iCell );
+            Matrix< IndexMat >      tNodes = aMesh->get_nodes_connected_to_element_loc_inds( (moris_index)iCell );
             std::set< moris_index > tUnion;
             for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
             {
-                Matrix< IndexMat > tCoefficients = tMesh->get_coefficient_indices_of_node( (uint)tNodes( iNode ), tDiscIndex );
+                Matrix< IndexMat > tCoefficients = aMesh->get_coefficient_indices_of_node( (uint)tNodes( iNode ), aDiscretizationIndex );
                 for ( uint iC = 0; iC < tCoefficients.numel(); iC++ )
                 {
                     tUnion.insert( tCoefficients( iC ) );
@@ -853,21 +857,14 @@ namespace moris::wrk
     //------------------------------------------------------------------------------
 
     Matrix< DDRMat >
-    Reinitialize_Performer::get_nodal_values(
-            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
-            const Matrix< DDRMat >&                            aCoeffs ) const
+    Reinitialize_Performer::nodal_values( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex, const Matrix< DDRMat >& aCoeffs )
     {
-        std::shared_ptr< mtk::Field > tField     = find_adv_field( aGENPerformer, mADVFiledName );
-        mtk::Mesh_Pair                tMeshPair  = tField->get_mesh_pair();
-        mtk::Interpolation_Mesh*      tMesh      = tMeshPair.get_interpolation_mesh();
-        uint                          tDiscIndex = (uint)tField->get_discretization_mesh_index();
-
-        uint             tNumNodes = tMesh->get_num_nodes();
+        uint             tNumNodes = aMesh->get_num_nodes();
         Matrix< DDRMat > tValues( tNumNodes, 1, 0.0 );
         for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
         {
-            const Matrix< DDRMat >& tT            = tMesh->get_t_matrix_of_node_loc_ind( iNode, tDiscIndex );
-            Matrix< IndexMat >      tCoefficients = tMesh->get_coefficient_indices_of_node( iNode, tDiscIndex );
+            const Matrix< DDRMat >& tT            = aMesh->get_t_matrix_of_node_loc_ind( iNode, aDiscretizationIndex );
+            Matrix< IndexMat >      tCoefficients = aMesh->get_coefficient_indices_of_node( iNode, aDiscretizationIndex );
             real                    tValue        = 0.0;
             for ( uint iC = 0; iC < tCoefficients.numel(); iC++ )
             {
@@ -876,6 +873,145 @@ namespace moris::wrk
             tValues( iNode ) = tValue;
         }
         return tValues;
+    }
+
+    //------------------------------------------------------------------------------
+
+    uint
+    Reinitialize_Performer::freeze_interface_band(
+            Matrix< DDRMat >&                      aNewCoeffs,
+            const Matrix< DDRMat >&                aOldCoeffs,
+            const Vector< Vector< moris_index > >& aCellCoefficients,
+            real                                   aTolerance,
+            uint&                                  aRings )
+    {
+        MORIS_ERROR( aNewCoeffs.numel() == aOldCoeffs.numel(),
+                "Reinitialize_Performer::freeze_interface_band: %zu new vs %zu old coefficients.",
+                (size_t)aNewCoeffs.numel(), (size_t)aOldCoeffs.numel() );
+
+        uint                tNumCells = aCellCoefficients.size();
+        std::vector< bool > tFrozen( aOldCoeffs.numel(), false );
+        std::vector< int >  tCellSign( tNumCells, 0 );    // +1 / -1: psi strictly signed on the cell, 0: possibly cut
+
+        // 1. possibly cut cells (psi coefficients not all of one strict sign): freeze all their coefficients
+        for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+        {
+            const Vector< moris_index >& tCoeffs = aCellCoefficients( iCell );
+            bool                         tAllPos = tCoeffs.size() > 0;
+            bool                         tAllNeg = tCoeffs.size() > 0;
+            for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+            {
+                real tValue = aOldCoeffs( tCoeffs( iC ) );
+                tAllPos     = tAllPos && tValue > aTolerance;
+                tAllNeg     = tAllNeg && tValue < -aTolerance;
+            }
+            tCellSign[ iCell ] = tAllPos ? 1 : ( tAllNeg ? -1 : 0 );
+            if ( tCellSign[ iCell ] == 0 )
+            {
+                for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+                {
+                    tFrozen[ tCoeffs( iC ) ] = true;
+                }
+            }
+        }
+
+        // 2. strictly signed cells must stay strictly signed with the same sign; grow the frozen set until they do
+        aRings = 0;
+        bool tChanged = true;
+        while ( tChanged )
+        {
+            tChanged = false;
+            for ( uint iC = 0; iC < aOldCoeffs.numel(); iC++ )
+            {
+                if ( tFrozen[ iC ] )
+                {
+                    aNewCoeffs( iC ) = aOldCoeffs( iC );
+                }
+            }
+            for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+            {
+                if ( tCellSign[ iCell ] == 0 )
+                {
+                    continue;
+                }
+                const Vector< moris_index >& tCoeffs = aCellCoefficients( iCell );
+                bool                         tOk     = true;
+                for ( uint iC = 0; iC < tCoeffs.size() && tOk; iC++ )
+                {
+                    real tValue = aNewCoeffs( tCoeffs( iC ) );
+                    tOk         = tCellSign[ iCell ] > 0 ? tValue > aTolerance : tValue < -aTolerance;
+                }
+                if ( !tOk )
+                {
+                    for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+                    {
+                        if ( !tFrozen[ tCoeffs( iC ) ] )
+                        {
+                            tFrozen[ tCoeffs( iC ) ] = true;
+                            tChanged                 = true;
+                        }
+                    }
+                }
+            }
+            aRings += tChanged ? 1 : 0;
+        }
+
+        uint tNumFrozen = 0;
+        for ( uint iC = 0; iC < aOldCoeffs.numel(); iC++ )
+        {
+            tNumFrozen += tFrozen[ iC ] ? 1 : 0;
+        }
+        return tNumFrozen;
+    }
+
+    //------------------------------------------------------------------------------
+
+    uint
+    Reinitialize_Performer::preserve_interface(
+            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+            const Matrix< DDRMat >&                            aOldCoeffs,
+            Matrix< DDRMat >&                                  aNewCoeffs ) const
+    {
+        MORIS_ERROR( par_size() == 1, "sdf_preserve_interface: the in-place redistance is serial only." );
+
+        std::shared_ptr< mtk::Field > tField    = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair = tField->get_mesh_pair();
+
+        // strict-sign tolerance: GEN's default isocontour_tolerance, so no free coefficient lands where GEN would
+        // treat a node as on the interface
+        uint tRings  = 0;
+        uint tFrozen = freeze_interface_band(
+                aNewCoeffs,
+                aOldCoeffs,
+                cell_coefficients( tMeshPair.get_interpolation_mesh(), (uint)tField->get_discretization_mesh_index() ),
+                1.0e-12,
+                tRings );
+
+        MORIS_LOG_INFO( "SDF redistance preserves the interface: %u of %u coefficients frozen (%u growth passes)",
+                tFrozen, (uint)aOldCoeffs.numel(), tRings );
+        return tFrozen;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Vector< Vector< moris_index > >
+    Reinitialize_Performer::get_cell_coefficients( Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer ) const
+    {
+        std::shared_ptr< mtk::Field > tField    = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair = tField->get_mesh_pair();
+        return cell_coefficients( tMeshPair.get_interpolation_mesh(), (uint)tField->get_discretization_mesh_index() );
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat >
+    Reinitialize_Performer::get_nodal_values(
+            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+            const Matrix< DDRMat >&                            aCoeffs ) const
+    {
+        std::shared_ptr< mtk::Field > tField    = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair = tField->get_mesh_pair();
+        return nodal_values( tMeshPair.get_interpolation_mesh(), (uint)tField->get_discretization_mesh_index(), aCoeffs );
     }
 
     //------------------------------------------------------------------------------

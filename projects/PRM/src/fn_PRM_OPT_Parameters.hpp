@@ -80,6 +80,15 @@ namespace moris::prm
         // 0 = disabled (always reinitialize on schedule).
         tParameterList.insert( "sdf_reinit_wean_tol", 0.0 );
 
+        // In-place (every-step) mode: the wean test is the optimizer's own step between ACCEPTED iterates,
+        // ||psi_k - x_{k-1}|| / ||x_{k-1}|| (psi_k = accepted subproblem solution, x_{k-1} = committed design; the redistance
+        // itself is not counted), and the redistance stops once it stays below sdf_reinit_wean_tol for this many
+        // consecutive accepted iterations.
+        tParameterList.insert( "sdf_reinit_wean_patience", 3 );
+
+        // In-place mode: hard cutoff, no redistance after this many accepted iterations (0 = off)
+        tParameterList.insert( "sdf_reinit_stop_iter", 0 );
+
         // Number of Laplacian smoothing iterations to apply after SDF reinitialization
         // 0 = disabled (default), 2-5 for aggressive smoothing to remove thin features
         tParameterList.insert( "sdf_smoothing_iterations", 0 );
@@ -99,6 +108,11 @@ namespace moris::prm
         // diagnostics for the in-place redistance: log its footprint on every application (max |delta coefficient| on
         // the coefficients that touch cut cells and elsewhere, nodal sign flips, cut cells changed)
         tParameterList.insert( "sdf_reinit_diagnostics", false );
+
+        // interface-preserving in-place redistance (MB-027): coefficients whose support reaches a possibly cut cell keep
+        // their value, only the rest is replaced by the projected SDF, so the cut is bit-identical and repeated
+        // redistances do not drift the criteria. The band can grow until every other cell keeps a strict sign.
+        tParameterList.insert( "sdf_preserve_interface", false );
 
         // Gradient-explosion clip: cap each objective/constraint gradient entry at
         // grad_clip_factor x the median of the nonzero |entries| (the active-sensitivity

@@ -12,6 +12,8 @@
 #define SRC_cl_WRK_Reinitialize_Performer
 
 #include <memory>
+#include <string>
+#include <algorithm>
 #include "cl_Parameter_List.hpp"
 #include "cl_Matrix.hpp"
 #include "cl_Library_IO.hpp"
@@ -29,6 +31,7 @@ namespace moris
         class Field;
         class Mesh_Manager;
         class Mesh;
+        class Interpolation_Mesh;
     }    // namespace mtk
 
     namespace MSI
@@ -56,6 +59,47 @@ namespace moris
         /**
          * @brief Mode for SDF reinitialization
          */
+        /**
+         * Taper of the in-place SDF redistance (sdf_reinit_wean_tol / _patience / sdf_reinit_stop_iter), fed once per
+         * ACCEPTED optimizer iterate with the relative design change of that iterate. Pure, so it is unit-tested alone.
+         */
+        struct SDF_Wean_Monitor
+        {
+            real        mTol       = 0.0;    ///< relative-change threshold (<= 0: no tolerance test)
+            uint        mPatience  = 3;      ///< consecutive accepted iterates below mTol needed
+            uint        mStopIter  = 0;      ///< hard cutoff in accepted iterates (0: off)
+            uint        mAccepted  = 0;      ///< accepted iterates seen
+            uint        mBelow     = 0;      ///< current run of consecutive iterates below mTol
+            bool        mWeaned    = false;
+            std::string mReason;
+
+            /** record one accepted iterate; returns true once weaned off (sticky) */
+            bool
+            update( real aRelativeChange )
+            {
+                if ( mWeaned )
+                {
+                    return true;
+                }
+                mAccepted++;
+                if ( mTol > 0.0 )
+                {
+                    mBelow = aRelativeChange < mTol ? mBelow + 1 : 0;
+                    if ( mBelow >= std::max( mPatience, (uint)1 ) )
+                    {
+                        mWeaned = true;
+                        mReason = "relative design change below sdf_reinit_wean_tol for " + std::to_string( mBelow ) + " accepted iterates";
+                    }
+                }
+                if ( !mWeaned && mStopIter > 0 && mAccepted >= mStopIter )
+                {
+                    mWeaned = true;
+                    mReason = "sdf_reinit_stop_iter reached (" + std::to_string( mAccepted ) + " accepted iterates)";
+                }
+                return mWeaned;
+            }
+        };
+
         enum class ReinitMode
         {
             FIELD_REMAP,     ///< Original: remap solution field to target mesh
@@ -97,9 +141,12 @@ namespace moris
             real mSmoothingLambda = 0.5;  ///< Laplacian smoothing strength (0.0-1.0)
             bool mInitializeAtStart = false;  ///< Reinit once at the first iteration to start from a true SDF
             real mWeanTol = 0.0;              ///< Wean-off tolerance on the reinit's relative change (0 = disabled)
+            uint mWeanPatience = 3;           ///< in-place mode: consecutive accepted iterates below mWeanTol
+            uint mStopIter     = 0;           ///< in-place mode: no redistance after this many accepted iterates (0 = off)
             bool mLastReinitBelowWeanTol = false;  ///< Set when the most recent reinit's change fell below mWeanTol
             bool mReinitEveryStep = false;    ///< Redistance every iteration in-place (no restart); smooth every reinit_freq
             bool mDiagnostics     = false;    ///< sdf_reinit_diagnostics: log the footprint of every in-place redistance
+            bool mPreserveInterface = false;  ///< sdf_preserve_interface: keep every coefficient that can reach a cut cell
 
           public:
             //------------------------------------------------------------------------------
@@ -252,6 +299,17 @@ namespace moris
             real
             get_wean_tol() const { return mWeanTol; }
 
+            /** in-place taper: a monitor configured from sdf_reinit_wean_tol / _wean_patience / _stop_iter */
+            SDF_Wean_Monitor
+            create_wean_monitor() const
+            {
+                SDF_Wean_Monitor tMonitor;
+                tMonitor.mTol      = mWeanTol;
+                tMonitor.mPatience = mWeanPatience;
+                tMonitor.mStopIter = mStopIter;
+                return tMonitor;
+            }
+
             //------------------------------------------------------------------------------
 
             /**
@@ -261,6 +319,56 @@ namespace moris
              */
             bool
             get_reinit_every_step() const { return mReinitEveryStep; }
+
+            /** sdf_preserve_interface: whether the in-place redistance freezes the coefficients near the interface */
+            bool
+            get_preserve_interface() const { return mPreserveInterface; }
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * Interface-preserving redistance (sdf_preserve_interface, MB-027). Given the design coefficients before
+             * (aOldCoeffs = psi) and after (aNewCoeffs = R(psi)) a redistance, reset to psi every coefficient that can
+             * change the cut, so that the cut geometry is bit-identical:
+             *  1. "possibly cut" cells: cells whose psi coefficients do not all have one strict sign (|c| > aTolerance).
+             *     By the convex-hull property of B-splines (nonnegative partition of unity) every other cell has a
+             *     strictly signed field, so this is a superset of the cells any cut test (nodal, multilinear or
+             *     cell order) can intersect. All coefficients nonzero on these cells are frozen (support radius: the
+             *     (p+1)^d basis functions of each such cell, i.e. p cells around it);
+             *  2. every other cell must keep a strict sign: all its new coefficients must have the cell's psi sign and
+             *     |c| > aTolerance; otherwise its coefficients are frozen too, and the check repeats (a frozen
+             *     coefficient changes its neighbours) until no cell violates it.
+             * A frozen cell evaluates bit-identical nodal values (same coefficients, same T-matrices); a strictly
+             * signed cell stays uncut. Returns the number of frozen coefficients; aRings = number of growth passes.
+             * Pure function of its arguments (aCellCoefficients: see cell_coefficients()).
+             */
+            static uint
+            freeze_interface_band(
+                    Matrix< DDRMat >&                      aNewCoeffs,
+                    const Matrix< DDRMat >&                aOldCoeffs,
+                    const Vector< Vector< moris_index > >& aCellCoefficients,
+                    real                                   aTolerance,
+                    uint&                                  aRings );
+
+            /** cell -> design coefficient indices nonzero on the cell (union of its nodes' T-matrix indices) */
+            static Vector< Vector< moris_index > >
+            cell_coefficients( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex );
+
+            /** Lagrange nodal values sum_k T_nk c_k on aMesh for coefficients aCoeffs */
+            static Matrix< DDRMat >
+            nodal_values( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex, const Matrix< DDRMat >& aCoeffs );
+
+            /**
+             * sdf_preserve_interface: apply freeze_interface_band() to the redistanced coefficients aNewCoeffs on the
+             * ADV field's own mesh and discretization; logs the frozen count. Serial only.
+             */
+            uint
+            preserve_interface(
+                    Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+                    const Matrix< DDRMat >&                            aOldCoeffs,
+                    Matrix< DDRMat >&                                  aNewCoeffs ) const;
+
+            //------------------------------------------------------------------------------
 
             /** sdf_reinit_diagnostics: whether to log the footprint of every in-place redistance */
             bool

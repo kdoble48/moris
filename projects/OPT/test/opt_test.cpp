@@ -1187,6 +1187,90 @@ namespace moris::opt
     }
 
     //------------------------------------------------------------------------------------------------------------------
+    // SDF taper hooks: the optimizer reports every accepted iterate (previous committed design, accepted subproblem
+    // solution) to the interface, and in accept-only mode stops spending the accept evaluation once the interface
+    // reports the redistance inactive.
+
+    /** Suppressible far-field interface whose redistance tapers off after mActiveFor accepted iterates. */
+    class Interface_Tapering_Redistance : public Interface_Suppressible_Redistance
+    {
+      public:
+        uint                               mActiveFor = 3;
+        std::vector< std::vector< real > > mNotifiedPrevious;
+        std::vector< std::vector< real > > mNotifiedAccepted;
+
+        void
+        notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted ) override
+        {
+            std::vector< real > tPrev( aPrevious.size() ), tAcc( aAccepted.size() );
+            for ( uint iADV = 0; iADV < aPrevious.size(); iADV++ )
+            {
+                tPrev[ iADV ] = aPrevious( iADV );
+                tAcc[ iADV ]  = aAccepted( iADV );
+            }
+            mNotifiedPrevious.push_back( tPrev );
+            mNotifiedAccepted.push_back( tAcc );
+        }
+
+        bool
+        is_reinit_active() const override
+        {
+            return mNotifiedAccepted.size() <= mActiveFor;    // active for the first mActiveFor accepted iterates
+        }
+    };
+
+    TEST_CASE( "Native GCMMA reports accepted iterates and skips the accept redistance once tapered off", "[optimization][sdf_taper]" )
+    {
+        Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "max_its", 8 );
+        tAlgorithmParameterList.set( "max_inner_its", 5 );
+        tAlgorithmParameterList.set( "step_size", 0.3 );
+        tAlgorithmParameterList.set( "reinit_in_place", true );
+        tAlgorithmParameterList.set( "reinit_on_accept_only", true );
+
+        std::shared_ptr< Interface_Tapering_Redistance > tInterface = std::make_shared< Interface_Tapering_Redistance >();
+
+        std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                tProblemParameterList,
+                tInterface,
+                &get_constraint_types_rosenbrock,
+                &compute_objectives_rosenbrock,
+                &compute_constraints_rosenbrock,
+                &compute_dobjective_dadv_rosenbrock_farfield,
+                &compute_dobjective_dcriteria_rosenbrock,
+                &compute_dconstraint_dadv_rosenbrock_farfield,
+                &compute_dconstraint_dcriteria_rosenbrock );
+        tProblem->initialize();
+
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+        }
+
+        if ( par_rank() == 0 )
+        {
+            // one notification per accepted outer iteration
+            REQUIRE( tInterface->mNotifiedAccepted.size() == 8 );
+
+            // the accepted iterate is the raw trial that preceded each accept evaluation, and the previous design is the
+            // committed (redistanced) one, i.e. differs from the raw accepted point in the far field while active
+            uint tRedistanced = 0;
+            for ( uint iCall = 1; iCall < tInterface->mSuppressed.size(); iCall++ )
+            {
+                tRedistanced += tInterface->mSuppressed[ iCall ] ? 0 : 1;
+            }
+
+            // the accept evaluation runs only while the interface reports the redistance active: 3 accepted iterates
+            CHECK( tRedistanced == tInterface->mActiveFor );
+
+            // after the taper every evaluation is a raw trial
+            CHECK( tInterface->mSuppressed.back() );
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
     // Failed evaluations (MB-023, MB-024) and SWEEP finite-difference modes (MB-025), on the one-variable quadratic
     // f(x) = 100 (x - 0.45)^2 started at x = 0.5. A failed evaluation is modelled as a NaN criterion, the signature
     // of an XTK decomposition failure.

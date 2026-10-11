@@ -113,6 +113,23 @@ namespace moris::opt
             return mReinitSuppressed;
         }
 
+        /**
+         * Called by the native MMA (rank 0) once per ACCEPTED iterate, before it is redistanced: aPrevious is the
+         * committed design of the previous iteration, aAccepted the accepted subproblem solution. Used by the workflow
+         * to taper the in-place SDF redistance. Default: nothing.
+         */
+        virtual void
+        notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted )
+        {
+        }
+
+        /** false once the in-place redistance has been tapered off (the optimizer then skips the accept evaluation) */
+        virtual bool
+        is_reinit_active() const
+        {
+            return true;
+        }
+
         void
         set_reinitialize_iter( uint aReinitializeIter )
         {

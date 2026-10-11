@@ -176,6 +176,18 @@ namespace moris::opt
             mInterface->set_reinit_suppressed( aSuppressed );
         }
 
+        /** forward an accepted iterate to the interface (SDF taper) */
+        void notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted )
+        {
+            mInterface->notify_accepted_iterate( aPrevious, aAccepted );
+        }
+
+        /** whether the in-place redistance is still active (not tapered off) */
+        bool is_reinit_active() const
+        {
+            return mInterface->is_reinit_active();
+        }
+
         /**
          * Checks that the constraints are given in the correct order (equality constraints first)
          *
