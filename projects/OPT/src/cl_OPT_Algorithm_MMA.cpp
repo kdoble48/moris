@@ -194,11 +194,105 @@ namespace moris::opt
     //------------------------------------------------------------------------------
 
     bool
+    Algorithm_MMA::all_finite( real aF0, const std::vector< double >& aF ) const
+    {
+        if ( !std::isfinite( aF0 ) ) return false;
+        for ( int j = 0; j < mNumCon; ++j )
+            if ( !std::isfinite( aF[ j ] ) ) return false;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
     Algorithm_MMA::criteria_finite() const
     {
-        if ( !std::isfinite( f0valnew ) ) return false;
+        return this->all_finite( f0valnew, fvalnew );
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::is_conservative() const
+    {
+        if ( ( f0app + epsimin ) < f0valnew ) return false;
         for ( int j = 0; j < mNumCon; ++j )
-            if ( !std::isfinite( fvalnew[ j ] ) ) return false;
+            if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) return false;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Algorithm_MMA::Trial_Status
+    Algorithm_MMA::backtrack_non_finite( int aIter, int& aNumFunc )
+    {
+        // NaN guard: a non-finite trial criterion means the forward evaluation failed -- almost
+        // always an XTK decomposition failure where the moving interface's cut spans two HMR
+        // refinement levels ("not all child meshes on the same level"), which poisons every IQI
+        // integral (including the geometric volume/perimeter). Reject the step and shrink the
+        // move limit, re-solving until the criteria are finite. As the move limit -> 0 the trial
+        // design -> xval, which was finite when committed.
+        int       tBacktrack    = 0;
+        const int tMaxBacktrack = 15;
+        while ( !this->criteria_finite() && tBacktrack < tMaxBacktrack )
+        {
+            tBacktrack++;
+            mMoveScale *= 0.5;
+            MORIS_LOG_INFO( "Native MMA iter %d: non-finite criteria -- likely XTK decomposition failure "
+                            "(interface cut spans different HMR refinement levels). Rejecting step; "
+                            "move limit x%.4g (backtrack %d/%d).",
+                    aIter, mMoveScale, tBacktrack, tMaxBacktrack );
+            this->gcmmasub( aIter );
+            this->func( xmma.data(), f0valnew, fvalnew );
+            aNumFunc++;
+
+            if ( mProblem->restart_optimization() )
+            {
+                MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during backtrack; exiting solve loop.", aIter );
+                return Trial_Status::restart;
+            }
+        }
+
+        if ( !this->criteria_finite() )
+        {
+            MORIS_LOG_INFO( "Native MMA iter %d: criteria still non-finite after %d backtracks.", aIter, tMaxBacktrack );
+            return Trial_Status::failed;
+        }
+
+        // keep the (possibly shrunk) move limit for the rest of this outer iteration;
+        // it is reset to 1.0 at the top of the next one.
+        return Trial_Status::finite;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::restore_accepted_state( int aIter, int& aNumFunc )
+    {
+        MORIS_LOG_INFO( "Native MMA iter %d: rejecting the iteration; re-evaluating the accepted design to restore "
+                        "the problem state.",
+                aIter );
+
+        // evaluate into scratch criteria: the optimizer's own f0val/fval for xval stay as committed (in reinit mode
+        // the restore evaluates R(xval), so the Problem holds that redistance with criteria consistent with it)
+        real                  tF0 = 0.0;
+        std::vector< double > tF( mNumCon, 0.0 );
+        this->func( xval.data(), tF0, tF );
+        aNumFunc++;
+
+        if ( mProblem->restart_optimization() )
+        {
+            MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested while restoring; exiting solve loop.", aIter );
+            return false;
+        }
+
+        // the accepted design evaluated finite when it was committed; failing now means the evaluation is not
+        // reproducible. Fail loudly (nonzero exit for the run sentinels) rather than iterate on an unevaluable design
+        MORIS_ERROR( this->all_finite( tF0, tF ),
+                "Native MMA iter %d: the accepted design no longer evaluates to finite criteria; restart from the last "
+                "checkpoint.",
+                aIter );
+
         return true;
     }
 
@@ -978,70 +1072,55 @@ namespace moris::opt
                 return istop;
             }
 
-            // NaN guard: a non-finite trial criterion means the forward evaluation failed -- almost
-            // always an XTK decomposition failure where the moving interface's cut spans two HMR
-            // refinement levels ("not all child meshes on the same level"), which poisons every IQI
-            // integral (including the geometric volume/perimeter). Reject the step and shrink the
-            // move limit, re-solving until the criteria are finite. This is guaranteed to recover:
-            // as the move limit -> 0 the trial design -> xval, which was finite when committed.
-            int tBacktrack          = 0;
-            const int tMaxBacktrack = 15;
-            while ( !this->criteria_finite() && tBacktrack < tMaxBacktrack )
+            // NaN guard on the first trial (see backtrack_non_finite)
+            Trial_Status tTrialStatus = this->backtrack_non_finite( iter, nfunc );
+            if ( tTrialStatus == Trial_Status::restart )
             {
-                tBacktrack++;
-                mMoveScale *= 0.5;
-                MORIS_LOG_INFO( "Native MMA iter %d: non-finite criteria -- likely XTK decomposition failure "
-                                "(interface cut spans different HMR refinement levels). Rejecting step; "
-                                "move limit x%.4g (backtrack %d/%d).",
-                        (int)iter, mMoveScale, tBacktrack, tMaxBacktrack );
+                return istop;
+            }
+
+            bool tConservative = tTrialStatus == Trial_Status::finite && this->is_conservative();
+
+            int innerit = 0;
+            while ( tTrialStatus == Trial_Status::finite && !tConservative && innerit < mMaxInnerIter )
+            {
+                innerit++;
+                this->raaupdate();
                 this->gcmmasub( iter );
                 this->func( xmma.data(), f0valnew, fvalnew );
                 nfunc++;
 
                 if ( mProblem->restart_optimization() )
                 {
-                    MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during backtrack; exiting solve loop.", (int)iter );
+                    MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during inner iteration; exiting solve loop.", (int)iter );
                     return istop;
                 }
-            }
-            if ( !this->criteria_finite() )
-            {
-                // could not recover: hold the previous (finite) design and continue
-                MORIS_LOG_INFO( "Native MMA iter %d: criteria still non-finite after %d backtracks; "
-                                "holding previous design and continuing.",
-                        (int)iter, tMaxBacktrack );
-                continue;
-            }
-            // keep the (possibly shrunk) move limit for the conservatism loop this iteration;
-            // it is reset to 1.0 at the top of the next outer iteration.
 
-            int conserv = 1;
-            if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
-            for ( int j = 0; j < mNumCon; ++j )
-                if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) conserv = 0;
-
-            int innerit = 0;
-            if ( conserv == 0 )
-            {
-                while ( conserv == 0 && innerit < mMaxInnerIter )
+                // a failed inner trial must not reach the conservatism test: NaN comparisons are false, so it
+                // would pass as conservative and be committed and differentiated (MB-023)
+                tTrialStatus = this->backtrack_non_finite( iter, nfunc );
+                if ( tTrialStatus == Trial_Status::restart )
                 {
-                    innerit++;
-                    this->raaupdate();
-                    this->gcmmasub( iter );
-                    this->func( xmma.data(), f0valnew, fvalnew );
-                    nfunc++;
-
-                    if ( mProblem->restart_optimization() )
-                    {
-                        MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during inner iteration; exiting solve loop.", (int)iter );
-                        return istop;
-                    }
-
-                    conserv = 1;
-                    if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
-                    for ( int j = 0; j < mNumCon; ++j )
-                        if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) conserv = 0;
+                    return istop;
                 }
+                if ( tTrialStatus == Trial_Status::failed )
+                {
+                    break;
+                }
+
+                tConservative = this->is_conservative();
+            }
+
+            if ( tTrialStatus == Trial_Status::failed )
+            {
+                // could not recover: hold the previous (finite) design. The failed evaluations overwrote the
+                // shared Problem state, so re-evaluate xval before continuing; the Manager reads that state (MB-024)
+                if ( !this->restore_accepted_state( iter, nfunc ) )
+                {
+                    return istop;    // restart requested
+                }
+                MORIS_LOG_INFO( "Native MMA iter %d: holding previous design and continuing.", (int)iter );
+                continue;
             }
 
             // advance design. In reinit mode commit the redistanced design (mLastRedistanced holds
