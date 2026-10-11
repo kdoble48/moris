@@ -31,7 +31,7 @@ Env must be active first (see above). Builds are out-of-source (in-source is blo
 (release) and `build_dbg/` (debug) already exist.
 
 ```bash
-cd build_opt && ninja -j4                              # incremental — prefer this; full builds are slow
+cd build_opt && ninja -j1                              # incremental; always -j1 (shared 30 GB box + run queue; see .claude/skills/build-moris/build-rules.md)
 ctest -j2 --output-on-failure                          # all tests (Catch2)
 ctest -L XTK --output-on-failure                       # by label (label == package name)
 ./projects/XTK/test/bin/XTK-test.exe "[ENRICH_1]" -s   # one test by Catch2 tag — fastest dev loop
