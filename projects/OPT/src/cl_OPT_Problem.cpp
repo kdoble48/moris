@@ -289,6 +289,13 @@ namespace moris::opt
             MORIS_ASSERT( mConstraintGradient.n_rows() == mNumConstraints and mConstraintGradient.n_cols() == mADVs.size(),
                     "Problem::compute_design_criteria_gradients  - gradient of constraint matrix has incorrect size.\n." );
 
+            // Re-evaluate the constraint values at this (accepted) design from the cached criteria. A user-defined
+            // problem may hold state that is updated when gradients are requested, i.e. once per outer iteration
+            // (e.g. the adaptive stress normalization c_k of Le et al. 2010, which must stay fixed within an MMA
+            // iteration incl. its inner conservative trials); the constraint values used to build the next subproblem
+            // must then use the same state as their gradients. For a stateless problem this is idempotent.
+            mConstraints = this->compute_constraints();
+
             // ----- Gradient explosion detection and per-ADV clipping -----
             real tObjGradNorm = norm( mObjectiveGradient );
             real tConGradNorm = norm( mConstraintGradient );

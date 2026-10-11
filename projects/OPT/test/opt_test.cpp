@@ -1285,4 +1285,123 @@ namespace moris::opt
             }
         }
     }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Stateful constraint (adaptive normalization): a user-defined problem whose constraint scale c changes once per
+    // outer iteration, at the gradient call (the deck pattern of Le et al. 2010's c_k = sigma_max / sigma_PN). The
+    // constraint value the optimizer holds for the accepted design must be evaluated with the same c as its gradient.
+    // f(x) = 100 (x - 0.45)^2, g(x) = c x - 0.8 with c = 1 + (number of gradient calls) / 10, x0 = 0.5.
+
+    namespace stateful_constraint
+    {
+        int  mGradientCalls = 0;
+        real mScale         = 1.0;
+
+        void
+        initialize(
+                Vector< real >& aADVs,
+                Vector< real >& aLowerBounds,
+                Vector< real >& aUpperBounds )
+        {
+            aADVs        = { 0.5 };
+            aLowerBounds = { 0.0 };
+            aUpperBounds = { 1.0 };
+        }
+
+        Vector< real >
+        get_criteria( const Vector< real >& aADVs )
+        {
+            return { 100.0 * std::pow( aADVs( 0 ) - 0.45, 2 ), aADVs( 0 ) };
+        }
+
+        Matrix< DDRMat >
+        get_dcriteria_dadv( const Vector< real >& aADVs )
+        {
+            return { { 200.0 * ( aADVs( 0 ) - 0.45 ) }, { 1.0 } };
+        }
+
+        Matrix< DDSMat >
+        get_constraint_types()
+        {
+            return { { 1 } };
+        }
+
+        Matrix< DDRMat >
+        compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { aCriteria( 0 ) } };
+        }
+
+        Matrix< DDRMat >
+        compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { mScale * aCriteria( 1 ) - 0.8 } };
+        }
+
+        Matrix< DDRMat >
+        zero_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 0.0 } };
+        }
+
+        Matrix< DDRMat >
+        compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return { { 1.0, 0.0 } };
+        }
+
+        Matrix< DDRMat >
+        compute_dconstraint_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            // the state update happens here, once per outer iteration, before this iteration's gradient
+            mGradientCalls++;
+            mScale = 1.0 + 0.1 * mGradientCalls;
+            return { { 0.0, mScale } };
+        }
+    }    // namespace stateful_constraint
+
+    TEST_CASE( "Native MMA re-evaluates the constraints at the gradient call", "[optimization][stateful_constraint]" )
+    {
+        if ( par_rank() == 0 )
+        {
+            stateful_constraint::mGradientCalls = 0;
+            stateful_constraint::mScale         = 1.0;
+            failed_evaluation::remove_restart_files();
+
+            Parameter_List                        tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+            std::shared_ptr< Criteria_Interface > tInterface            = std::make_shared< Interface_User_Defined >(
+                    &stateful_constraint::initialize, &stateful_constraint::get_criteria, &stateful_constraint::get_dcriteria_dadv );
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &stateful_constraint::get_constraint_types,
+                    &stateful_constraint::compute_objectives,
+                    &stateful_constraint::compute_constraints,
+                    &stateful_constraint::zero_dadv,
+                    &stateful_constraint::compute_dobjective_dcriteria,
+                    &stateful_constraint::zero_dadv,
+                    &stateful_constraint::compute_dconstraint_dcriteria );
+            tProblem->initialize();
+
+            Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+            tAlgorithmParameterList.set( "max_its", 3 );
+            tAlgorithmParameterList.set( "max_inner_its", 3 );
+            tAlgorithmParameterList.set( "step_size", 0.3 );
+
+            Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+            {
+                Tracer tTracer( "OPT", "Manager", "Perform" );
+                tAlgorithm.solve( 0, tProblem );
+            }
+
+            // the scale changed at every outer iteration
+            REQUIRE( stateful_constraint::mGradientCalls >= 2 );
+
+            // the stored constraint of the last accepted design uses the current scale (the one its gradient used)
+            const real tX = tProblem->get_advs()( 0 );
+            CHECK( tProblem->get_constraints()( 0 ) == Approx( stateful_constraint::mScale * tX - 0.8 ) );
+
+            failed_evaluation::remove_restart_files();
+        }
+    }
 }    // namespace moris::opt

@@ -189,6 +189,12 @@ namespace moris::opt
         for ( int i = 0; i < mNumVar; ++i ) df0dx[ i ] = mObjScale * tObjGrad( 0, i );
         for ( int j = 0; j < mNumCon; ++j )
             for ( int i = 0; i < mNumVar; ++i ) dfdx[ j ][ i ] = tConGrad( j, i );
+
+        // constraint values re-evaluated by the Problem at the gradient call (stateful user problems, e.g. an adaptive
+        // stress normalization updated once per outer iteration): keep the subproblem's constraint values consistent
+        // with these gradients. Identical to the stored values for a stateless problem.
+        const Matrix< DDRMat >& tCon = this->get_constraints();
+        for ( int j = 0; j < mNumCon; ++j ) fval[ j ] = tCon( j );
     }
 
     //------------------------------------------------------------------------------
