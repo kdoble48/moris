@@ -88,8 +88,10 @@ SHOWCASE_MARK = "exa::pick("   # decks with a showcase setting (projects/EXA/run
 RUN_OUTPUTS = re.compile(r"(\.exo|\.e-s\.|^ADV_Alg_|^Parameter_Receipt|\.log$|^xtk_temp)")
 
 
-def showcase_capable(example: dict) -> bool:
-    return any(SHOWCASE_MARK in (ROOT / deck).read_text(errors="replace") for deck in example["decks"])
+def showcase_capable(example: dict, source_root: Path = ROOT) -> bool:
+    """Whether the example's decks, in the source tree the build compiles, call exa::pick()."""
+    decks = [source_root / deck for deck in example["decks"]]
+    return any(d.exists() and SHOWCASE_MARK in d.read_text(errors="replace") for d in decks)
 
 
 def run_inputs(build_dir: Path, source_dir: Path) -> list[Path]:
@@ -102,10 +104,22 @@ def run_inputs(build_dir: Path, source_dir: Path) -> list[Path]:
                   if p.is_file() and (p.suffix == ".so" or (p.name in source_names and not RUN_OUTPUTS.search(p.name))))
 
 
+def input_names(source_dir: Path) -> list[str]:
+    """Data files of an example's source directory that CMake copies next to the deck (not sources)."""
+    if not source_dir.exists():
+        return []
+    skip = {".cpp", ".hpp", ".txt", ".dox", ".md", ".py", ".m"}
+    return sorted(p.name for p in source_dir.iterdir() if p.is_file() and p.suffix not in skip)
+
+
 def showcase_job(example: dict, build: Path, runner: Path, runs_dir: Path) -> str:
-    """A low-priority XIGA queue job: run the example's full (showcase) optimization in its own directory."""
+    """A low-priority XIGA queue job: run the example's full (showcase) optimization in its own directory.
+
+    The inputs are resolved when the job runs (the build job queued ahead of it creates ``bin/``)."""
     bin_dir = build / example["directory"] / "bin"
-    inputs = " ".join(f"'{p}'" for p in run_inputs(bin_dir, ROOT / example["directory"]))
+    data = " ".join(f"'{name}'" for name in input_names(ROOT / example["directory"]))
+    copy = (f"cp '{bin_dir}'/*.so .\n"
+            + (f"for f in {data}; do [ -f '{bin_dir}'/\"$f\" ] && cp '{bin_dir}'/\"$f\" .; done\n" if data else ""))
     run_dir = runs_dir / example["leaf"]
     return (f"# Docs gallery: full showcase run of {example['leaf']} (MORIS_EXA_MODE=showcase) — "
             f"low priority, renders only; output {run_dir}\n"
@@ -114,7 +128,7 @@ def showcase_job(example: dict, build: Path, runner: Path, runs_dir: Path) -> st
             f"source '{ENV_SCRIPT}'\n"
             f"[ -d '{MKL_LIB}' ] && export LD_LIBRARY_PATH=\"${{LD_LIBRARY_PATH:-}}:{MKL_LIB}\"\n"
             f"rm -rf '{run_dir}' && mkdir -p '{run_dir}' && cd '{run_dir}'\n"
-            f"cp {inputs} .\n"
+            f"{copy}"
             f"# the example's regression reference checks fail on a full-length run; the output is what counts\n"
             f"MORIS_EXA_MODE=showcase OMP_NUM_THREADS=1 nice -n 19 '{runner}' '[EXA_{example['name']}]' "
             f"> run.log 2>&1 || true\n"
@@ -129,7 +143,8 @@ def queue_showcase(build: Path, runner: Path, runs_dir: Path, queue: Path, only:
     pending = queue / "pending"
     written = []
     for example in collect_examples(ROOT):
-        if (only and example["leaf"] not in only) or not showcase_capable(example):
+        # the build tree's own sources decide (a showcase branch may not be the docs checkout)
+        if (only and example["leaf"] not in only) or not showcase_capable(example, build.parent):
             continue
         job = pending / f"zz_gallery_{example['leaf']}.sh"
         job.write_text(showcase_job(example, build, runner, runs_dir), encoding="utf-8")
@@ -306,7 +321,7 @@ def main(argv=None) -> int:
     if args.queue_showcase:
         runner = args.runner or args.build.resolve() / "projects" / "EXA" / "runner" / "bin" / "EXA-test.exe"
         if not runner.exists():
-            ap.error(f"EXA runner not found: {runner}")
+            print(f"note: {runner} does not exist yet; queue its build ahead of these jobs")
         if not args.showcase_runs:
             ap.error("--showcase-runs is required when MORIS_RUNS_DIR is not set")
         jobs = queue_showcase(args.build.resolve(), runner, args.showcase_runs.resolve(), args.queue, args.only)

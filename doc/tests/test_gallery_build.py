@@ -30,8 +30,10 @@ def test_run_inputs_and_showcase_job(tmp_path):
         (build / name).write_text("")
     assert [p.name for p in bg.run_inputs(build, source)] == ["Deck.so", "Voxel_file.hdf5", "mesh.e"]
 
+    assert bg.input_names(source) == ["Voxel_file.hdf5", "mesh.e"]
     example = {"leaf": "Deck_Example", "name": "Deck_Example", "directory": "projects/EXA/x/Deck_Example"}
     job = bg.showcase_job(example, tmp_path / "build_opt", tmp_path / "EXA-test.exe", tmp_path / "runs")
+    assert "/projects/EXA/x/Deck_Example/bin'/*.so ." in job
     assert job.startswith("# Docs gallery: full showcase run of Deck_Example")
     assert "# mem: 2\n" in job
     assert "MORIS_EXA_MODE=showcase OMP_NUM_THREADS=1 nice -n 19" in job
