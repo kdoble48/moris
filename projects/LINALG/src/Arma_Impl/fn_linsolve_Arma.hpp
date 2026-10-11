@@ -20,7 +20,9 @@
 
 namespace moris
 {
-#ifdef MORIS_HAVE_DEBUG
+    // note: the aSolver string is currently IGNORED (kept for API compatibility);
+    // debug and opt builds deliberately use the SAME (default, accuracy-checked)
+    // algorithm - they previously diverged silently (plain vs solve_opts::fast)
     template< typename ET >
     auto
     solve( const ET&           aA,
@@ -30,17 +32,6 @@ namespace moris
     {
         return arma::solve( aA, aB );
     }
-#else
-    template< typename ET >
-    auto
-    solve( const ET&           aA,
-            const ET&          aB,
-            const std::string& aSolver = "default" )
-            -> decltype( arma::solve( aA, aB, arma::solve_opts::fast  ) )
-    {
-        return arma::solve( aA, aB, arma::solve_opts::fast );
-    }
-#endif
     //    template< typename ET >
     //    auto
     //    solve( const sparse_Mat          & aA,

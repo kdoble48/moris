@@ -88,6 +88,46 @@ namespace moris::mtk
         Matrix< DDRMat > get_weights() const;
 
         //------------------------------------------------------------------------------
+        /**
+         * get the space-only integration points as a (d x n) matrix
+         **/
+        const Matrix< DDRMat >&
+        get_space_points() const
+        {
+            return mSpacePoints;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * get the space-only integration weights as a (1 x n) matrix
+         **/
+        const Matrix< DDRMat >&
+        get_space_weights() const
+        {
+            return mSpaceWeights;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * get the time-only integration points as a (1 x n) matrix
+         **/
+        const Matrix< DDRMat >&
+        get_time_points() const
+        {
+            return mTimePoints;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * get the time-only integration weights as a (1 x n) matrix
+         **/
+        const Matrix< DDRMat >&
+        get_time_weights() const
+        {
+            return mTimeWeights;
+        }
+
+        //------------------------------------------------------------------------------
 
     };    // class Integrator
 

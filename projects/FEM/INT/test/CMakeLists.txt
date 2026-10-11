@@ -39,6 +39,7 @@ set(TEST_SOURCES
     #UT_FEM_Element.cpp
     UT_FEM_Property.cpp
     UT_FEM_IWG.cpp
+    UT_FEM_Moment_Fitting.cpp
     
     UT_FEM_CM.cpp
     UT_FEM_Presets.cpp

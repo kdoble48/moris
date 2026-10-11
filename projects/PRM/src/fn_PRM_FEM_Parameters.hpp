@@ -308,6 +308,17 @@ namespace moris::prm
         // determine the maximum ray length in the positive direction. This prevents mapping of elements that are too far apart to be even considered as neighbors.
         tParameterList.insert( "nonconformal_max_positive_ray_length", 0.1 );
 
+        // bool true to use moment-fitted cut-cell quadrature on non-trivial (cut) bulk cell clusters;
+        // candidate points are the cluster's tessellation Gauss points, weights are fitted by NNLS
+        // to the tessellation's moments; per-cluster fallback to the tessellated rule on fit failure
+        tParameterList.insert( "use_moment_fitting", false );
+
+        // total polynomial degree of the moment-fitting basis (total-degree Legendre products)
+        tParameterList.insert( "moment_fitting_degree", (uint)4 );
+
+        // relative moment residual ||Aw-b||/||b|| above which a cluster keeps the tessellated rule
+        tParameterList.insert( "moment_fitting_tolerance", 1e-10 );
+
         // bool true for analytical sensitivity analysis, false for finite difference
         // decide if dRdp and dQIdp are computed by A/FD
         tParameterList.insert( "is_analytical_sensitivity", false );
