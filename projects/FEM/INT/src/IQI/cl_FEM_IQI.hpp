@@ -802,6 +802,21 @@ namespace moris::fem
                 Matrix< DDSMat >&             aGeoLocalAssembly,
                 Vector< Matrix< IndexMat > >& aVertexIndices );
 
+        /**
+         * evaluate the derivative of the quantity of interest wrt to geometry dv
+         * by finite difference for a bulk element, sweeping all integration points
+         * of the set inside; each perturbed configuration (nodal coordinate
+         * perturbation + inverse map + interpolator update) is built once per
+         * element instead of once per integration point
+         * @param[ in ] aPerturbation     pdv relative perturbation size
+         * @param[ in ] aFDSchemeType     enum for FD scheme
+         * @param[ in ] aGeoLocalAssembly matrix filled with pdv local assembly indices
+         */
+        void compute_dQIdp_FD_geometry_elementwise_bulk(
+                moris::real        aPerturbation,
+                fem::FDScheme_Type aFDSchemeType,
+                Matrix< DDSMat >&  aGeoLocalAssembly );
+
         void select_dQIdp_FD_geometry_sideset(
                 moris::real                   aWStar,
                 moris::real                   aPerturbation,

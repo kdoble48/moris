@@ -3116,6 +3116,327 @@ namespace moris::fem
     //------------------------------------------------------------------------------
 
     void
+    IWG::compute_dRdp_FD_geometry_elementwise_bulk(
+            moris::real        aPerturbation,
+            fem::FDScheme_Type aFDSchemeType,
+            Matrix< DDSMat >&  aGeoLocalAssembly )
+    {
+        // storage residual value
+        Matrix< DDRMat > tResidualStore = mSet->get_residual()( 0 );
+
+        // get the field interpolator manager
+        Field_Interpolator_Manager* tFIManager = mSet->get_field_interpolator_manager();
+
+        // get the GI for the IG and IP element considered
+        Geometry_Interpolator* tIGGI = tFIManager->get_IG_geometry_interpolator();
+        Geometry_Interpolator* tIPGI = tFIManager->get_IP_geometry_interpolator();
+
+        // get the residual dof type index in the set
+        uint tResDofIndex         = mSet->get_dof_index_for_type( mResidualDofType( 0 )( 0 ), mtk::Leader_Follower::LEADER );
+        uint tResDofAssemblyStart = mSet->get_res_dof_assembly_map()( tResDofIndex )( 0, 0 );
+        uint tResDofAssemblyStop  = mSet->get_res_dof_assembly_map()( tResDofIndex )( 0, 1 );
+        uint tNumResRows          = tResDofAssemblyStop - tResDofAssemblyStart + 1;
+
+        // get number of leader GI bases and space dimensions
+        uint tDerNumBases      = tIGGI->get_number_of_space_bases();
+        uint tDerNumDimensions = tIPGI->get_number_of_space_dimensions();
+
+        // coefficients for dv type wrt which derivative is computed
+        Matrix< DDRMat > tCoeff      = tIGGI->get_space_coeff();          // get nodal coordinates of integration element
+        Matrix< DDRMat > tParamCoeff = tIGGI->get_space_param_coeff();    // get IP natural coordinate of integration nodes
+
+        // get the integration rule of the set
+        uint                    tNumGPs       = mSet->get_number_of_integration_points();
+        const Matrix< DDRMat >& tIntegPoints  = mSet->get_integration_points();
+        const Matrix< DDRMat >& tIntegWeights = mSet->get_integration_weights();
+
+        // pre-scan the FD scheme and step size for each active pdv; both depend
+        // only on the unperturbed nodal coordinates, i.e. they are GP independent
+        Matrix< DDRMat >             tDeltaHMat( tDerNumBases, tDerNumDimensions, 0.0 );
+        Vector< fem::FDScheme_Type > tUsedFDSchemeTypes( tDerNumBases * tDerNumDimensions, aFDSchemeType );
+        bool                         tUseUnperturbedResidual = false;
+
+        for ( uint iCoeffCol = 0; iCoeffCol < tDerNumDimensions; iCoeffCol++ )
+        {
+            for ( uint iCoeffRow = 0; iCoeffRow < tDerNumBases; iCoeffRow++ )
+            {
+                // if pdv is active
+                if ( aGeoLocalAssembly( iCoeffRow, iCoeffCol ) != -1 )
+                {
+                    // provide adapted perturbation and FD scheme considering ip element boundaries
+                    fem::FDScheme_Type tUsedFDSchemeType = aFDSchemeType;
+
+                    // compute step size and change FD scheme if needed
+                    tDeltaHMat( iCoeffRow, iCoeffCol ) = this->check_ig_coordinates_inside_ip_element(
+                            aPerturbation,
+                            tCoeff( iCoeffRow, iCoeffCol ),
+                            iCoeffCol,
+                            tUsedFDSchemeType );
+
+                    tUsedFDSchemeTypes( iCoeffCol * tDerNumBases + iCoeffRow ) = tUsedFDSchemeType;
+
+                    // one-sided schemes need the unperturbed residual contribution
+                    tUseUnperturbedResidual = tUseUnperturbedResidual                                          //
+                                           || ( tUsedFDSchemeType == fem::FDScheme_Type::POINT_1_BACKWARD )    //
+                                           || ( tUsedFDSchemeType == fem::FDScheme_Type::POINT_1_FORWARD );
+                }
+            }
+        }
+
+        // pre-scan the integration points on the unperturbed configuration:
+        // active points (detJ above threshold, as in the per-GP assembly loop),
+        // reconstructed integration weights, and, if needed, the per-GP
+        // unperturbed residual (kept per GP so that the final accumulation
+        // into dRdp reproduces the per-GP addition order bit-identically)
+        Vector< uint > tActiveGPs;
+        tActiveGPs.reserve( tNumGPs );
+        Matrix< DDRMat > tGPWStar( tNumGPs, 1, 0.0 );
+        Matrix< DDRMat > tGPWeight( tNumGPs, 1, 0.0 );
+        Matrix< DDRMat > tResidualUnpertGP;
+
+        if ( tUseUnperturbedResidual )
+        {
+            tResidualUnpertGP.set_size( tNumResRows, tNumGPs, 0.0 );
+        }
+
+        // scratch for extracting the residual rows of this IWG
+        Matrix< DDRMat > tResidualExtract;
+
+        for ( uint iGP = 0; iGP < tNumGPs; iGP++ )
+        {
+            // set evaluation point for interpolators (FIs and GIs)
+            tFIManager->set_space_time_from_local_IG_point( tIntegPoints.get_column( iGP ) );
+
+            // compute detJ of integration domain
+            real tDetJ = tIGGI->det_J();
+
+            // skip if detJ smaller than threshold
+            if ( tDetJ < Geometry_Interpolator::sDetJInvJacLowerLimit )
+            {
+                continue;
+            }
+
+            tActiveGPs.push_back( iGP );
+            tGPWStar( iGP ) = tIntegWeights( iGP ) * tDetJ;
+
+            // reconstruct the integration weight as aWStar / detJ to keep the
+            // FD arithmetic bit-identical to the per-GP path
+            tGPWeight( iGP ) = tGPWStar( iGP ) / tDetJ;
+
+            // reset and evaluate the residual for the unperturbed case
+            if ( tUseUnperturbedResidual )
+            {
+                this->reset_eval_flags();
+                mSet->get_residual()( 0 ).fill( 0.0 );
+                this->compute_residual( tGPWStar( iGP ) );
+                tResidualExtract = mSet->get_residual()( 0 )(
+                        { tResDofAssemblyStart, tResDofAssemblyStop },
+                        { 0, 0 } );
+                tResidualUnpertGP.get_column( iGP ) = tResidualExtract.matrix_data();
+            }
+        }
+
+        // if all integration points are degenerate there is nothing to assemble
+        if ( tActiveGPs.empty() )
+        {
+            // reset the coefficients values and the value of the residual
+            tIGGI->set_space_coeff( tCoeff );
+            tIGGI->set_space_param_coeff( tParamCoeff );
+            mSet->get_residual()( 0 ) = tResidualStore;
+            return;
+        }
+
+        // init scratch for perturbed configurations
+        Matrix< DDRMat >         tCoeffPert;
+        Matrix< DDRMat >         tParamCoeffPert;
+        Vector< Vector< real > > tFDScheme;
+
+        // storage for the perturbed residuals: per pdv, per FD point, one
+        // residual column per integration point
+        Vector< Vector< Matrix< DDRMat > > > tResidualPert( tDerNumBases * tDerNumDimensions );
+
+        // sweep the perturbed configurations: each configuration (nodal
+        // coordinate perturbation + inverse map + interpolator update) is GP
+        // independent and hence built only once per element, with the
+        // integration point loop inside
+        for ( uint iCoeffCol = 0; iCoeffCol < tDerNumDimensions; iCoeffCol++ )
+        {
+            // loop over the IG nodes
+            for ( uint iCoeffRow = 0; iCoeffRow < tDerNumBases; iCoeffRow++ )
+            {
+                // get the geometry pdv assembly index
+                sint tPdvAssemblyIndex = aGeoLocalAssembly( iCoeffRow, iCoeffCol );
+
+                // if pdv is active
+                if ( tPdvAssemblyIndex != -1 )
+                {
+                    // get the pre-scanned FD scheme and step size
+                    uint               tPdvFlatIndex     = iCoeffCol * tDerNumBases + iCoeffRow;
+                    fem::FDScheme_Type tUsedFDSchemeType = tUsedFDSchemeTypes( tPdvFlatIndex );
+                    real               tDeltaH           = tDeltaHMat( iCoeffRow, iCoeffCol );
+
+                    // finalize FD scheme
+                    fd_scheme( tUsedFDSchemeType, tFDScheme );
+                    uint tNumFDPoints = tFDScheme( 0 ).size();
+
+                    // set starting point for FD
+                    uint tStartPoint = 0;
+
+                    // if backward or forward the unperturbed contribution is used
+                    if ( ( tUsedFDSchemeType == fem::FDScheme_Type::POINT_1_BACKWARD ) ||    //
+                            ( tUsedFDSchemeType == fem::FDScheme_Type::POINT_1_FORWARD ) )
+                    {
+                        // skip first point in FD
+                        tStartPoint = 1;
+                    }
+
+                    // allocate storage for the perturbed residuals of this pdv
+                    tResidualPert( tPdvFlatIndex ).resize( tNumFDPoints );
+
+                    // loop over point of FD scheme
+                    for ( uint iPoint = tStartPoint; iPoint < tNumFDPoints; iPoint++ )
+                    {
+                        // reset and perturb the coefficients, i.e. the nodal
+                        // coordinates of the integration element
+                        tCoeffPert = tCoeff;
+                        tCoeffPert( iCoeffRow, iCoeffCol ) += tFDScheme( 0 )( iPoint ) * tDeltaH;
+
+                        // setting the perturbed coefficients
+                        tIGGI->set_space_coeff( tCoeffPert );
+
+                        // update natural coordinates of IG nodes in IP element
+                        Matrix< DDRMat > tXCoords  = tCoeffPert.get_row( iCoeffRow );
+                        Matrix< DDRMat > tXiCoords = tParamCoeff.get_row( iCoeffRow );
+
+                        tIPGI->update_parametric_coordinates( tXCoords, tXiCoords );
+
+                        tParamCoeffPert                      = tParamCoeff;
+                        tParamCoeffPert.get_row( iCoeffRow ) = tXiCoords.matrix_data();
+                        tIGGI->set_space_param_coeff( tParamCoeffPert );
+
+                        // storage for the perturbed residuals at all integration points
+                        Matrix< DDRMat >& tResidualPertGP = tResidualPert( tPdvFlatIndex )( iPoint );
+                        tResidualPertGP.set_size( tNumResRows, tNumGPs, 0.0 );
+
+                        // sweep the integration points on the perturbed configuration
+                        for ( uint iGP : tActiveGPs )
+                        {
+                            // set evaluation point for interpolators (FIs and GIs)
+                            tFIManager->set_space_time_from_local_IG_point( tIntegPoints.get_column( iGP ) );
+
+                            // reset properties, CM and SP for IWG
+                            this->reset_eval_flags();
+
+                            // reset and evaluate the residual plus
+                            mSet->get_residual()( 0 ).fill( 0.0 );
+                            real tWStarPert = tGPWeight( iGP ) * tIGGI->det_J();
+                            this->compute_residual( tWStarPert );
+
+                            // store the residual of this integration point
+                            tResidualExtract = mSet->get_residual()( 0 )(
+                                    { tResDofAssemblyStart, tResDofAssemblyStop },
+                                    { 0, 0 } );
+                            tResidualPertGP.get_column( iGP ) = tResidualExtract.matrix_data();
+                        }
+                    }
+                }
+            }
+        }
+
+        // assemble the FD contributions into dRdp in the same order as the
+        // per-GP path (integration point outer, pdv and FD point inner) so that
+        // the accumulated dRdp is bit-identical to the per-GP evaluation
+        for ( uint iGP : tActiveGPs )
+        {
+            // loop over the spatial directions
+            for ( uint iCoeffCol = 0; iCoeffCol < tDerNumDimensions; iCoeffCol++ )
+            {
+                // loop over the IG nodes
+                for ( uint iCoeffRow = 0; iCoeffRow < tDerNumBases; iCoeffRow++ )
+                {
+                    // get the geometry pdv assembly index
+                    sint tPdvAssemblyIndex = aGeoLocalAssembly( iCoeffRow, iCoeffCol );
+
+                    // if pdv is active
+                    if ( tPdvAssemblyIndex != -1 )
+                    {
+                        // get the pre-scanned FD scheme and step size
+                        uint               tPdvFlatIndex     = iCoeffCol * tDerNumBases + iCoeffRow;
+                        fem::FDScheme_Type tUsedFDSchemeType = tUsedFDSchemeTypes( tPdvFlatIndex );
+                        real               tDeltaH           = tDeltaHMat( iCoeffRow, iCoeffCol );
+
+                        // finalize FD scheme
+                        fd_scheme( tUsedFDSchemeType, tFDScheme );
+                        uint tNumFDPoints = tFDScheme( 0 ).size();
+
+                        // set starting point for FD
+                        uint tStartPoint = 0;
+
+                        // if backward or forward add unperturbed contribution
+                        if ( ( tUsedFDSchemeType == fem::FDScheme_Type::POINT_1_BACKWARD ) ||    //
+                                ( tUsedFDSchemeType == fem::FDScheme_Type::POINT_1_FORWARD ) )
+                        {
+                            // add unperturbed residual contribution to dRdp
+                            tResidualExtract = tResidualUnpertGP.get_column( iGP );
+                            mSet->get_drdpgeo()(
+                                    { tResDofAssemblyStart, tResDofAssemblyStop },
+                                    { tPdvAssemblyIndex, tPdvAssemblyIndex } ) +=
+                                    tFDScheme( 1 )( 0 ) * tResidualExtract / ( tFDScheme( 2 )( 0 ) * tDeltaH );
+
+                            // skip first point in FD
+                            tStartPoint = 1;
+                        }
+
+                        // loop over point of FD scheme
+                        for ( uint iPoint = tStartPoint; iPoint < tNumFDPoints; iPoint++ )
+                        {
+                            // add the perturbed residual contribution to dRdp
+                            tResidualExtract = tResidualPert( tPdvFlatIndex )( iPoint ).get_column( iGP );
+                            mSet->get_drdpgeo()(
+                                    { tResDofAssemblyStart, tResDofAssemblyStop },
+                                    { tPdvAssemblyIndex, tPdvAssemblyIndex } ) +=
+                                    tFDScheme( 1 )( iPoint ) * tResidualExtract / ( tFDScheme( 2 )( 0 ) * tDeltaH );
+                        }
+                    }
+                }
+            }
+        }
+
+        // reset the coefficients values
+        tIGGI->set_space_coeff( tCoeff );
+        tIGGI->set_space_param_coeff( tParamCoeff );
+
+        // reset the value of the residual
+        mSet->get_residual()( 0 ) = tResidualStore;
+
+        // add contribution of cluster measures to dRdp, per integration point
+        // as in the per-GP path
+        if ( mActiveCMEAFlag )
+        {
+            for ( uint iGP : tActiveGPs )
+            {
+                // set evaluation point for interpolators (FIs and GIs)
+                tFIManager->set_space_time_from_local_IG_point( tIntegPoints.get_column( iGP ) );
+
+                // reset properties, CM and SP for IWG
+                this->reset_eval_flags();
+
+                // add their contribution to dRdp
+                this->add_cluster_measure_dRdp_FD_geometry(
+                        tGPWStar( iGP ),
+                        aPerturbation,
+                        aFDSchemeType );
+            }
+        }
+
+        // check for nan, infinity
+        MORIS_ASSERT( isfinite( mSet->get_drdpgeo() ),
+                "IWG::compute_dRdp_FD_geometry_elementwise_bulk - dRdp contains NAN or INF, exiting!" );
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
     IWG::select_dRdp_FD_geometry_sideset(
             moris::real                   aWStar,
             moris::real                   aPerturbation,
