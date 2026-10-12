@@ -80,6 +80,25 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * analytical geometric sensitivities are always available (the density is held fixed in space)
+         */
+        bool supports_analytical_dQIdp_geometry() override;
+
+        //------------------------------------------------------------------------------
+        /**
+         * derivatives of the QI contribution wrt the evaluation point location, at fixed weight
+         * (see IQI::compute_dQIdx_geometry_integrand); spatial variations of the properties are not differentiated
+         * @param[ in ]  aWStar weight associated to the evaluation point
+         * @param[ out ] adQIdx derivatives wrt the evaluation point location ( space dim x 1 )
+         * @param[ out ] adQIdn derivatives wrt the normal (empty, bulk IQI)
+         */
+        void compute_dQIdx_geometry_integrand(
+                real              aWStar,
+                Matrix< DDRMat >& adQIdx,
+                Matrix< DDRMat >& adQIdn ) override;
+
+        //------------------------------------------------------------------------------
+        /**
          * @brief checks if the gauss point location lies with the box bounds specified in input(mParameters)
          *
          */
