@@ -46,6 +46,19 @@ namespace moris::opt
         mMoveMax    = aParameterList.get< real >( "move_adapt_max" );
         mMoveInit   = aParameterList.get< real >( "move_adapt_init" );
         mMoveGate   = aParameterList.get< bool >( "move_adapt_gate" );
+
+        mGuardRise   = aParameterList.get< real >( "move_guard_rise" );
+        mGuardFeas   = aParameterList.get< real >( "move_guard_feas" );
+        mGuardShrink = aParameterList.get< real >( "move_guard_shrink" );
+        mGuardMaxBt  = aParameterList.get< sint >( "move_guard_max_backtracks" );
+        MORIS_ERROR( mGuardRise < 0.0 || ( mGuardShrink > 0.0 && mGuardShrink < 1.0 && mGuardMaxBt >= 1 ),
+                "Native MMA: move_guard needs 0 < move_guard_shrink < 1 and move_guard_max_backtracks >= 1." );
+        if ( mGuardRise >= 0.0 )
+        {
+            MORIS_LOG_INFO( "Native MMA: rise guard ON (reject a step that raises the objective by > %.3g from a design "
+                            "feasible to %.3g; box x%.3g per rejection, max %d)",
+                    mGuardRise, mGuardFeas, mGuardShrink, (int)mGuardMaxBt );
+        }
         if ( mMoveMax < 0.0 ) mMoveMax = mStepSize;
         if ( mMoveInit < 0.0 ) mMoveInit = mStepSize;
 
@@ -281,6 +294,17 @@ namespace moris::opt
         mMove.assign( mNumVar, mMoveAdapt ? mn( mx( mMoveInit, mMoveMin ), mMoveMax ) : mStepSize );
         mMoveHit.assign( mNumVar, 0 );
         mMoveHitPrev.assign( mNumVar, 0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::guard_rejects( real aF0, real aF0New, const std::vector< double >& aCon, real aRise, real aFeas )
+    {
+        if ( aRise < 0.0 ) return false;
+        for ( double tC : aCon )
+            if ( !( tC <= aFeas ) ) return false;
+        return aF0New > aF0 + aRise * std::abs( aF0 );
     }
 
     //------------------------------------------------------------------------------
@@ -1056,6 +1080,46 @@ namespace moris::opt
             }
             // keep the (possibly shrunk) move limit for the conservatism loop this iteration;
             // it is reset to 1.0 at the top of the next outer iteration.
+
+            // rise guard: a feasible design whose trial step raises the objective sharply has most likely severed a
+            // member; reject it and re-solve in a smaller box (finite criteria only reach this point)
+            {
+                int tGuardBt = 0;
+                while ( tGuardBt < mGuardMaxBt && guard_rejects( f0val, f0valnew, fval, mGuardRise, mGuardFeas ) )
+                {
+                    tGuardBt++;
+                    MORIS_LOG_INFO( "Native MMA iter %d: rise guard rejects the step (objective %.6e -> %.6e); "
+                                    "move box x%.4g (backtrack %d/%d).",
+                            (int)iter, f0val / mObjScale, f0valnew / mObjScale, mMoveScale * mGuardShrink,
+                            tGuardBt, (int)mGuardMaxBt );
+                    mMoveScale *= mGuardShrink;
+                    this->gcmmasub( iter );
+                    this->func( xmma.data(), f0valnew, fvalnew );
+                    nfunc++;
+
+                    if ( mProblem->restart_optimization() )
+                    {
+                        MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during rise guard; exiting solve loop.", (int)iter );
+                        return istop;
+                    }
+                    if ( !this->criteria_finite() ) break;
+                }
+                if ( !this->criteria_finite() )
+                {
+                    MORIS_LOG_INFO( "Native MMA iter %d: rise-guard trial non-finite; holding previous design.", (int)iter );
+                    continue;
+                }
+                if ( tGuardBt > 0 && mMoveAdapt )
+                {
+                    // the reduced box persists in the per-ADV limits (regrown by agreement)
+                    for ( int i = 0; i < mNumVar; ++i ) mMove[ i ] = mx( mMoveMin, mMove[ i ] * mMoveScale );
+                }
+                if ( tGuardBt > 0 )
+                {
+                    MORIS_LOG_INFO( "Native MMA iter %d: rise guard accepted after %d backtrack(s): objective %.6e",
+                            (int)iter, tGuardBt, f0valnew / mObjScale );
+                }
+            }
 
             int conserv = 1;
             if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;

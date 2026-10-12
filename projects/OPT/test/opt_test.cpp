@@ -285,9 +285,19 @@ namespace moris::opt
             REQUIRE( std::abs( tM2[ 0 ] - 0.005 ) < 1e-15 );
         }
 
+        SECTION( "MMA rise guard test" )
+        {
+            std::vector< double > tFeas = { -0.01, 0.001 }, tInfeas = { 0.01 };
+            REQUIRE( Algorithm_MMA::guard_rejects( 1.0, 1.2, tFeas, 0.1, 2e-3 ) );       // feasible, +20% > 10%
+            REQUIRE( !Algorithm_MMA::guard_rejects( 1.0, 1.05, tFeas, 0.1, 2e-3 ) );     // +5%: accepted
+            REQUIRE( !Algorithm_MMA::guard_rejects( 1.0, 1.5, tInfeas, 0.1, 2e-3 ) );    // infeasible march: never guarded
+            REQUIRE( !Algorithm_MMA::guard_rejects( 1.0, 1.5, tFeas, -1.0, 2e-3 ) );     // off
+            REQUIRE( Algorithm_MMA::guard_rejects( -1.0, -0.8, tFeas, 0.1, 2e-3 ) );     // relative to |f0|
+        }
+
         SECTION( "MMA native adaptive move limit" )
         {
-            auto tRun = []( bool aAdapt, real aShrink, real aGrow, sint aMaxIts, bool aGate = true ) -> std::pair< real, Vector< real > >
+            auto tRun = []( bool aAdapt, real aShrink, real aGrow, sint aMaxIts, bool aGate = true, real aGuard = -1.0 ) -> std::pair< real, Vector< real > >
             {
                 Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
                 Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
@@ -299,6 +309,7 @@ namespace moris::opt
                 tAlgorithmParameterList.set( "move_adapt_grow", aGrow );
                 tAlgorithmParameterList.set( "move_adapt_min", 1.0e-6 );
                 tAlgorithmParameterList.set( "move_adapt_gate", aGate );
+                tAlgorithmParameterList.set( "move_guard_rise", aGuard );
 
                 std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
                         &initialize_rosenbrock,
@@ -325,7 +336,7 @@ namespace moris::opt
             // the rule on (gated and ungated): still reaches the Rosenbrock minimum
             for ( bool tGate : { true, false } )
             {
-                auto [ tObj, tADVs ] = tRun( true, 0.7, 1.2, 100, tGate );
+                auto [ tObj, tADVs ] = tRun( true, 0.7, 1.2, 100, tGate, 0.5 );    // with the rise guard
                 if ( par_rank() == 0 )
                 {
                     REQUIRE( std::abs( tObj ) < 2E-7 );
