@@ -11,6 +11,8 @@
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_IQI_Max_Stress.hpp"
+#include "cl_FEM_CM_Struc_Linear.hpp"
+#include "fn_dot.hpp"
 
 namespace moris::fem
 {
@@ -263,6 +265,65 @@ namespace moris::fem
                 MORIS_ERROR( false,
                         "IQI_Max_Stress::eval_dVonMisesdFlux - CM stress vector of unknown size; 3, 4 or 6 components expected." );
                 return tdVMdS;
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    IQI_Max_Stress::supports_analytical_dQIdp_geometry()
+    {
+        // only the von Mises stress is differentiated
+        if ( mStressType != Stress_Type::VON_MISES_STRESS )
+        {
+            return false;
+        }
+
+        // the spatial derivatives are implemented for the linear structural CMs
+        const CM_Struc_Linear* tCMStrucLinear = dynamic_cast< const CM_Struc_Linear* >(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) ).get() );
+
+        return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI_Max_Stress::compute_dQIdx_geometry_integrand(
+            real              aWStar,
+            Matrix< DDRMat >& adQIdx,
+            Matrix< DDRMat >& adQIdn )
+    {
+        // get the elasticity CM
+        CM_Struc_Linear* tCMElasticity = dynamic_cast< CM_Struc_Linear* >(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) ).get() );
+
+        MORIS_ASSERT( tCMElasticity != nullptr,
+                "IQI_Max_Stress::compute_dQIdx_geometry_integrand - elasticity CM is not a CM_Struc_Linear" );
+
+        // number of space dimensions
+        const uint tSpaceDim = mLeaderFIManager->get_IP_geometry_interpolator()->get_number_of_space_dimensions();
+
+        adQIdx.set_size( tSpaceDim, 1, 0.0 );
+        adQIdn.set_size( 0, 0 );
+
+        // von Mises stress, its derivative wrt the CM flux components and the derivative of the integrand
+        // (P-norm or KS, see eval_integrand) wrt the von Mises stress; as in compute_dQIdu
+        real             tVonMises = this->eval_Von_Mises_stress();
+        Matrix< DDRMat > tdVMdFlux = this->eval_dVonMisesdFlux( tVonMises );
+        real             tdQIdVM   = this->eval_dintegrand_dstress( tVonMises );
+
+        // constitutive matrix
+        const Matrix< DDRMat >& tConst = tCMElasticity->constitutive();
+
+        Matrix< DDRMat > tdStraindx;
+        for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+        {
+            // derivative of the flux wrt x_k
+            tCMElasticity->eval_dStraindx( iDir, tdStraindx );
+            Matrix< DDRMat > tdFluxdx = tConst * tdStraindx;
+
+            adQIdx( iDir ) = aWStar * tdQIdVM * dot( tdVMdFlux, tdFluxdx );
         }
     }
 

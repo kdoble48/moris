@@ -840,3 +840,42 @@ TEST_CASE( "Analytic_Geo_Sens_IQI_Strain_Energy", "[fem],[Analytic_Geo_Sens],[An
 }
 
 //------------------------------------------------------------------------------
+
+TEST_CASE( "Analytic_Geo_Sens_IQI_Max_Stress", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_IQI_Max_Stress]" )
+{
+    // P-norm ( Exponent ) and shifted KS ( KSParameter ) integrands
+    for ( uint iAggregation = 0; iAggregation < 2; iAggregation++ )
+    {
+        for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+        {
+            for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+            {
+                IQI_Factory tIQIFactory;
+
+                std::shared_ptr< IQI > tIQI = tIQIFactory.create_IQI( IQI_Type::MAX_VON_MISES_STRESS );
+                tIQI->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+                tIQI->set_constitutive_model( create_elastic_CM( iSpaceDim ), "ElastLinIso", mtk::Leader_Follower::LEADER );
+                tIQI->set_property( create_const_property( { { 0.5 } } ), "ReferenceValue", mtk::Leader_Follower::LEADER );
+                if ( iAggregation == 0 )
+                {
+                    tIQI->set_property( create_const_property( { { 8.0 } } ), "Exponent", mtk::Leader_Follower::LEADER );
+                    tIQI->set_property( create_const_property( { { 0.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                }
+                else
+                {
+                    tIQI->set_property( create_const_property( { { 5.0 } } ), "KSParameter", mtk::Leader_Follower::LEADER );
+                    tIQI->set_property( create_const_property( { { 2.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                }
+
+                real tError = check_IQI_geometric_sensitivities( tIQI, iSpaceDim, iOrder );
+
+                std::cout << "Analytic_Geo_Sens IQI_Max_Stress " << ( iAggregation == 0 ? "P-norm" : "KS" ) << " dim " << iSpaceDim
+                          << " order " << iOrder << " max rel. error vs FD " << tError << '\n';
+
+                CHECK( tError < tGeoSensTolerance );
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
