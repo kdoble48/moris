@@ -80,6 +80,25 @@ namespace moris::fem
         void compute_dRdp( real aWStar ) override;
 
         //------------------------------------------------------------------------------
+        /**
+         * analytical geometric sensitivities are always available (traction and pressure are held fixed in space)
+         */
+        bool supports_analytical_dRdp_geometry() override;
+
+        //------------------------------------------------------------------------------
+        /**
+         * derivatives of the residual contribution wrt the evaluation point location and the normal, at fixed weight
+         * (see IWG::compute_dRdx_geometry_integrand); spatial variations of the properties are not differentiated
+         * @param[ in ]  aWStar weight associated to the evaluation point
+         * @param[ out ] adRdx  derivatives wrt the evaluation point location, one column per space direction
+         * @param[ out ] adRdn  derivatives wrt the normal components (pressure only)
+         */
+        void compute_dRdx_geometry_integrand(
+                real                        aWStar,
+                Vector< Matrix< DDRMat > >& adRdx,
+                Vector< Matrix< DDRMat > >& adRdn ) override;
+
+        //------------------------------------------------------------------------------
     };
     //------------------------------------------------------------------------------
 }    // namespace moris::fem

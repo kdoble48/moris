@@ -15,6 +15,7 @@
 #include "fn_norm.hpp"
 #include "fn_eye.hpp"
 #include "fn_dot.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 
 namespace moris::fem
 {
@@ -588,6 +589,102 @@ namespace moris::fem
         mTestStrain( { 2, 2 }, { 2 * tNumBases, 3 * tNumBases - 1 } ) = tdnNdxn( { 2, 2 }, { 0, tNumBases - 1 } );
         mTestStrain( { 3, 3 }, { 2 * tNumBases, 3 * tNumBases - 1 } ) = tdnNdxn( { 1, 1 }, { 0, tNumBases - 1 } );
         mTestStrain( { 4, 4 }, { 2 * tNumBases, 3 * tNumBases - 1 } ) = tdnNdxn( { 0, 0 }, { 0, tNumBases - 1 } );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    CM_Struc_Linear::has_spatial_strain_derivatives() const
+    {
+        return mPropCTE == nullptr &&                         //
+               mPropEigenStrain == nullptr &&                 //
+               mDofPressure == MSI::Dof_Type::UNDEFINED &&    //
+               mPlaneType != Model_Type::AXISYMMETRIC;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    CM_Struc_Linear::build_test_strain_from_gradient(
+            const Matrix< DDRMat > &adNdx,
+            Matrix< DDRMat >       &aB )
+    {
+        MORIS_ASSERT( mPlaneType != Model_Type::AXISYMMETRIC,
+                "CM_Struc_Linear::build_test_strain_from_gradient - axisymmetric model not supported." );
+
+        // number of bases
+        const uint tNumBases = adNdx.n_cols();
+
+        if ( mSpaceDim == 2 )
+        {
+            // same layout as eval_teststrain_2d
+            aB.set_size( mConst.n_rows(), tNumBases * 2, 0.0 );
+
+            aB( { 0, 0 }, { 0, tNumBases - 1 } )             = adNdx( { 0, 0 }, { 0, tNumBases - 1 } );
+            aB( { 1, 1 }, { tNumBases, 2 * tNumBases - 1 } ) = adNdx( { 1, 1 }, { 0, tNumBases - 1 } );
+
+            // shear row: 3 for plane strain (row 2 = out-of-plane normal strain stays 0), 2 for plane stress
+            const uint tShearRow = ( mPlaneType == Model_Type::PLANE_STRAIN ) ? 3 : 2;
+
+            aB( { tShearRow, tShearRow }, { 0, tNumBases - 1 } )             = adNdx( { 1, 1 }, { 0, tNumBases - 1 } );
+            aB( { tShearRow, tShearRow }, { tNumBases, 2 * tNumBases - 1 } ) = adNdx( { 0, 0 }, { 0, tNumBases - 1 } );
+        }
+        else
+        {
+            // same layout as eval_teststrain_3d
+            aB.set_size( 6, tNumBases * 3, 0.0 );
+
+            aB( { 0, 0 }, { 0, tNumBases - 1 } ) = adNdx( { 0, 0 }, { 0, tNumBases - 1 } );
+            aB( { 4, 4 }, { 0, tNumBases - 1 } ) = adNdx( { 2, 2 }, { 0, tNumBases - 1 } );
+            aB( { 5, 5 }, { 0, tNumBases - 1 } ) = adNdx( { 1, 1 }, { 0, tNumBases - 1 } );
+
+            aB( { 1, 1 }, { tNumBases, 2 * tNumBases - 1 } ) = adNdx( { 1, 1 }, { 0, tNumBases - 1 } );
+            aB( { 3, 3 }, { tNumBases, 2 * tNumBases - 1 } ) = adNdx( { 2, 2 }, { 0, tNumBases - 1 } );
+            aB( { 5, 5 }, { tNumBases, 2 * tNumBases - 1 } ) = adNdx( { 0, 0 }, { 0, tNumBases - 1 } );
+
+            aB( { 2, 2 }, { 2 * tNumBases, 3 * tNumBases - 1 } ) = adNdx( { 2, 2 }, { 0, tNumBases - 1 } );
+            aB( { 3, 3 }, { 2 * tNumBases, 3 * tNumBases - 1 } ) = adNdx( { 1, 1 }, { 0, tNumBases - 1 } );
+            aB( { 4, 4 }, { 2 * tNumBases, 3 * tNumBases - 1 } ) = adNdx( { 0, 0 }, { 0, tNumBases - 1 } );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    CM_Struc_Linear::eval_dTestStraindx(
+            uint              aDirection,
+            Matrix< DDRMat > &adTestStraindx )
+    {
+        // get displacement field interpolator
+        Field_Interpolator *tFIDispl = mFIManager->get_field_interpolators_for_type( mDofDispl );
+
+        // d/dx_k of the shape function gradient
+        Matrix< DDRMat > tdNdxdxk;
+        eval_dNdx_spatial_derivative( tFIDispl, aDirection, tdNdxdxk );
+
+        // B is linear in dN/dx
+        this->build_test_strain_from_gradient( tdNdxdxk, adTestStraindx );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    CM_Struc_Linear::eval_dStraindx(
+            uint              aDirection,
+            Matrix< DDRMat > &adStraindx )
+    {
+        // get displacement field interpolator
+        Field_Interpolator *tFIDispl = mFIManager->get_field_interpolators_for_type( mDofDispl );
+
+        // derivative of the test strain
+        Matrix< DDRMat > tdBdx;
+        this->eval_dTestStraindx( aDirection, tdBdx );
+
+        // vectorized displacement coefficients
+        Matrix< DDRMat > tUHat;
+        vectorize_coefficients( tFIDispl->get_coeff(), tUHat );
+
+        adStraindx = tdBdx * tUHat;
     }
 
     //--------------------------------------------------------------------------------------------------------------

@@ -283,8 +283,25 @@ namespace moris::fem
                 Matrix< DDSMat >             &aGeoLocalAssembly,
                 Vector< Matrix< IndexMat > > &aVertexIndices )
         {
-            // compute dRdpMat at evaluation point
-            aReqIWG->compute_dRdp( aWStar );
+            // material pdvs: no IWG implements an analytical dR/dp_material, use FD as the FD path
+            aReqIWG->compute_dRdp_FD_material(
+                    aWStar,
+                    mSAFDPerturbation,
+                    mSAFDScheme );
+
+            // geometry pdvs: analytical where the IWG implements it, FD otherwise (mixed mode)
+            if ( mSet->get_geo_pdv_assembly_flag() )
+            {
+                // when order material and geo call order is changed this flag has to be checked
+                aReqIWG->reset_eval_flags();
+
+                aReqIWG->compute_dRdp_geometry(
+                        aWStar,
+                        mSAFDPerturbation,
+                        mSAFDScheme,
+                        aGeoLocalAssembly,
+                        aVertexIndices );
+            }
         }
 
         void
@@ -326,8 +343,25 @@ namespace moris::fem
                 Matrix< DDSMat >             &aGeoLocalAssembly,
                 Vector< Matrix< IndexMat > > &aVertexIndices )
         {
-            // compute Jacobian
-            aReqIQI->compute_dQIdp( aWStar );
+            // material pdvs: no IQI implements an analytical dQI/dp_material, use FD as the FD path
+            aReqIQI->compute_dQIdp_FD_material(
+                    aWStar,
+                    mSAFDPerturbation,
+                    mSAFDScheme );
+
+            // geometry pdvs: analytical where the IQI implements it, FD otherwise (mixed mode)
+            if ( mSet->get_geo_pdv_assembly_flag() )
+            {
+                // when order material and geo call order is changed this flag has to be checked
+                aReqIQI->reset_eval_flags();
+
+                aReqIQI->compute_dQIdp_geometry(
+                        aWStar,
+                        mSAFDPerturbation,
+                        mSAFDScheme,
+                        aGeoLocalAssembly,
+                        aVertexIndices );
+            }
         }
 
         void

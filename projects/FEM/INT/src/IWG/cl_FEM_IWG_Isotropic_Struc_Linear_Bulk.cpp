@@ -11,6 +11,8 @@
 #include "cl_FEM_IWG_Isotropic_Struc_Linear_Bulk.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_Set.hpp"
+#include "cl_FEM_CM_Struc_Linear.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 
 #include "fn_trans.hpp"
 #include "fn_norm.hpp"
@@ -218,6 +220,105 @@ namespace moris::fem
         void IWG_Isotropic_Struc_Linear_Bulk::compute_dRdp( real aWStar )
         {
             MORIS_ERROR( false, "IWG_Isotropic_Struc_Linear_Bulk::compute_dRdp - This function does nothing.");
+        }
+
+        //------------------------------------------------------------------------------
+
+        bool
+        IWG_Isotropic_Struc_Linear_Bulk::supports_analytical_dRdp_geometry()
+        {
+            // get elasticity CM
+            const std::shared_ptr< Constitutive_Model >& tCMElasticity =
+                    mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) );
+
+            // the spatial derivatives are implemented for the linear structural CMs
+            const CM_Struc_Linear* tCMStrucLinear = dynamic_cast< const CM_Struc_Linear* >( tCMElasticity.get() );
+
+            return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+        }
+
+        //------------------------------------------------------------------------------
+
+        void
+        IWG_Isotropic_Struc_Linear_Bulk::compute_dRdx_geometry_integrand(
+                real                        aWStar,
+                Vector< Matrix< DDRMat > >& adRdx,
+                Vector< Matrix< DDRMat > >& adRdn )
+        {
+            // get field interpolator for dof type
+            Field_Interpolator* tDisplacementFI =
+                    mLeaderFIManager->get_field_interpolators_for_type( mResidualDofType( 0 )( 0 ) );
+
+            // get body load property
+            const std::shared_ptr< Property >& tPropLoad =
+                    mLeaderProp( static_cast< uint >( IWG_Property_Type::LOAD ) );
+
+            // get bedding property
+            const std::shared_ptr< Property >& tPropBedding =
+                    mLeaderProp( static_cast< uint >( IWG_Property_Type::BEDDING ) );
+
+            // get thickness property
+            const std::shared_ptr< Property >& tPropThickness =
+                    mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
+
+            // get elasticity CM
+            CM_Struc_Linear* tCMElasticity = dynamic_cast< CM_Struc_Linear* >(
+                    mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) ).get() );
+
+            MORIS_ASSERT( tCMElasticity != nullptr,
+                    "IWG_Isotropic_Struc_Linear_Bulk::compute_dRdx_geometry_integrand - elasticity CM is not a CM_Struc_Linear" );
+
+            // multiplying aWStar by user defined thickness
+            aWStar *= ( tPropThickness != nullptr ) ? tPropThickness->val()( 0 ) : 1;
+
+            // number of space dimensions and fields
+            const uint tSpaceDim  = tDisplacementFI->get_space_dim();
+            const uint tNumFields = tDisplacementFI->get_number_of_fields();
+
+            // unperturbed quantities
+            const Matrix< DDRMat >& tTestStrain = tCMElasticity->testStrain();
+            const Matrix< DDRMat >& tFlux       = tCMElasticity->flux();
+            const Matrix< DDRMat >& tConst      = tCMElasticity->constitutive();
+            const Matrix< DDRMat >& tdNdx       = tDisplacementFI->dnNdxn( 1 );
+
+            // vectorized displacement coefficients
+            Matrix< DDRMat > tUHat;
+            vectorize_coefficients( tDisplacementFI->get_coeff(), tUHat );
+
+            adRdx.resize( tSpaceDim );
+            adRdn.clear();
+
+            Matrix< DDRMat > tdBdx;
+            Matrix< DDRMat > tNk;
+            for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+            {
+                // derivative of the strain-displacement matrix and the flux wrt x_k
+                tCMElasticity->eval_dTestStraindx( iDir, tdBdx );
+                Matrix< DDRMat > tdFluxdx = tConst * ( tdBdx * tUHat );
+
+                // d/dx_k ( B^T sigma ) = dB^T sigma + B^T C dB u
+                adRdx( iDir ) = aWStar * ( trans( tdBdx ) * tFlux + trans( tTestStrain ) * tdFluxdx );
+
+                // derivative of the shape function matrix wrt x_k
+                if ( tPropLoad != nullptr || tPropBedding != nullptr )
+                {
+                    Matrix< DDRMat > tdNdxk = tdNdx( { iDir, iDir }, { 0, tdNdx.n_cols() - 1 } );
+                    build_vector_shape_function_matrix( tdNdxk, tNumFields, tNk );
+                }
+
+                // if body load (held fixed in space)
+                if ( tPropLoad != nullptr )
+                {
+                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * tPropLoad->val() );
+                }
+
+                // if bedding: d/dx_k ( N^T N u k ) = ( dN^T N + N^T dN ) u k
+                if ( tPropBedding != nullptr )
+                {
+                    adRdx( iDir ) += aWStar * tPropBedding->val()( 0 ) *    //
+                                     ( trans( tNk ) * tDisplacementFI->val() + tDisplacementFI->N_trans() * ( tNk * tUHat ) );
+                }
+            }
         }
 
         //------------------------------------------------------------------------------

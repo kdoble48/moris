@@ -888,6 +888,73 @@ namespace moris::fem
                     aVertexIndices );
         }
 
+        //------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the residual wrt the geometry pdvs (IG vertex coordinates)
+         * analytically if the IWG supports it on this set (see has_analytical_dRdp_geometry),
+         * otherwise by finite difference (compute_dRdp_FD_geometry)
+         * @param[ in ] aWStar            weight associated to evaluation point
+         * @param[ in ] aPerturbation     real for relative dv perturbation (FD fallback and cluster measures)
+         * @param[ in ] aFDSchemeType     enum for FD scheme (FD fallback and cluster measures)
+         * @param[ in ] aGeoLocalAssembly matrix filled with pdv local assembly indices
+         * @param[ in ] aVertexIndices    vertex indices (FD fallback for double sided sets)
+         */
+        void compute_dRdp_geometry(
+                moris::real                   aWStar,
+                moris::real                   aPerturbation,
+                fem::FDScheme_Type            aFDSchemeType,
+                Matrix< DDSMat >&             aGeoLocalAssembly,
+                Vector< Matrix< IndexMat > >& aVertexIndices );
+
+        //------------------------------------------------------------------------------
+        /**
+         * true if the analytical geometric dRdp is available: bulk or side set, and the IWG supports it
+         */
+        bool has_analytical_dRdp_geometry();
+
+        //------------------------------------------------------------------------------
+        /**
+         * analytical derivative of the residual wrt the geometry pdvs, assembled into mSet->get_drdpgeo():
+         *   dR/dX(v,i) = R * ( d detJ / dX(v,i) ) / detJ + N_v * dR/dx_i + sum_m dR/dn_m * dn_m/dX(v,i)
+         * where N_v is the IG shape function of vertex v at the evaluation point (the evaluation point moves with the
+         * IG vertices, affine IP element map), dR/dx_i and dR/dn_m come from compute_dRdx_geometry_integrand.
+         * The cluster measure contribution is added as in the FD path (add_cluster_measure_dRdp_FD_geometry).
+         */
+        void compute_dRdp_geometry_analytical(
+                moris::real        aWStar,
+                moris::real        aPerturbation,
+                fem::FDScheme_Type aFDSchemeType,
+                Matrix< DDSMat >&  aGeoLocalAssembly );
+
+        //------------------------------------------------------------------------------
+        /**
+         * IWG specific: true if compute_dRdx_geometry_integrand is implemented for the current IWG setup
+         */
+        virtual bool
+        supports_analytical_dRdp_geometry()
+        {
+            return false;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * IWG specific: derivatives of the residual contribution at the evaluation point, at fixed weight aWStar,
+         * wrt the location x_k of the evaluation point (adRdx( k )) and, for side sets, wrt the normal component
+         * n_m (adRdn( m ), may be left empty if the residual does not depend on the normal). Each entry is a column
+         * of the size of the leader residual block of the residual dof type.
+         * @param[ in ]  aWStar weight associated to evaluation point
+         * @param[ out ] adRdx  derivatives wrt the evaluation point location
+         * @param[ out ] adRdn  derivatives wrt the normal
+         */
+        virtual void
+        compute_dRdx_geometry_integrand(
+                real                        aWStar,
+                Vector< Matrix< DDRMat > >& adRdx,
+                Vector< Matrix< DDRMat > >& adRdn )
+        {
+            MORIS_ERROR( false, "IWG::compute_dRdx_geometry_integrand - not implemented for this IWG." );
+        }
+
         void select_dRdp_FD_geometry_bulk(
                 moris::real                   aWStar,
                 moris::real                   aPerturbation,

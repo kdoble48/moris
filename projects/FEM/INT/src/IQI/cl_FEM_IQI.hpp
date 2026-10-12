@@ -795,6 +795,70 @@ namespace moris::fem
                     aVertexIndices );
         }
 
+        //------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the quantity of interest wrt the geometry pdvs (IG vertex coordinates)
+         * analytically if the IQI supports it on this set (see has_analytical_dQIdp_geometry),
+         * otherwise by finite difference (compute_dQIdp_FD_geometry)
+         * @param[ in ] aWStar            weight associated to evaluation point
+         * @param[ in ] aPerturbation     pdv relative perturbation size (FD fallback and cluster measures)
+         * @param[ in ] aFDSchemeType     enum for FD scheme (FD fallback and cluster measures)
+         * @param[ in ] aGeoLocalAssembly matrix filled with pdv local assembly indices
+         * @param[ in ] aVertexIndices    vertex indices (FD fallback for double sided sets)
+         */
+        void compute_dQIdp_geometry(
+                moris::real                   aWStar,
+                moris::real                   aPerturbation,
+                fem::FDScheme_Type            aFDSchemeType,
+                Matrix< DDSMat >&             aGeoLocalAssembly,
+                Vector< Matrix< IndexMat > >& aVertexIndices );
+
+        //------------------------------------------------------------------------------
+        /**
+         * true if the analytical geometric dQIdp is available: bulk or side set, and the IQI supports it
+         */
+        bool has_analytical_dQIdp_geometry();
+
+        //------------------------------------------------------------------------------
+        /**
+         * analytical derivative of the quantity of interest wrt the geometry pdvs, assembled into mSet->get_dqidpgeo():
+         *   dQ/dX(v,i) = Q * ( d detJ / dX(v,i) ) / detJ + N_v * dQ/dx_i + sum_m dQ/dn_m * dn_m/dX(v,i)
+         * (see IWG::compute_dRdp_geometry_analytical); cluster measures are added as in the FD path.
+         */
+        void compute_dQIdp_geometry_analytical(
+                moris::real        aWStar,
+                moris::real        aPerturbation,
+                fem::FDScheme_Type aFDSchemeType,
+                Matrix< DDSMat >&  aGeoLocalAssembly );
+
+        //------------------------------------------------------------------------------
+        /**
+         * IQI specific: true if compute_dQIdx_geometry_integrand is implemented for the current IQI setup
+         */
+        virtual bool
+        supports_analytical_dQIdp_geometry()
+        {
+            return false;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * IQI specific: derivatives of the QI contribution at the evaluation point, at fixed weight aWStar,
+         * wrt the location x_k of the evaluation point (adQIdx( k )) and, for side sets, wrt the normal
+         * component n_m (adQIdn( m ), may be left empty if the QI does not depend on the normal)
+         * @param[ in ]  aWStar weight associated to evaluation point
+         * @param[ out ] adQIdx ( space dim x 1 ) derivatives wrt the evaluation point location
+         * @param[ out ] adQIdn ( space dim x 1 ) derivatives wrt the normal, or empty
+         */
+        virtual void
+        compute_dQIdx_geometry_integrand(
+                real              aWStar,
+                Matrix< DDRMat >& adQIdx,
+                Matrix< DDRMat >& adQIdn )
+        {
+            MORIS_ERROR( false, "IQI::compute_dQIdx_geometry_integrand - not implemented for this IQI." );
+        }
+
         void select_dQIdp_FD_geometry_bulk(
                 moris::real                   aWStar,
                 moris::real                   aPerturbation,

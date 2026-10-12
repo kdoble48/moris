@@ -11,6 +11,7 @@
 #include "cl_FEM_IWG_Isotropic_Struc_Linear_Neumann.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_Set.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 
 #include "fn_trans.hpp"
 #include "fn_eye.hpp"
@@ -174,6 +175,87 @@ namespace moris::fem
         IWG_Isotropic_Struc_Linear_Neumann::compute_dRdp( real aWStar )
         {
             MORIS_ERROR( false, "IWG_Isotropic_Struc_Linear_Neumann::compute_dRdp - Not implemented." );
+        }
+
+        //------------------------------------------------------------------------------
+
+        bool
+        IWG_Isotropic_Struc_Linear_Neumann::supports_analytical_dRdp_geometry()
+        {
+            return true;
+        }
+
+        //------------------------------------------------------------------------------
+
+        void
+        IWG_Isotropic_Struc_Linear_Neumann::compute_dRdx_geometry_integrand(
+                real                        aWStar,
+                Vector< Matrix< DDRMat > >& adRdx,
+                Vector< Matrix< DDRMat > >& adRdn )
+        {
+            // get field interpolator for the residual dof type
+            Field_Interpolator* tFI =
+                    mLeaderFIManager->get_field_interpolators_for_type( mResidualDofType( 0 )( 0 ) );
+
+            // get traction load property
+            const std::shared_ptr< Property >& tPropTraction =
+                    mLeaderProp( static_cast< uint >( IWG_Property_Type::TRACTION ) );
+
+            // get pressure load property
+            const std::shared_ptr< Property >& tPropPressure =
+                    mLeaderProp( static_cast< uint >( IWG_Property_Type::PRESSURE ) );
+
+            // get thickness property
+            const std::shared_ptr< Property >& tPropThickness =
+                    mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
+
+            // multiplying aWStar by user defined thickness
+            aWStar *= ( tPropThickness != nullptr ) ? tPropThickness->val()( 0 ) : 1;
+
+            // number of space dimensions and fields
+            const uint tSpaceDim  = tFI->get_space_dim();
+            const uint tNumFields = tFI->get_number_of_fields();
+
+            // shape function gradients
+            const Matrix< DDRMat >& tdNdx = tFI->dnNdxn( 1 );
+
+            adRdx.resize( tSpaceDim );
+
+            Matrix< DDRMat > tNk;
+            for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+            {
+                Matrix< DDRMat > tdNdxk = tdNdx( { iDir, iDir }, { 0, tdNdx.n_cols() - 1 } );
+                build_vector_shape_function_matrix( tdNdxk, tNumFields, tNk );
+
+                adRdx( iDir ).set_size( tFI->get_number_of_space_time_coefficients(), 1, 0.0 );
+
+                // traction (held fixed in space)
+                if ( tPropTraction != nullptr )
+                {
+                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * tPropTraction->val() );
+                }
+
+                // pressure (held fixed in space)
+                if ( tPropPressure != nullptr )
+                {
+                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * mNormal * tPropPressure->val() );
+                }
+            }
+
+            // normal dependence through the pressure only
+            adRdn.clear();
+            if ( tPropPressure != nullptr )
+            {
+                adRdn.resize( tSpaceDim );
+
+                for ( uint iNormal = 0; iNormal < tSpaceDim; iNormal++ )
+                {
+                    Matrix< DDRMat > tUnitVector( tSpaceDim, 1, 0.0 );
+                    tUnitVector( iNormal ) = 1.0;
+
+                    adRdn( iNormal ) = -1.0 * aWStar * ( tFI->N_trans() * tUnitVector * tPropPressure->val() );
+                }
+            }
         }
 
         //------------------------------------------------------------------------------
