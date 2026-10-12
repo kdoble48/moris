@@ -104,6 +104,12 @@ namespace moris::opt
         std::vector< int >    mMoveHit;   ///< 1 if the accepted step of this ADV sat on its move bound
         std::vector< int >    mMoveHitPrev;   ///< same for the previous accepted step
 
+        // ---- rise guard (move_guard_*) ----
+        real mGuardRise   = -1.0;     ///< relative objective rise that rejects a step from a feasible design; < 0 off
+        real mGuardFeas   = 2.0e-3;   ///< feasibility tolerance of the current design
+        real mGuardShrink = 0.5;      ///< move-box factor per rejected trial
+        sint mGuardMaxBt  = 4;        ///< backtracks before the last trial is accepted
+
         // ---- objective scaling (degenerate-evaluation safeguard) ----
         // GCMMA assumes an O(1-100) objective (Svanberg's own scaling recommendation). Degenerate
         // XFEM cuts can hand back gradients of 1e10+, which overflow the subproblem's interior-point
@@ -221,6 +227,12 @@ namespace moris::opt
                 real                         aGrow,
                 real                         aMin,
                 real                         aMax );
+
+        /**
+         * Rise-guard test: true if the current design is feasible (all aCon <= aFeas) and the trial objective
+         * exceeds the current one by more than aRise * |aF0|.
+         */
+        static bool guard_rejects( real aF0, real aF0New, const std::vector< double >& aCon, real aRise, real aFeas );
 
         /** Constructor */
         explicit Algorithm_MMA( const moris::Parameter_List& aParameterList );

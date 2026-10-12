@@ -217,6 +217,16 @@ namespace moris::prm
         tParameterList.insert( "move_adapt_max", -1.0 );       // cap of m_i (fraction of range); < 0 => step_size
         tParameterList.insert( "move_adapt_init", -1.0 );      // initial m_i (e.g. on a warm restart); < 0 => step_size
 
+        // Rise guard (off by default): when the current design is feasible (every constraint <= move_guard_feas) and
+        // a trial step raises the objective by more than move_guard_rise * |f0|, the step is rejected and the move
+        // box is multiplied by move_guard_shrink and the subproblem re-solved (up to move_guard_max_backtracks
+        // times; the last trial is then accepted). With move_adapt the reduced limits persist. Catches a member
+        // severed in one step, which neither asymptote nor oscillation rules anticipate.
+        tParameterList.insert( "move_guard_rise", -1.0 );      // relative objective rise that rejects a step; < 0 off
+        tParameterList.insert( "move_guard_feas", 2.0e-3 );    // the current design counts as feasible below this
+        tParameterList.insert( "move_guard_shrink", 0.5 );     // move-box factor per rejected trial
+        tParameterList.insert( "move_guard_max_backtracks", 4 );
+
         return tParameterList;
     }
 
