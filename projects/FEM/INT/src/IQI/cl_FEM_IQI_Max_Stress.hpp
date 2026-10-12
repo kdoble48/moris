@@ -114,26 +114,6 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
-         * analytical geometric sensitivities are available for the von Mises stress if the elasticity CM is a
-         * linear structural CM with exact spatial strain derivatives (see CM_Struc_Linear::has_spatial_strain_derivatives)
-         */
-        bool supports_analytical_dQIdp_geometry() override;
-
-        //------------------------------------------------------------------------------
-        /**
-         * derivatives of the QI contribution wrt the evaluation point location, at fixed weight
-         * (see IQI::compute_dQIdx_geometry_integrand); spatial variations of the properties are not differentiated
-         * @param[ in ]  aWStar weight associated to the evaluation point
-         * @param[ out ] adQIdx derivatives wrt the evaluation point location ( space dim x 1 )
-         * @param[ out ] adQIdn derivatives wrt the normal (empty, bulk IQI)
-         */
-        void compute_dQIdx_geometry_integrand(
-                real              aWStar,
-                Matrix< DDRMat > &adQIdx,
-                Matrix< DDRMat > &adQIdn ) override;
-
-        //------------------------------------------------------------------------------
-        /**
          * gets the stress vector from the constitutive model and sorts it into a format standardized
          * (independent of 2D-plane strain, 2D-plain stress, and 3D)
          * @param[ out ] tStressVector vector with 6 entries containing the normal and shear stress values
@@ -183,6 +163,27 @@ namespace moris::fem
          * @param[ in ] aVonMises the von Mises stress at the evaluation point
          */
         Matrix< DDRMat > eval_dVonMisesdFlux( real aVonMises );
+
+        //------------------------------------------------------------------------------
+        /**
+         * analytical geometric sensitivities are available for the von Mises stress (P-norm and KS integrands)
+         * if the elasticity CM is a linear structural CM with exact spatial strain derivatives
+         * (see CM_Struc_Linear::has_spatial_strain_derivatives)
+         */
+        bool supports_analytical_dQIdp_geometry() override;
+
+        //------------------------------------------------------------------------------
+        /**
+         * derivatives of the QI contribution wrt the evaluation point location, at fixed weight
+         * (see IQI::compute_dQIdx_geometry_integrand); the properties are held fixed in space
+         * @param[ in ]  aWStar weight associated to the evaluation point
+         * @param[ out ] adQIdx derivatives wrt the evaluation point location ( space dim x 1 )
+         * @param[ out ] adQIdn derivatives wrt the normal (empty, bulk IQI)
+         */
+        void compute_dQIdx_geometry_integrand(
+                real              aWStar,
+                Matrix< DDRMat >& adQIdx,
+                Matrix< DDRMat >& adQIdn ) override;
 
         //------------------------------------------------------------------------------
         /**
