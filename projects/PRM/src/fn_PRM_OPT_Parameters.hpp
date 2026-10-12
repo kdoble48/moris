@@ -203,6 +203,20 @@ namespace moris::prm
         // by one extra evaluation per trial
         tParameterList.insert( "debug_inner_trials", false );
 
+        // Oscillation-adaptive per-ADV move limit (off by default => identical to the fixed step_size box).
+        // Each ADV keeps its own move limit m_i (fraction of its range). After every accepted outer iteration,
+        // for an ADV whose step reached its subproblem move bound (alfa/beta, not an ADV bound) in either of the
+        // last two steps: a sign flip of the last two increments sets m_i = shrink * min(m_i, |last step|/range);
+        // two increments of the same sign set m_i = grow * m_i. Then m_i is clamped to [move_adapt_min,
+        // move_adapt_max]. With move_adapt_gate = false every ADV is adapted (the classic ungated rule).
+        tParameterList.insert( "move_adapt", false );          // enable the per-ADV adaptive move limit
+        tParameterList.insert( "move_adapt_gate", true );      // adapt only ADVs whose step hit the move bound
+        tParameterList.insert( "move_adapt_shrink", 0.7 );     // factor on a sign flip of consecutive increments
+        tParameterList.insert( "move_adapt_grow", 1.2 );       // factor on two increments of the same sign
+        tParameterList.insert( "move_adapt_min", 1.0e-4 );     // floor of m_i (fraction of range)
+        tParameterList.insert( "move_adapt_max", -1.0 );       // cap of m_i (fraction of range); < 0 => step_size
+        tParameterList.insert( "move_adapt_init", -1.0 );      // initial m_i (e.g. on a warm restart); < 0 => step_size
+
         return tParameterList;
     }
 
