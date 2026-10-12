@@ -12,6 +12,7 @@
  * criteria evaluation, so MORIS owns the optimization loop.
  */
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -37,6 +38,29 @@ namespace moris::opt
         mMaxIterationsInitial = aParameterList.get< sint >( "max_its" );
         mMaxIterations        = mMaxIterationsInitial;
         mReinitHook           = aParameterList.get< bool >( "reinit_in_place" );
+
+        mMoveAdapt  = aParameterList.get< bool >( "move_adapt" );
+        mMoveShrink = aParameterList.get< real >( "move_adapt_shrink" );
+        mMoveGrow   = aParameterList.get< real >( "move_adapt_grow" );
+        mMoveMin    = aParameterList.get< real >( "move_adapt_min" );
+        mMoveMax    = aParameterList.get< real >( "move_adapt_max" );
+        mMoveInit   = aParameterList.get< real >( "move_adapt_init" );
+        mMoveGate   = aParameterList.get< bool >( "move_adapt_gate" );
+        if ( mMoveMax < 0.0 ) mMoveMax = mStepSize;
+        if ( mMoveInit < 0.0 ) mMoveInit = mStepSize;
+
+        MORIS_ERROR( !mMoveAdapt || ( mMoveShrink > 0.0 && mMoveShrink <= 1.0 && mMoveGrow >= 1.0 ),
+                "Native MMA: move_adapt needs 0 < move_adapt_shrink <= 1 <= move_adapt_grow." );
+        MORIS_ERROR( !mMoveAdapt || ( mMoveMin > 0.0 && mMoveMin <= mMoveMax ),
+                "Native MMA: move_adapt needs 0 < move_adapt_min <= move_adapt_max." );
+
+        if ( mMoveAdapt )
+        {
+            MORIS_LOG_INFO( "Native MMA: adaptive move limit ON (init %.4g, shrink %.3g on a sign flip, grow %.3g, "
+                            "clamp [%.3g, %.3g] of range, %s)",
+                    mMoveInit, mMoveShrink, mMoveGrow, mMoveMin, mMoveMax,
+                    mMoveGate ? "gated on move-bound hits" : "ungated" );
+        }
 
         MORIS_LOG_INFO( "Native MMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f%s",
                 (int)mMaxIterations, mStepSize, mPenalty, mReinitHook ? ", in-place reinit hook ON" : "" );
@@ -113,6 +137,9 @@ namespace moris::opt
 
         Vector< real > tADVs( mNumVar );
         for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = aX[ i ];
+
+        // restart checkpoint ADV_Alg_<k>_Iter_<n>.hdf5, written at the same point as the TPL GCMMA wrapper
+        this->write_advs_to_file( tADVs );
 
         this->compute_design_criteria( tADVs );
 
@@ -249,6 +276,48 @@ namespace moris::opt
             a[ j ] = 0.0;
             d[ j ] = 0.0;
         }
+
+        // per-ADV move limit (fraction of range); without move_adapt every entry stays mStepSize
+        mMove.assign( mNumVar, mMoveAdapt ? mn( mx( mMoveInit, mMoveMin ), mMoveMax ) : mStepSize );
+        mMoveHit.assign( mNumVar, 0 );
+        mMoveHitPrev.assign( mNumVar, 0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    int
+    Algorithm_MMA::adapt_move_limits(
+            std::vector< double >&       aMove,
+            const std::vector< double >& aX,
+            const std::vector< double >& aXOld1,
+            const std::vector< double >& aXOld2,
+            const std::vector< double >& aRange,
+            const std::vector< int >&    aHit,
+            real                         aShrink,
+            real                         aGrow,
+            real                         aMin,
+            real                         aMax )
+    {
+        int tShrunk = 0;
+        for ( std::size_t i = 0; i < aMove.size(); ++i )
+        {
+            if ( aHit[ i ] )
+            {
+                double tD1   = aX[ i ] - aXOld1[ i ];
+                double tProd = tD1 * ( aXOld1[ i ] - aXOld2[ i ] );
+                if ( tProd < 0.0 )
+                {
+                    aMove[ i ] = aShrink * std::min( aMove[ i ], std::abs( tD1 ) / aRange[ i ] );
+                    tShrunk++;
+                }
+                else if ( tProd > 0.0 )
+                {
+                    aMove[ i ] *= aGrow;
+                }
+            }
+            aMove[ i ] = std::min( std::max( aMove[ i ], (double)aMin ), (double)aMax );
+        }
+        return tShrunk;
     }
 
     //------------------------------------------------------------------------------
@@ -320,9 +389,10 @@ namespace moris::opt
     Algorithm_MMA::gcmmasub( int iter )
     {
         // move limit honors mMoveScale (shrunk by the NaN guard while backtracking off a bad step)
-        const real tStep = mStepSize * mMoveScale;
         for ( int i = 0; i < mNumVar; ++i )
         {
+            const real tStep = mMove[ i ] * mMoveScale;
+
             alfa[ i ] = mx( xmin[ i ], low[ i ] + 0.1 * ( xval[ i ] - low[ i ] ) );
             alfa[ i ] = mx( alfa[ i ], xval[ i ] - tStep * ( xmax[ i ] - xmin[ i ] ) );
 
@@ -1030,6 +1100,42 @@ namespace moris::opt
 
             this->grad( xval.data() );
             nsens++;
+
+            // oscillation-adaptive move limit: needs two increments, i.e. from the second accepted step on
+            if ( mMoveAdapt )
+            {
+                // did the accepted step of each ADV sit on its move bound (alfa/beta of the last subproblem)?
+                // An ADV bound (xmin/xmax) or an interior step does not count.
+                int tHits = 0;
+                for ( int i = 0; i < mNumVar; ++i )
+                {
+                    const double tTol = 1.0e-3 * ( beta[ i ] - alfa[ i ] ) + 1.0e-12 * ( xmax[ i ] - xmin[ i ] );
+                    const bool   tLo  = xmma[ i ] <= alfa[ i ] + tTol && alfa[ i ] > xmin[ i ];
+                    const bool   tHi  = xmma[ i ] >= beta[ i ] - tTol && beta[ i ] < xmax[ i ];
+                    mMoveHitPrev[ i ] = mMoveHit[ i ];
+                    mMoveHit[ i ]     = ( tLo || tHi ) ? 1 : 0;
+                    tHits += mMoveHit[ i ];
+                }
+
+                if ( iter >= 2 )
+                {
+                    std::vector< double > tRange( mNumVar );
+                    std::vector< int >    tGate( mNumVar, 1 );
+                    for ( int i = 0; i < mNumVar; ++i )
+                    {
+                        tRange[ i ] = xmax[ i ] - xmin[ i ];
+                        if ( mMoveGate ) tGate[ i ] = mMoveHit[ i ] || mMoveHitPrev[ i ];
+                    }
+                    int tShrunk = adapt_move_limits( mMove, xval, xold1, xold2, tRange, tGate,
+                            mMoveShrink, mMoveGrow, mMoveMin, mMoveMax );
+
+                    std::vector< double > tSorted( mMove );
+                    std::nth_element( tSorted.begin(), tSorted.begin() + mNumVar / 2, tSorted.end() );
+                    const auto tMinMax = std::minmax_element( mMove.begin(), mMove.end() );
+                    MORIS_LOG_INFO( "MMA move adapt iter %d: hits %d shrunk %d of %d | move min=%.4e median=%.4e max=%.4e",
+                            (int)iter, tHits, tShrunk, mNumVar, *tMinMax.first, tSorted[ mNumVar / 2 ], *tMinMax.second );
+                }
+            }
 
             istop = this->kktcheck( tKKTrefres );
         }
