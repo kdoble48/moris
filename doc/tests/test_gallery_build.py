@@ -40,6 +40,15 @@ def test_run_inputs_and_showcase_job(tmp_path):
     assert "'[EXA_Deck_Example]'" in job and job.rstrip().endswith("date > DONE")
 
 
+def test_showcase_completed(tmp_path):
+    assert not bg.showcase_completed(tmp_path)                       # no DONE, no log
+    (tmp_path / "DONE").write_text("x")
+    (tmp_path / "run.log").write_text("... Global Clock Stopped ...\n")
+    assert bg.showcase_completed(tmp_path)
+    (tmp_path / "run.log").write_text("*** Error - Moris encountered an error.***\n")
+    assert not bg.showcase_completed(tmp_path)                       # crashed run: fall back
+
+
 def test_crop_thumbnail_centers_content(tmp_path):
     im = Image.new("RGB", (1600, 1000), "white")
     im.paste(Image.new("RGB", (200, 100), "black"), (100, 100))

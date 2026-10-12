@@ -88,6 +88,20 @@ SHOWCASE_MARK = "exa::pick("   # decks with a showcase setting (projects/EXA/run
 RUN_OUTPUTS = re.compile(r"(\.exo|\.e-s\.|^ADV_Alg_|^Parameter_Receipt|\.log$|^xtk_temp)")
 
 
+MORIS_ERROR = "Moris encountered an error"
+
+
+def showcase_completed(run_dir: Path) -> bool:
+    """A showcase run counts only when its job finished (DONE) and MORIS reported no error.
+
+    The job ignores the runner's exit status, since a full-length run fails the regression reference
+    checks after writing its output, so DONE alone does not mean the optimization ran."""
+    log = run_dir / "run.log"
+    if not (run_dir / "DONE").exists() or not log.exists():
+        return False
+    return MORIS_ERROR not in log.read_text(errors="replace")
+
+
 def showcase_capable(example: dict, source_root: Path = ROOT) -> bool:
     """Whether the example's decks, in the source tree the build compiles, call exa::pick()."""
     decks = [source_root / deck for deck in example["decks"]]
@@ -162,7 +176,7 @@ def build_examples(build: Path, only: list[str] | None, overrides: dict,
             continue
         files, showcase = [], False
         run_dir = showcase_runs / example["leaf"] if showcase_runs else None
-        if run_dir and (run_dir / "DONE").exists():
+        if run_dir and showcase_completed(run_dir):
             files, showcase = exodus_files(run_dir), True      # a finished full-length run wins
         if not files:
             files = exodus_files(build / example["directory"])
