@@ -40,7 +40,7 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     Geometry_Engine::Geometry_Engine(
-            Module_Parameter_Lists               aParameterLists,
+            Module_Parameter_Lists  aParameterLists,
             const std::shared_ptr< Library_IO >& aLibrary,
             mtk::Mesh*                           aMesh )
             : mNodeManager( aMesh )
@@ -163,6 +163,28 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    Vector< sint >
+    Geometry_Engine::get_design_determining_adv_ids( const std::string& aDesignName )
+    {
+        for ( uint tGeometryIndex = 0; tGeometryIndex < mGeometries.size(); tGeometryIndex++ )
+        {
+            if ( mGeometries( tGeometryIndex )->get_name() == aDesignName )
+            {
+                return mGeometries( tGeometryIndex )->get_field()->get_coefficient_adv_ids();
+            }
+        }
+        for ( uint tPropertyIndex = 0; tPropertyIndex < mProperties.size(); tPropertyIndex++ )
+        {
+            if ( mProperties( tPropertyIndex )->get_name() == aDesignName )
+            {
+                return mProperties( tPropertyIndex )->get_field()->get_coefficient_adv_ids();
+            }
+        }
+        return Vector< sint >( 0 );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Vector< real >&
     Geometry_Engine::get_advs()
     {
@@ -188,8 +210,8 @@ namespace moris::gen
 
     void
     Geometry_Engine::set_phase_function(
-            PHASE_FUNCTION               aPhaseFunction,
-            uint                         aNumPhases,
+            PHASE_FUNCTION             aPhaseFunction,
+            uint                       aNumPhases,
             const Vector< std::string >& aPhaseNames )
     {
         mPhaseTable.set_phase_function( aPhaseFunction, aNumPhases, aPhaseNames );
@@ -200,7 +222,7 @@ namespace moris::gen
     void
     Geometry_Engine::set_dQIdp(
             const Vector< moris::Matrix< DDRMat >* >& adQIdp,
-            moris::Matrix< moris::DDSMat >*           aMap )
+            moris::Matrix< moris::DDSMat >*                aMap )
     {
         mPDVHostManager.set_dQIdp( adQIdp, aMap );
     }
@@ -276,8 +298,8 @@ namespace moris::gen
 
     bool
     Geometry_Engine::is_intersected(
-            uint                                                         aGeometryIndex,
-            const Matrix< IndexMat >&                                    aNodeIndices,
+            uint                                                              aGeometryIndex,
+            const Matrix< IndexMat >&                                         aNodeIndices,
             Vector< std::shared_ptr< moris::Matrix< moris::DDRMat > > >* aNodeCoordinates )
     {
         // Get first geometric region
@@ -425,8 +447,8 @@ namespace moris::gen
     Geometry_Engine::create_new_derived_nodes(
             const Vector< Matrix< IndexMat > >& aVertexIndices,
             const Vector< Matrix< DDRMat > >&   aParametricCoordinates,
-            mtk::Geometry_Type                  aBackgroundGeometryType,
-            mtk::Interpolation_Order            aBackgroundInterpolationOrder )
+            mtk::Geometry_Type                aBackgroundGeometryType,
+            mtk::Interpolation_Order          aBackgroundInterpolationOrder )
     {
         // This function can't be traced; Right now XTK does not always call it from all processors.
 
@@ -504,7 +526,9 @@ namespace moris::gen
             for ( auto iVertex : tVertices )
             {
                 // Get geometric region
-                Geometric_Region tGeometricRegion = mGeometries( iGeometryIndex )->get_geometric_region( iVertex->get_index(), iVertex->get_coords() );
+                Geometric_Region tGeometricRegion = mGeometries( iGeometryIndex )->get_geometric_region(
+                        iVertex->get_index(),
+                        iVertex->get_coords() );
 
                 // If we can determine the region already, do so
                 if ( tGeometricRegion == Geometric_Region::NEGATIVE )
@@ -640,7 +664,7 @@ namespace moris::gen
 
         // Initialize PDV type groups and mesh set info from integration mesh
         Vector< Vector< Vector< PDV_Type > > > tPDVTypes( tIntegrationMesh->get_num_sets() );
-        Vector< PDV_Type >                     tPDVTypeGroup( 1 );
+        Vector< PDV_Type >                 tPDVTypeGroup( 1 );
 
         // Loop over properties to create PDVs
         for ( uint tPropertyIndex = 0; tPropertyIndex < mProperties.size(); tPropertyIndex++ )
@@ -898,8 +922,8 @@ namespace moris::gen
 
         // Owned and shared ADVs per field
         Vector< Vector< sint > > tSharedADVIds( tDesigns.size() );
-        Vector< uint >           tAllOffsetIDs( tDesigns.size() );
-        Vector< uint >           tNumCoeff( tDesigns.size() );
+        Vector< uint > tAllOffsetIDs( tDesigns.size() );
+        Vector< uint > tNumCoeff( tDesigns.size() );
 
         // Loop over all geometries to get number of new ADVs
         sint tOffsetID = tPrimitiveADVIds.size();
@@ -1046,7 +1070,7 @@ namespace moris::gen
 
                     MORIS_ASSERT( tADVId - tOffsetID == tAllCoefIds( tOwnedCoefficients( iOwnedCoefficient ) ), "check if this is a problem" );
 
-                    tOwnedADVIds( tNumOwnedADVs + iOwnedCoefficient )             = tADVId;
+                    tOwnedADVIds( tNumOwnedADVs + iOwnedCoefficient ) = tADVId;
                     mADVManager.mLowerBounds( tNumOwnedADVs + iOwnedCoefficient ) = tDesigns( iDesignIndex )->get_discretization_lower_bound();
                     mADVManager.mUpperBounds( tNumOwnedADVs + iOwnedCoefficient ) = tDesigns( iDesignIndex )->get_discretization_upper_bound();
 
@@ -1072,7 +1096,7 @@ namespace moris::gen
         // Set owned ADV IDs
         mPDVHostManager.set_owned_adv_ids( tOwnedADVIds );
 
-        MORIS_LOG_INFO( "Time to collect owned and shared ADVs: %f sec", (moris::real)( clock() - tStart_Owned_Shared_ADVs ) / CLOCKS_PER_SEC );
+        MORIS_LOG_INFO( "Time to collect owned and shared ADVs: %f sec", ( moris::real )( clock() - tStart_Owned_Shared_ADVs ) / CLOCKS_PER_SEC );
 
         //----------------------------------------//
         // Create owned ADV vector                //
@@ -1083,7 +1107,7 @@ namespace moris::gen
         sol::Matrix_Vector_Factory tDistributedFactory;
 
         // Create owned ADV vector
-        sol::Dist_Map*    tOwnedADVMap  = tDistributedFactory.create_map( tOwnedADVIds );
+        sol::Dist_Map* tOwnedADVMap = tDistributedFactory.create_map( tOwnedADVIds );
         sol::Dist_Vector* tNewOwnedADVs = tDistributedFactory.create_vector( tOwnedADVMap, 1, false, true );
 
         // Determine if primitive ADVs have been created already
@@ -1099,7 +1123,7 @@ namespace moris::gen
         {
             // Create primitive ADV vector
             sol::Dist_Map* tPrimitiveADVMap = tDistributedFactory.create_map( tPrimitiveADVIds );
-            mPrimitiveADVs                  = tDistributedFactory.create_vector( tPrimitiveADVMap, 1, false, true );
+            mPrimitiveADVs = tDistributedFactory.create_vector( tPrimitiveADVMap, 1, false, true );
         }
 
         // Assign primitive ADVs to the owned vector
@@ -1123,7 +1147,7 @@ namespace moris::gen
             }
         }
 
-        MORIS_LOG_INFO( "Time to create owned ADVs: %f sec", (moris::real)( clock() - tStart_Create_Owned_ADVs ) / CLOCKS_PER_SEC );
+        MORIS_LOG_INFO( "Time to create owned ADVs: %f sec", ( moris::real )( clock() - tStart_Create_Owned_ADVs ) / CLOCKS_PER_SEC );
 
         //----------------------------------------//
         // Convert to B-spline fields             //
@@ -1205,7 +1229,7 @@ namespace moris::gen
         delete mOwnedADVs;
         mOwnedADVs = tNewOwnedADVs;
 
-        MORIS_LOG_INFO( "Time to convert to Bspline fields: %f sec", (moris::real)( clock() - tStart_Convert_to_Bspline_Fields ) / CLOCKS_PER_SEC );
+        MORIS_LOG_INFO( "Time to convert to Bspline fields: %f sec", ( moris::real )( clock() - tStart_Convert_to_Bspline_Fields ) / CLOCKS_PER_SEC );
 
         //----------------------------------------//
         // Communicate all ADV IDs to processor 0 //
@@ -1214,19 +1238,19 @@ namespace moris::gen
         clock_t tStart_Communicate_ADV_IDs = clock();
 
         // Sending mats
-        Vector< Vector< sint > >   tSendingIDs( 0 );
-        Vector< Vector< real > >   tSendingLowerBounds( 0 );
-        Vector< Vector< real > >   tSendingUpperBounds( 0 );
+        Vector< Vector< sint > > tSendingIDs( 0 );
+        Vector< Vector< real > > tSendingLowerBounds( 0 );
+        Vector< Vector< real > > tSendingUpperBounds( 0 );
         Vector< Matrix< DDSMat > > tSendingijklIDs( 0 );
 
         // Receiving mats
-        Vector< Vector< sint > >   tReceivingIDs( 0 );
-        Vector< Vector< real > >   tReceivingLowerBounds( 0 );
-        Vector< Vector< real > >   tReceivingUpperBounds( 0 );
+        Vector< Vector< sint > > tReceivingIDs( 0 );
+        Vector< Vector< real > > tReceivingLowerBounds( 0 );
+        Vector< Vector< real > > tReceivingUpperBounds( 0 );
         Vector< Matrix< DDSMat > > tReceivingjklIDs( 0 );
 
         // Set up communication list for communicating ADV IDs
-        Vector< sint >  tCommunicationList( 1, 0 );
+        Vector< sint > tCommunicationList( 1, 0 );
         Matrix< IdMat > tCommunicationListMat( 1, 1, 0 );
         if ( par_rank() == 0 )
         {
@@ -1241,7 +1265,7 @@ namespace moris::gen
             // Assign communication list
             for ( uint tProcessorIndex = 1; tProcessorIndex < (uint)par_size(); tProcessorIndex++ )
             {
-                tCommunicationList( tProcessorIndex - 1 )    = tProcessorIndex;
+                tCommunicationList( tProcessorIndex - 1 ) = tProcessorIndex;
                 tCommunicationListMat( tProcessorIndex - 1 ) = tProcessorIndex;
             }
         }
@@ -1262,7 +1286,7 @@ namespace moris::gen
             communicate_mats( tCommunicationListMat, tSendingijklIDs, tReceivingjklIDs );
         }
 
-        MORIS_LOG_INFO( "Time to communicate ADV IDs: %f sec", (moris::real)( clock() - tStart_Communicate_ADV_IDs ) / CLOCKS_PER_SEC );
+        MORIS_LOG_INFO( "Time to communicate ADV IDs: %f sec", ( moris::real )( clock() - tStart_Communicate_ADV_IDs ) / CLOCKS_PER_SEC );
 
         // Assemble full ADVs/bounds
         clock_t tStart_ADV_Bounds = clock();
@@ -1321,13 +1345,13 @@ namespace moris::gen
             mFullijklIDs.set_size( 0, 0 );
         }
 
-        MORIS_LOG_INFO( "Time to assemble ADVs and bounds on Proc 0: %f sec", (moris::real)( clock() - tStart_ADV_Bounds ) / CLOCKS_PER_SEC );
+        MORIS_LOG_INFO( "Time to assemble ADVs and bounds on Proc 0: %f sec", ( moris::real )( clock() - tStart_ADV_Bounds ) / CLOCKS_PER_SEC );
 
         // Reset mesh information
         clock_t tStart_Reset_Mesh_Info = clock();
         this->reset_mesh_information( tMesh );
 
-        MORIS_LOG_INFO( "Time to reset mesh information: %f sec", (moris::real)( clock() - tStart_Reset_Mesh_Info ) / CLOCKS_PER_SEC );
+        MORIS_LOG_INFO( "Time to reset mesh information: %f sec", ( moris::real )( clock() - tStart_Reset_Mesh_Info ) / CLOCKS_PER_SEC );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -1363,7 +1387,7 @@ namespace moris::gen
             Matrix< IdMat >& aAllCoefIds,
             Matrix< IdMat >& aAllCoefOwners,
             Matrix< IdMat >& aAllCoefijklIds,
-            Vector< uint >&  aNumCoeff,
+            Vector< uint >&    aNumCoeff,
             uint             aFieldIndex,
             uint             aDiscretizationMeshIndex,
             mtk::MeshType    aMeshType )
@@ -1606,15 +1630,14 @@ namespace moris::gen
                 tNodeCoordinates( tNodeIndex ) = aMesh->get_node_coordinate( tNodeIndex );
             }
 
-            // Create vector to hold field value at each node. Gets overwritten for each field.
-            Matrix< DDRMat > tFieldData( aMesh->get_num_nodes(), 1 );
-
             // Loop over geometries
-            uint tFieldIndex = 0;    // track field index through geomtries and properties
             for ( uint tGeometryIndex = 0; tGeometryIndex < mGeometries.size(); tGeometryIndex++ )
             {
                 for ( uint iGeometryFieldIndex = 0; iGeometryFieldIndex < mGeometries( tGeometryIndex )->get_num_fields(); iGeometryFieldIndex++ )
                 {
+                    // Create field vector
+                    Matrix< DDRMat > tFieldData( aMesh->get_num_nodes(), 1 );
+
                     for ( uint tNodeIndex = 0; tNodeIndex < aMesh->get_num_nodes(); tNodeIndex++ )
                     {
                         // Get design info from the geometry
@@ -1626,7 +1649,7 @@ namespace moris::gen
                     }
 
                     // Create field on mesh
-                    tWriter.write_nodal_field( tFieldNames( tFieldIndex++ ), tFieldData );
+                    tWriter.write_nodal_field( tFieldNames( tGeometryIndex ), tFieldData );
                 }
             }
 
@@ -1635,6 +1658,9 @@ namespace moris::gen
             {
                 for ( uint iPropertyFieldIndex = 0; iPropertyFieldIndex < mProperties( tPropertyIndex )->get_num_fields(); iPropertyFieldIndex++ )
                 {
+                    // Create field vector
+                    Matrix< DDRMat > tFieldData( aMesh->get_num_nodes(), 1 );
+
                     // Loop over all nodes on the mesh
                     for ( uint tNodeIndex = 0; tNodeIndex < aMesh->get_num_nodes(); tNodeIndex++ )
                     {
@@ -1647,11 +1673,9 @@ namespace moris::gen
                     }
 
                     // Create field on mesh
-                    tWriter.write_nodal_field( tFieldNames( tFieldIndex++ ), tFieldData );
+                    tWriter.write_nodal_field( tFieldNames( tNumGeometryFields + tPropertyIndex ), tFieldData );
                 }
             }
-
-            MORIS_ASSERT( tFieldIndex == tFieldNames.size(), "GEN - Geometry_Engine::output_fields_on_mesh() Number of output fields (%d) does not equal total number of geometry and property fields (%ld).", tFieldIndex, tFieldNames.size() );
 
             // Finalize
             tWriter.close_file( true );
@@ -1724,8 +1748,8 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
     void
     Geometry_Engine::create_interpolation_pdvs(
-            mtk::Interpolation_Mesh*               aInterpolationMesh,
-            mtk::Integration_Mesh*                 aIntegrationMesh,
+            mtk::Interpolation_Mesh*         aInterpolationMesh,
+            mtk::Integration_Mesh*           aIntegrationMesh,
             Vector< Vector< Vector< PDV_Type > > > aPDVTypes )
     {
         // Tracer
@@ -1735,13 +1759,13 @@ namespace moris::gen
         uint tNumSets = aPDVTypes.size();
 
         // Size node information cells
-        Vector< Vector< uint > >   tNodeIndicesPerSet( tNumSets );
-        Vector< Vector< sint > >   tNodeIdsPerSet( tNumSets );
-        Vector< Vector< uint > >   tNodeOwnersPerSet( tNumSets );
+        Vector< Vector< uint > >     tNodeIndicesPerSet( tNumSets );
+        Vector< Vector< sint > >     tNodeIdsPerSet( tNumSets );
+        Vector< Vector< uint > >     tNodeOwnersPerSet( tNumSets );
         Vector< Matrix< DDRMat > > tNodeCoordinatesPerSet( tNumSets );
 
         // Get communication table and map
-        Matrix< IdMat >    tCommTable             = aInterpolationMesh->get_communication_table();
+        Matrix< IdMat >  tCommTable             = aInterpolationMesh->get_communication_table();
         Vector< moris_id > tCommunicationTableMap = build_communication_table_map( tCommTable );
 
         // TODO change over to just use a cell to begin with
@@ -1940,7 +1964,7 @@ namespace moris::gen
                     "Assignment of PDVs is only supported with an interpolation mesh right now." );
 
             // Get PDV type and all mesh set indices for this property
-            PDV_Type       tPDVType        = iProperty->get_pdv_type();
+            PDV_Type     tPDVType        = iProperty->get_pdv_type();
             Vector< uint > tMeshSetIndices = iProperty->get_pdv_mesh_set_indices( aIntegrationMesh );
 
             // Loop through nodes in these sets
@@ -2008,7 +2032,7 @@ namespace moris::gen
 
     Phase_Table
     Geometry_Engine::create_phase_table(
-            const Module_Parameter_Lists&        aParameterLists,
+            const Module_Parameter_Lists& aParameterLists,
             const std::shared_ptr< Library_IO >& aLibrary )
     {
         // Get number of geometries
@@ -2020,7 +2044,7 @@ namespace moris::gen
         {
             // User-defined phase function
             return { aLibrary->load_function< PHASE_FUNCTION >( tPhaseFunctionName ),
-                static_cast< uint >( aParameterLists( 0 )( 0 ).get< sint >( "number_of_phases" ) ) };
+                    static_cast< uint >( aParameterLists( 0 )( 0 ).get< sint >( "number_of_phases" ) ) };
         }
         else if ( not aParameterLists( 0 )( 0 ).get< std::string >( "phase_table" ).empty() )
         {
@@ -2062,4 +2086,4 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
-}    // namespace moris::gen
+}
