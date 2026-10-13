@@ -98,7 +98,9 @@ def choose(infos: list[FileInfo], override: dict | None = None) -> Choice | None
     override = override or {}
     candidates = [i for i in infos if i.points > 0]
     if override.get("file"):
-        candidates = [i for i in candidates if PurePath(i.path.replace("\\", "/")).name == override["file"]]
+        # a file name or the stem of an .e-s series (e.g. "Deck.exo" selects Deck.exo.e-s.0101)
+        candidates = [i for i in candidates if PurePath(i.path.replace("\\", "/")).name == override["file"]
+                      or PurePath(i.path.replace("\\", "/")).name.startswith(override["file"] + ".e-s.")]
     keep = set(last_of_series([i.path for i in candidates]))
     candidates = [i for i in candidates if i.path in keep]
     if not candidates:

@@ -53,6 +53,10 @@ def test_empty_files_and_override():
     assert (choice.array, choice.label, choice.vector) == ("TEMP", "TEMP", False)
     choice = gs.choose([info("X.exo", ["U"]), info("xtk_temp.exo")], {"file": "xtk_temp.exo"})
     assert choice.kind == "xtk"
+    series = [info(f"A.exo.e-s.{i:04d}", ["U"], points=500) for i in (1, 2, 101)] \
+        + [info("A_Quadratic.exo.e-s.0020", ["U"], points=900)]
+    choice = gs.choose(series, {"file": "A.exo"})                   # series stem selects the series
+    assert Path(choice.path).name == "A.exo.e-s.0101"
 
 
 def test_interface_array_and_threshold():

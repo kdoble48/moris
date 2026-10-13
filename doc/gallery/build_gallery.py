@@ -91,15 +91,17 @@ RUN_OUTPUTS = re.compile(r"(\.exo|\.e-s\.|^ADV_Alg_|^Parameter_Receipt|\.log$|^x
 MORIS_ERROR = "Moris encountered an error"
 
 
-def showcase_completed(run_dir: Path) -> bool:
+def showcase_completed(run_dir: Path, accept_error: bool = False) -> bool:
     """A showcase run counts only when its job finished (DONE) and MORIS reported no error.
 
     The job ignores the runner's exit status, since a full-length run fails the regression reference
-    checks after writing its output, so DONE alone does not mean the optimization ran."""
+    checks after writing its output, so DONE alone does not mean the optimization ran. ``accept_error``
+    (overrides.json ``showcase_accept_error``) is for an example whose tag runs several decks and only a
+    later one failed; pair it with a ``file`` override that selects the completed deck's output."""
     log = run_dir / "run.log"
     if not (run_dir / "DONE").exists() or not log.exists():
         return False
-    return MORIS_ERROR not in log.read_text(errors="replace")
+    return accept_error or MORIS_ERROR not in log.read_text(errors="replace")
 
 
 def showcase_capable(example: dict, source_root: Path = ROOT) -> bool:
@@ -176,7 +178,8 @@ def build_examples(build: Path, only: list[str] | None, overrides: dict,
             continue
         files, showcase = [], False
         run_dir = showcase_runs / example["leaf"] if showcase_runs else None
-        if run_dir and showcase_completed(run_dir):
+        accept = bool(overrides.get(example["leaf"], {}).get("showcase_accept_error"))
+        if run_dir and showcase_completed(run_dir, accept):
             files, showcase = exodus_files(run_dir), True      # a finished full-length run wins
         if not files:
             files = exodus_files(build / example["directory"])
