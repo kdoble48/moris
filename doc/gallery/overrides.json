@@ -9,6 +9,10 @@
     "edges": true,
     "_why": "edges show the adaptively refined mesh carried through the restart"
   },
+  "Mach_Leading_Edge": {
+    "array": "TEMP",
+    "_why": "the phase-change leading edge is a thermal problem: color by temperature"
+  },
   "Zienkiewicz_Zhu_Adaptive_Refinement": {
     "edges": true,
     "_why": "edges show the stress-driven (ZZ) refinement"
