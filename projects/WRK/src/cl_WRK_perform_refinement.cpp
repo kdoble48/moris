@@ -212,8 +212,18 @@ namespace moris::wrk
 
             for ( uint Ia = 0; Ia < tFieldNames( Ik ).size(); Ia++ )
             {
-                std::string                   tFieldName = tFieldNames( Ik )( Ia );
-                const std::shared_ptr< mtk::Field >& tField     = aFields( tFieldNameToIndexMap.find( tFieldName ) );
+                std::string tFieldName = tFieldNames( Ik )( Ia );
+
+                // a field may be withheld because it lives on an outdated mesh (MB-033): refine on the others
+                if ( not tFieldNameToIndexMap.key_exists( tFieldName ) )
+                {
+                    MORIS_LOG_WARNING( "perform_refinement_2(): refinement field '%s' not available; pattern %d is refined without it",
+                            tFieldName.c_str(),
+                            (int)tActivationPattern );
+                    continue;
+                }
+
+                const std::shared_ptr< mtk::Field >& tField = aFields( tFieldNameToIndexMap.find( tFieldName ) );
 
                 // get interpolation mesh from mesh pair
                 moris::mtk::Mesh* tSourceMesh = tField->get_mesh_pair().get_interpolation_mesh();
@@ -238,6 +248,11 @@ namespace moris::wrk
 
                     auto tIter = tMap.find( tHMRId );
 
+                    MORIS_ERROR( tIter != tMap.end(),
+                            "perform_refinement_2(): cell of field '%s' has no background element in the current mesh "
+                            "(field older than the last remesh?)",
+                            tFieldName.c_str() );
+
                     moris_index tIndex = tIter->second;
 
                     hmr::Background_Element_Base* tBGElementNew = tBGElements( tIndex );
@@ -246,6 +261,12 @@ namespace moris::wrk
                     {
                         // jump to parent
                         tBGElementNew = tBGElementNew->get_parent();
+
+                        MORIS_ERROR( tBGElementNew != nullptr,
+                                "perform_refinement_2(): field '%s' lives on a mesh not covered by reference pattern %d "
+                                "(field older than the last remesh?)",
+                                tFieldName.c_str(),
+                                (int)tThisRefernecePattern );
                     }
 
                     // in the case that the BG level is equal the max level, hold this element

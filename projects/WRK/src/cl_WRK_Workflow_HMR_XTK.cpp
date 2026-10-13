@@ -207,9 +207,17 @@ namespace moris::wrk
             Vector< std::shared_ptr< hmr::HMR > >&          tHmrPerformers      = mPerformerManager->mHMRPerformer;
             Vector< std::shared_ptr< mtk::Mesh_Manager > >& tMtkPerformers      = mPerformerManager->mMTKPerformer;
 
-            // get refinement fields from GEN and MDL performers
+            // get refinement fields from GEN and MDL performers; the MDL fields only if a solve ran on this mesh
             tFieldsIn.append( tGeometryEngine->get_mtk_fields() );
-            tFieldsIn.append( tModelPerformer->get_mtk_fields() );
+            if ( mMDLFieldsOnCurrentMesh )
+            {
+                tFieldsIn.append( tModelPerformer->get_mtk_fields() );
+            }
+            else
+            {
+                MORIS_LOG_WARNING( "Workflow_HMR_XTK::initialize() - no forward solve on the current mesh since the last remesh; "
+                                   "remeshing on the geometry fields only" );
+            }
 
             // check remeshing mini-performer has been built
             MORIS_ERROR(
@@ -222,6 +230,9 @@ namespace moris::wrk
                     tHmrPerformers,
                     tMtkPerformers,
                     tFieldsOut );
+
+            // the MDL fields now live on the replaced mesh
+            mMDLFieldsOnCurrentMesh = false;
 
             // get access to the library
             std::shared_ptr< Library_IO > tLibrary = mPerformerManager->mLibrary;
@@ -688,6 +699,7 @@ namespace moris::wrk
 
         // Build MDL components and solve
         mPerformerManager->mMDLPerformer( 0 )->perform();
+        mMDLFieldsOnCurrentMesh = true;
 
         // perform mapping at this stage between solution field and adv field as some data will be deleted
         // This is FIELD_REMAP mode only - INTERFACE_SDF mode handles reinitialization earlier (after XTK)
