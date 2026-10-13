@@ -123,6 +123,7 @@ representation of the cut circle.
 ([`Struc_Hertz_Contact`](https://github.com/kdoble48/moris/tree/develop/projects/EXA/structure/contact/Struc_Hertz_Contact)).
 On a 160 × 160 mesh the peak pressure matches the Hertz value (p₀/p₀,H = 1.00), the
 contact half-width is 0.98 of the analytic one, and the profile's relative L₂ error is 0.031.
+Mesh convergence and load scaling: {doc}`exa/structure/Struc_Hertz_Contact`.
 ```
 
 :::
