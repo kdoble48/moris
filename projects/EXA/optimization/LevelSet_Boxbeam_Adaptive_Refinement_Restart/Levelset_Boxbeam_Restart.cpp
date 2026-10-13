@@ -25,6 +25,8 @@
 #include "fn_stringify_matrix.hpp"
 
 #include "AztecOO.h"
+#include <filesystem>
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -92,7 +94,7 @@ namespace moris
 
     real tMMAPenalty  = 5.0;
     real tMMAStepSize = 0.05;
-    int  tMMAMaxIter  = 5;
+    int  tMMAMaxIter  = moris::exa::pick( 5, 60 );
 
     real tBsplineLimit = tHoleRadius;
 
@@ -516,20 +518,50 @@ namespace moris
 
     //--------------------------------------------------------------------------------------------------------------
 
+
+    //------------------------------------------------------------------------------
+    // Restart point: the regression test resumes from iteration 11. A showcase run resumes from the
+    // newest refinement pattern the create run wrote (HMR_Background_Refinement_Iter_N.hdf5, written
+    // at each interface reinitialization) and the ADV file of the same iteration.
+    int
+    restart_iteration()
+    {
+        if ( moris::exa::mode() != moris::exa::Mode::SHOWCASE )
+        {
+            return 11;
+        }
+        int tLatest = -1;
+        const std::string tPrefix = "HMR_Background_Refinement_Iter_";
+        for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
+        {
+            const std::string tName = tEntry.path().filename().string();
+            if ( tName.rfind( tPrefix, 0 ) == 0 && tName.size() > tPrefix.size() + 5 )
+            {
+                const int tIteration = std::atoi( tName.substr( tPrefix.size() ).c_str() );
+                const bool tHasAdvFile = std::filesystem::exists( "ADV_Alg_0_Iter_" + std::to_string( tIteration ) + ".hdf5" );
+                if ( tIteration > 0 && tHasAdvFile && tIteration > tLatest )
+                {
+                    tLatest = tIteration;
+                }
+            }
+        }
+        return tLatest >= 0 ? tLatest : 11;
+    }
+
     void
     OPTParameterList( Module_Parameter_Lists& aParameterLists )
     {
         aParameterLists.set( "is_optimization_problem", tIsOpt );
         aParameterLists.set( "problem", "user_defined" );
         aParameterLists.set( "library", tLibraryName );
-        aParameterLists.set( "restart_file", "ADV_Alg_0_Iter_11.hdf5" );
+        aParameterLists.set( "restart_file", "ADV_Alg_0_Iter_" + std::to_string( restart_iteration() ) + ".hdf5" );
         aParameterLists.set( "reinitialize_interface_iter", 50 );
 
         aParameterLists( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::GCMMA );
         aParameterLists.set( "step_size", tMMAStepSize );
         aParameterLists.set( "penalty", tMMAPenalty );
         aParameterLists.set( "max_its", tMMAMaxIter );    // Maximum number of iterations
-        aParameterLists.set( "restart_index", 10 );
+        aParameterLists.set( "restart_index", restart_iteration() - 1 );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -558,7 +590,8 @@ namespace moris
 
         aParameterLists.set( "use_refine_low_level_elements", false );
 
-        aParameterLists.set( "restart_refinement_pattern_file", "HMR_Background_Refinement_Iter_11.hdf5" );
+        aParameterLists.set( "restart_refinement_pattern_file",
+                "HMR_Background_Refinement_Iter_" + std::to_string( restart_iteration() ) + ".hdf5" );
     }
 
     //--------------------------------------------------------------------------------------------------------------
