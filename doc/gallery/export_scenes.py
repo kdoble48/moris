@@ -375,7 +375,11 @@ class Scene:
         clip.Invert = int(invert)
         axis = "xyz"[max(range(3), key=lambda i: abs(normal[i]))]
         if note:
-            self.notes.append(f"clipped at {axis} = {origin['xyz'.index(axis)]:.4g}")
+            index = "xyz".index(axis)
+            where = origin[index]
+            if abs(where) < 1e-9 * max(1.0, b[2 * index + 1] - b[2 * index]):
+                where = 0.0    # a mid-plane of a symmetric domain: -2.2e-16 reads as 0
+            self.notes.append(f"clipped at {axis} = {where:.4g}")
         # keeping y <= origin (invert with +y normal) exposes a face toward +y: look at it from there
         return self._cut(clip, face_cut=(axis == "y" and bool(invert) == (normal[1] > 0)))
 
@@ -596,7 +600,7 @@ def export_example(example, out):
     elif interface:
         caption += f"; black line: the level-set interface, {interface[0]} = {interface[1]:g}"
     if extra:
-        caption += ". " + extra
+        caption = (caption + ". " + extra).rstrip(".")    # the page adds the final period itself
     summary = [f"{file_name}" + (f", {step}" if step else ""), f"{cells} cells, {'3D' if three_d else '2D'}"]
     over = se.overlays(view)
     pv.SaveScreenshot(os.path.join(out, f"{base}.png"), view, ImageResolution=SIZE)
