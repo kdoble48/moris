@@ -90,7 +90,17 @@ RUN_OUTPUTS = re.compile(r"(\.exo|\.e-s\.|^ADV_Alg_|^Parameter_Receipt|\.log$|^x
 
 MORIS_ERROR = "Moris encountered an error"
 # failure signatures of a run: a MORIS error, a crash (the MPI signal handler's trailer), a NaN objective
-RUN_FAILURES = (MORIS_ERROR, "*** End of error message ***", "GCMMA - Objective: [nan]")
+RUN_FAILURES = (MORIS_ERROR, "*** End of error message ***")
+OBJECTIVE = "GCMMA - Objective: ["
+
+
+def diverged(text: str) -> bool:
+    """A NaN objective that persists: two in a row, or the last one. A single NaN followed by a finite
+    value is the HMR/XTK workflow's deliberate signal for GCMMA to restart after a remesh."""
+    values = [line.split(OBJECTIVE, 1)[1].split("]", 1)[0].strip().lower()
+              for line in text.splitlines() if OBJECTIVE in line]
+    nan = [v == "nan" or v == "-nan" for v in values]
+    return bool(nan) and (nan[-1] or any(a and b for a, b in zip(nan, nan[1:])))
 
 
 def showcase_completed(run_dir: Path, accept_error: bool = False) -> bool:
@@ -104,7 +114,7 @@ def showcase_completed(run_dir: Path, accept_error: bool = False) -> bool:
     if not (run_dir / "DONE").exists() or not log.exists():
         return False
     text = log.read_text(errors="replace")
-    return accept_error or not any(signature in text for signature in RUN_FAILURES)
+    return accept_error or not (any(signature in text for signature in RUN_FAILURES) or diverged(text))
 
 
 def showcase_capable(example: dict, source_root: Path = ROOT) -> bool:
