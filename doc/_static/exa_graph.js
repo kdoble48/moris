@@ -39,6 +39,15 @@
       .attr("viewBox", `0 0 ${width} ${height}`).attr("width", "100%").attr("height", "100%");
     const layer = svg.append("g");
     const tip = d3.select(container).append("div").attr("class", "exa-graph-tip").style("display", "none");
+    function placeTip(ev) {
+      // keep the tooltip inside the box (overflow is hidden): flip it above / to the left near an edge
+      const box = container.getBoundingClientRect();
+      const w = tip.node().offsetWidth;
+      const h = tip.node().offsetHeight;
+      const x = ev.offsetX + 14 + w > box.width ? Math.max(0, ev.offsetX - 14 - w) : ev.offsetX + 14;
+      const y = ev.offsetY + 14 + h > box.height ? Math.max(0, ev.offsetY - 14 - h) : ev.offsetY + 14;
+      tip.style("left", `${x}px`).style("top", `${y}px`);
+    }
 
     let zoom = null;
     if (mode === "map") {
@@ -95,7 +104,8 @@
         tip.style("display", "block")
           .html(`<strong>${e.source.title}</strong> &harr; <strong>${e.target.title}</strong>`
             + `<ul class="exa-graph-shared">${shared}</ul><div class="exa-graph-score">similarity ${e.weight.toFixed(2)}</div>`)
-          .style("left", `${ev.offsetX + 14}px`).style("top", `${ev.offsetY + 14}px`);
+;
+        placeTip(ev);
       })
       .on("mouseleave", () => tip.style("display", "none"));
 
@@ -107,7 +117,8 @@
         const edge = centre && !n.centre
           ? (edgeOf.get(`${centre.id}|${n.id}`) || edgeOf.get(`${n.id}|${centre.id}`)) : null;
         tip.style("display", "block").html(tooltipHtml(n, edge))
-          .style("left", `${ev.offsetX + 14}px`).style("top", `${ev.offsetY + 14}px`);
+;
+        placeTip(ev);
       })
       .on("mouseleave", () => tip.style("display", "none"))
       .call(d3.drag()
