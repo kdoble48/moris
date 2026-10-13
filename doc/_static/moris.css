@@ -148,7 +148,12 @@ article table.docutils {
     pointer-events: none;
 }
 .exa-graph-tip img { display: block; max-width: 100%; margin-bottom: 0.3em; border-radius: 0.2em; }
-.exa-graph-shared { margin-top: 0.3em; color: var(--color-foreground-secondary); }
+.exa-graph-shared { margin: 0.3em 0 0; padding-left: 1.1em; color: var(--color-foreground-secondary); }
+.exa-graph-shared li { margin: 0; }
+.exa-graph-score { margin-top: 0.2em; font-size: 0.9em; color: var(--color-foreground-muted); }
+.exa-graph-link-hit { stroke: transparent; stroke-width: 12px; cursor: help; }
+.exa-graph-family { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
+.exa-graph-family.exa-graph-off { opacity: 0.4; text-decoration: line-through; }
 .exa-graph-bar {
     position: absolute;
     top: 0.5em;
@@ -161,7 +166,7 @@ article table.docutils {
     font-size: 0.8em;
 }
 .exa-graph-bar select { font-size: inherit; }
-.exa-graph-legend span { margin-right: 0.8em; white-space: nowrap; }
+.exa-graph-legend .exa-graph-family { margin-right: 0.8em; white-space: nowrap; }
 .exa-graph-legend i {
     display: inline-block;
     width: 0.8em;

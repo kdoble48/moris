@@ -52,3 +52,24 @@ def test_graph_data_ego_and_map():
     keys = [(e["source"], e["target"]) for e in full["edges"]]
     assert len(keys) == len(set(keys))                                    # each pair once
     assert not any(n["centre"] for n in full["nodes"])
+
+
+def anatomy(dofs, linear, nonlinear, cells, blocks):
+    return {"dofs": dofs, "solvers": {"linear": linear, "nonlinear": nonlinear},
+            "mesh": {"cells": cells} if cells else {}, "blocks": dict(zip(eg.BLOCK_KINDS, blocks)), "run": {}}
+
+
+def test_anatomy_similarity_parts_and_labels():
+    a = dict(ex("A", ["2D"]), anatomy=anatomy(["UX", "UY"], ["AMESOS_IMPL"], ["NEWTON"], 10_000, [7, 2, 4, 7, 7, 2]))
+    b = dict(ex("B", ["2D"]), anatomy=anatomy(["UX", "UY"], ["AMESOS_IMPL"], ["NEWTON"], 12_000, [8, 2, 4, 8, 6, 2]))
+    c = dict(ex("C", ["2D"]), anatomy=anatomy(["TEMP"], ["BELOS_IMPL"], ["NLBGS"], 2_000_000, [30, 6, 10, 16, 9, 4]))
+    score_ab, shared_ab = eg.anatomy_similarity(a, b)
+    score_ac, shared_ac = eg.anatomy_similarity(a, c)
+    assert score_ab > 0.9 > score_ac
+    assert shared_ab == ["same DOFs: UX, UY", "same solver stack: AMESOS_IMPL, NEWTON",
+                         "similar mesh size (~10,000 and ~12,000 background cells)", "similar deck structure (block counts)"]
+    assert shared_ac == []
+    assert eg.anatomy_similarity(ex("X", []), ex("Y", [])) == (None, [])     # nothing comparable
+    # the anatomy pulls the score: same tags, different anatomy -> lower than same tags, same anatomy
+    assert eg.similarity(a, b) > eg.similarity(a, c)
+    assert eg.shared_features(a, b)[0] == "2D" and len(eg.shared_features(a, b)) == 5

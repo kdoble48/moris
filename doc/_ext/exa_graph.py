@@ -43,15 +43,74 @@ def tag_weight(tag):
     return TAG_WEIGHTS.get(tag, 1.0)
 
 
-def similarity(a, b):
-    """Weighted Jaccard index of the two examples' tags, plus the category and group bonuses."""
+TAG_SHARE = 0.65          # the tag overlap carries most of the score ...
+ANATOMY_SHARE = 0.35      # ... the deck anatomy (DOFs, solvers, size, block structure) the rest
+BLOCK_KINDS = ("properties", "constitutive models", "stabilization parameters", "IWGs", "IQIs", "geometries")
+
+
+def tag_similarity(a, b):
+    """Weighted Jaccard index of the two examples' tags (0..1)."""
     tags_a, tags_b = set(a.get("tags", [])), set(b.get("tags", []))
     union = tags_a | tags_b
     if not union:
-        score = 0.0
-    else:
-        shared = sum(tag_weight(t) for t in tags_a & tags_b)
-        score = shared / sum(tag_weight(t) for t in union)
+        return 0.0
+    return sum(tag_weight(t) for t in tags_a & tags_b) / sum(tag_weight(t) for t in union)
+
+
+def _jaccard(x, y):
+    x, y = set(x), set(y)
+    return len(x & y) / len(x | y) if x | y else None
+
+
+def _stack(anatomy):
+    solvers = anatomy.get("solvers", {})
+    return [f"{s} (linear)" for s in solvers.get("linear", [])] + \
+           [f"{s} (nonlinear)" for s in solvers.get("nonlinear", [])]
+
+
+def anatomy_similarity(a, b):
+    """``(score 0..1, what they share)`` from the deck anatomies: the DOF set, the solver stack, the
+    mesh size (log scale) and the block structure (counts per kind, cosine). A part counts only
+    when both decks define it; ``(None, [])`` when nothing is comparable."""
+    import math
+
+    aa, ab = a.get("anatomy") or {}, b.get("anatomy") or {}
+    parts, shared = [], []
+    dofs = _jaccard(aa.get("dofs", []), ab.get("dofs", []))
+    if dofs is not None:
+        parts.append((0.35, dofs))
+        if dofs == 1.0:
+            shared.append("same DOFs: " + ", ".join(aa["dofs"]))
+        elif dofs > 0:
+            shared.append("shared DOFs: " + ", ".join(d for d in aa["dofs"] if d in ab["dofs"]))
+    solvers = _jaccard(_stack(aa), _stack(ab))
+    if solvers is not None:
+        parts.append((0.25, solvers))
+        if solvers == 1.0:
+            shared.append("same solver stack: " + ", ".join(s.split(" ")[0] for s in _stack(aa)))
+    cells_a, cells_b = aa.get("mesh", {}).get("cells"), ab.get("mesh", {}).get("cells")
+    if cells_a and cells_b:
+        proximity = max(0.0, 1.0 - abs(math.log10(cells_a) - math.log10(cells_b)) / 1.5)
+        parts.append((0.2, proximity))
+        if proximity > 0.7:
+            shared.append(f"similar mesh size (~{cells_a:,} and ~{cells_b:,} background cells)")
+    counts_a = [aa.get("blocks", {}).get(k, 0) for k in BLOCK_KINDS]
+    counts_b = [ab.get("blocks", {}).get(k, 0) for k in BLOCK_KINDS]
+    norm = math.sqrt(sum(x * x for x in counts_a)) * math.sqrt(sum(x * x for x in counts_b))
+    if norm:
+        cosine = sum(x * y for x, y in zip(counts_a, counts_b)) / norm
+        parts.append((0.2, cosine))
+        if cosine > 0.95 and abs(sum(counts_a) - sum(counts_b)) <= 0.3 * max(sum(counts_a), sum(counts_b)):
+            shared.append("similar deck structure (block counts)")
+    if not parts:
+        return None, []
+    return sum(w * s for w, s in parts) / sum(w for w, _ in parts), shared
+
+
+def similarity(a, b):
+    """Tag overlap and deck anatomy, weighted, plus the category and group bonuses."""
+    anatomy, _ = anatomy_similarity(a, b)
+    score = tag_similarity(a, b) if anatomy is None else TAG_SHARE * tag_similarity(a, b) + ANATOMY_SHARE * anatomy
     if a.get("category") == b.get("category"):
         score += SAME_CATEGORY
         if a.get("group") and a.get("group") == b.get("group"):
@@ -63,6 +122,11 @@ def shared_tags(a, b):
     """The tags both examples carry, in the first example's order."""
     other = set(b.get("tags", []))
     return [t for t in a.get("tags", []) if t in other]
+
+
+def shared_features(a, b):
+    """What an edge stands for: the shared tags, then the anatomy matches."""
+    return shared_tags(a, b) + anatomy_similarity(a, b)[1]
 
 
 def neighbours(example, examples, limit=MAX_NEIGHBOURS, minimum=MIN_SIMILARITY):
@@ -93,7 +157,7 @@ def graph_data(examples, urls=None, thumbs=None, centre=None, limit=MAX_NEIGHBOU
                 pass  # neighbour-neighbour edges stay: they show which neighbours form a family
             key = tuple(sorted((example["leaf"], other["leaf"])))
             edges.setdefault(key, {"source": key[0], "target": key[1], "weight": score,
-                                   "shared": shared_tags(by_leaf[key[0]], by_leaf[key[1]])})
+                                   "shared": shared_features(by_leaf[key[0]], by_leaf[key[1]])})
     nodes = [{"id": e["leaf"], "title": e["title"], "category": e["category"], "group": e.get("group", ""),
               "tags": e.get("tags", []), "url": urls.get(e["leaf"], ""), "thumb": thumbs.get(e["leaf"], ""),
               "centre": e["leaf"] == centre}
@@ -159,7 +223,7 @@ def related_markdown(app, example, examples, docname):
              "", _graph_html(data, "ego", 320), ""]
     for other, score in near:
         title = f"[{other['title']}]({urls[other['leaf']]})" if other["leaf"] in urls else other["title"]
-        shared = ", ".join(shared_tags(example, other)) or "same category"
+        shared = "; ".join(shared_features(example, other)) or "same category"
         lines.append(f"- {title} — shares *{shared}*")
     lines.append(":::")
     return "\n".join(lines)

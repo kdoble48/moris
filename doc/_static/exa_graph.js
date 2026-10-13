@@ -18,7 +18,9 @@
 
   function tooltipHtml(node, edge) {
     const tags = node.tags.map((t) => `<span class="exa-tag">${t}</span>`).join(" ");
-    const shared = edge ? `<div class="exa-graph-shared">shares: ${edge.shared.join(", ") || "category"}</div>` : "";
+    const shared = edge
+      ? `<ul class="exa-graph-shared">${(edge.shared.length ? edge.shared : ["same category"]).map((s) => `<li>${s}</li>`).join("")}</ul>`
+      : "";
     const thumb = node.thumb ? `<img src="${node.thumb}" alt="">` : "";
     return `${thumb}<strong>${node.title}</strong><div>${tags}</div>${shared}`;
   }
@@ -47,15 +49,28 @@
       const select = bar.append("select");
       select.append("option").attr("value", "").text("highlight a feature…");
       tags.forEach((t) => select.append("option").attr("value", t).text(t));
-      select.on("change", function () {
-        const tag = this.value;
-        node.classed("exa-graph-dim", (n) => tag && !n.tags.includes(tag));
-        link.classed("exa-graph-dim", (e) => tag && !(e.source.tags.includes(tag) && e.target.tags.includes(tag)));
-      });
+      select.on("change", function () { tagFilter = this.value; applyFilters(); });
       const legend = bar.append("span").attr("class", "exa-graph-legend");
       Object.keys(CATEGORY_LABELS).forEach((c) => {
-        legend.append("span").html(`<i style="background:${CATEGORY_COLORS[c]}"></i>${CATEGORY_LABELS[c]}`);
+        legend.append("button").attr("type", "button").attr("class", "exa-graph-family").attr("data-category", c)
+          .attr("title", "click to hide or show this family")
+          .html(`<i style="background:${CATEGORY_COLORS[c]}"></i>${CATEGORY_LABELS[c]}`)
+          .on("click", function () {
+            if (hidden.has(c)) { hidden.delete(c); } else { hidden.add(c); }
+            d3.select(this).classed("exa-graph-off", hidden.has(c));
+            applyFilters();
+          });
       });
+    }
+    const hidden = new Set();
+    let tagFilter = "";
+    function applyFilters() {
+      node.style("display", (n) => (hidden.has(n.category) ? "none" : null))
+        .classed("exa-graph-dim", (n) => tagFilter && !n.tags.includes(tagFilter));
+      const shown = (e) => !hidden.has(e.source.category) && !hidden.has(e.target.category);
+      link.style("display", (e) => (shown(e) ? null : "none"))
+        .classed("exa-graph-dim", (e) => tagFilter && !(e.source.tags.includes(tagFilter) && e.target.tags.includes(tagFilter)));
+      linkHit.style("display", (e) => (shown(e) ? null : "none"));
     }
 
     const simulation = d3.forceSimulation(data.nodes)
@@ -72,6 +87,17 @@
     const link = layer.append("g").selectAll("line").data(data.edges).join("line")
       .attr("class", "exa-graph-link")
       .attr("stroke-width", (e) => (mode === "ego" ? 1 + 5 : 0.5 + 2.5) * Math.min(e.weight, 1));
+
+    const linkHit = layer.append("g").selectAll("line").data(data.edges).join("line")
+      .attr("class", "exa-graph-link-hit")
+      .on("mousemove", (ev, e) => {
+        const shared = e.shared.length ? e.shared.map((s) => `<li>${s}</li>`).join("") : "<li>same category</li>";
+        tip.style("display", "block")
+          .html(`<strong>${e.source.title}</strong> &harr; <strong>${e.target.title}</strong>`
+            + `<ul class="exa-graph-shared">${shared}</ul><div class="exa-graph-score">similarity ${e.weight.toFixed(2)}</div>`)
+          .style("left", `${ev.offsetX + 14}px`).style("top", `${ev.offsetY + 14}px`);
+      })
+      .on("mouseleave", () => tip.style("display", "none"));
 
     const node = layer.append("g").selectAll("g").data(data.nodes).join("g")
       .attr("class", (n) => "exa-graph-node" + (n.centre ? " exa-graph-centre" : ""))
@@ -114,6 +140,8 @@
     if (zoom) { svg.call(zoom.transform, fit); } else { layer.attr("transform", fit); }
     simulation.on("tick", () => {
       link.attr("x1", (e) => e.source.x).attr("y1", (e) => e.source.y)
+        .attr("x2", (e) => e.target.x).attr("y2", (e) => e.target.y);
+      linkHit.attr("x1", (e) => e.source.x).attr("y1", (e) => e.source.y)
         .attr("x2", (e) => e.target.x).attr("y2", (e) => e.target.y);
       node.attr("transform", (n) => `translate(${n.x},${n.y})`);
       placeLabels();
