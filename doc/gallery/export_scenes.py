@@ -232,12 +232,15 @@ def render(example, choice, out):
     override = example.get("override", {})
     reader = open_reader(choice.path)
     # bulk phases only: void phases (often present in the VIS output, with an ersatz solution) are dropped
-    phases = None
+    phases, hidden = None, []
     if choice.kind in ("result", "gen"):
         phases = set(override["phases"]) if override.get("phases") else \
             gs.bulk_phases(example.get("deck_texts", []), choice.array, choice.vector)
+        present = {gs.block_phase(n)[0] for n in available_blocks(reader)} - {None}
         if not select_phases(reader, phases):
             phases = None
+        else:
+            hidden = sorted(present - phases)
     readers = [(reader, phases)]
     times = list(getattr(reader, "TimestepValues", []) or [])
     view = new_view()
@@ -305,7 +308,7 @@ def render(example, choice, out):
         step = gs.step_labels(choice.path, [], len(times))[0][-1]
     if cutaway is not None:
         step = (step + ", " if step else "") + f"cut away at y = {cutaway:.4g}"
-    shown = sorted(phases) if phases else None
+    shown = (sorted(phases), hidden) if phases else None
     return view, three_d, cells, step, by_block, source, times, interface, readers, shown
 
 
@@ -402,9 +405,11 @@ def export_example(example, out):
     caption = KIND_CAPTION[choice.kind].format(label=choice.label)
     if choice.kind == "mesh" and by_block:
         caption = "Mesh, colored by element block"
-    if shown:
-        caption += f", on the bulk phase{'s' if len(shown) > 1 else ''} {', '.join(map(str, shown))} only " \
-                   "(void phases hidden)"
+    if shown and shown[1]:
+        bulk, hidden = shown
+        caption += f", on the bulk phase{'s' if len(bulk) > 1 else ''} {', '.join(map(str, bulk))} only; " \
+                   f"phase{'s' if len(hidden) > 1 else ''} {', '.join(map(str, hidden))} hidden " \
+                   f"(no bulk physics for {choice.label} there)"
     if interface == "outline":
         caption += "; black lines: the boundaries of the bulk phases (interfaces and outer edges)"
     elif interface:
