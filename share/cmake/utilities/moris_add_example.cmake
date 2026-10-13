@@ -80,6 +80,7 @@ function(moris_add_example)
         ${MORIS_PACKAGE_DIR}/XTK/src
         ${MORIS_PACKAGE_DIR}/PRM/src
         ${MORIS_PACKAGE_DIR}/MRS/COR/src
+        ${MORIS_PACKAGE_DIR}/EXA/runner  # EXA_Mode.hpp: regression vs showcase run length
         ${EXA_EXTRA_SO_INCLUDES})
 
     foreach(TPL ${SO_TPLS})

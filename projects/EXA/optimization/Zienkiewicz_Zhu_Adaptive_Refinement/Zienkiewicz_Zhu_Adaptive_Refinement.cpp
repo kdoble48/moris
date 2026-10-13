@@ -31,6 +31,7 @@
 #include "BelosLinearProblem.hpp"
 #include "BelosEpetraAdapter.hpp"
 #include "BelosBlockGmresSolMgr.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,7 +82,7 @@ namespace moris
 
     real tMMAPenalty  = 100.0;
     real tMMAStepSize = 0.02;
-    int  tMMAMaxIter  = 19;
+    int  tMMAMaxIter  = moris::exa::pick( 19, 200 );    // showcase: past the density-shift ramp (20..170)
 
     real tInitialStrainEnergy = 90.00;
     real tStrainEnergyPen     = 0.1;
@@ -1617,6 +1618,7 @@ Matrix<DDRMat> compute_objectives( const Vector< real >& aADVs, const Vector< re
     {
 
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AMESOS_IMPL );
+        aParameterLists.set( "Solver_Type", "Amesos_Klu" );    // the Amesos default (Pardiso) is not built in every Trilinos
 
         /*
     // Solver type: GMRES, Flexible GMRES, Block CG , PseudoBlockCG, Stochastic CG, Recycling GMRES, Recycling CG, MINRES, LSQR, TFQMR
