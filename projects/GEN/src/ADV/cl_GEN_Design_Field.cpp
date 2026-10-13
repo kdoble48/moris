@@ -25,7 +25,16 @@ namespace moris::gen
             , mDiscretizationLowerBound( aParameterList.get< real >( "discretization_lower_bound" ) )
             , mDiscretizationUpperBound( aParameterList.get< real >( "discretization_upper_bound" ) )
             , mUseMultilinearInterpolation( aParameterList.get< bool >( "use_multilinear_interpolation" ) )
+            , mUseCellOrderIntersection( aParameterList.exists( "use_cell_order_intersection" ) and aParameterList.get< bool >( "use_cell_order_intersection" ) )
     {
+        // (the key is read only if present, so that decks compiled against older PRM headers keep working)
+
+        // Cell-order intersections use the multilinear code path (Newton on a cell interpolant, interpolated derived
+        // node values) with the background cell's own-order basis
+        if ( mUseCellOrderIntersection )
+        {
+            mUseMultilinearInterpolation = true;
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -42,7 +51,14 @@ namespace moris::gen
         MORIS_ERROR( mField, "A design must be provided a field for computing values." );
 
         // Override linear interpolation if multilinear intersections will be used
-        if ( mParameters.mUseMultilinearInterpolation )
+        if ( mParameters.mUseCellOrderIntersection )
+        {
+            // derived nodes must keep the cell's own-order basis; corner-multilinear geometries cannot share the run
+            MORIS_ERROR( not Derived_Node::get_override_linear_interpolation(),
+                    "Design_Field: use_cell_order_intersection cannot be combined with a geometry that uses "
+                    "use_multilinear_interpolation alone (derived nodes are forced to linear interpolation)." );
+        }
+        else if ( mParameters.mUseMultilinearInterpolation )
         {
             Derived_Node::set_override_linear_interpolation();
         }
@@ -257,6 +273,13 @@ namespace moris::gen
     bool Design_Field::use_multilinear_interpolation() const
     {
         return mParameters.mUseMultilinearInterpolation;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Design_Field::use_cell_order_intersection() const
+    {
+        return mParameters.mUseCellOrderIntersection;
     }
 
     //--------------------------------------------------------------------------------------------------------------

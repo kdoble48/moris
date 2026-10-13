@@ -25,6 +25,7 @@ set(TEST_SOURCES
     xtk/UT_XTK_Enrichment_2D.cpp
     xtk/UT_XTK_Enrichment.cpp
     xtk/UT_XTK_Ghost_Stabilization.cpp
+    xtk/UT_XTK_Parameters.cpp
     xtk/UT_XTK_HMR_2D.cpp
     xtk/UT_XTK_HMR_Enrich_Inclusion.cpp
     xtk/UT_XTK_HMR_Enrich.cpp

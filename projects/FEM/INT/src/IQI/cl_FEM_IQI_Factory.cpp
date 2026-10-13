@@ -15,6 +15,7 @@
 #include "cl_FEM_IQI_Volume.hpp"
 #include "cl_FEM_IQI_Strain_Energy.hpp"
 #include "cl_FEM_IQI_Stress.hpp"
+#include "cl_FEM_IQI_Cylindrical_Stress.hpp"
 #include "cl_FEM_IQI_Gap.hpp"
 #include "cl_FEM_IQI_Dof.hpp"
 #include "cl_FEM_IQI_Eigen_Vector.hpp"
@@ -117,6 +118,9 @@ namespace moris::fem
                 return std::make_shared< IQI_Stress >( Stress_Type::PRINCIPAL_STRESS, CM_Function_Type::CAUCHY );
             case IQI_Type::STRESS_VECTOR_CAUCHY:
                 return std::make_shared< IQI_Stress >( Stress_Type::STRESS_VECTOR, CM_Function_Type::CAUCHY );
+
+            case IQI_Type::CYLINDRICAL_STRESS:
+                return std::make_shared< IQI_Cylindrical_Stress >();
 
             case IQI_Type::MAX_NORMAL_STRESS:
                 return std::make_shared< IQI_Max_Stress >( Stress_Type::NORMAL_STRESS );

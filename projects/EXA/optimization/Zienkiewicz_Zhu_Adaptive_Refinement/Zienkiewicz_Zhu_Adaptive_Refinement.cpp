@@ -31,6 +31,7 @@
 #include "BelosLinearProblem.hpp"
 #include "BelosEpetraAdapter.hpp"
 #include "BelosBlockGmresSolMgr.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,7 +82,9 @@ namespace moris
 
     real tMMAPenalty  = 100.0;
     real tMMAStepSize = 0.02;
-    int  tMMAMaxIter  = 19;
+    // showcase: the design settles by ~30 iterations and holds to ~118; from ~119 (two thirds into the density-shift ramp) it
+    // breaks up and empties out (zero stress satisfies the constraint, D-153), so the showcase stops at 115
+    int  tMMAMaxIter  = moris::exa::pick( 19, 115 );
 
     real tInitialStrainEnergy = 90.00;
     real tStrainEnergyPen     = 0.1;
@@ -1617,6 +1620,7 @@ Matrix<DDRMat> compute_objectives( const Vector< real >& aADVs, const Vector< re
     {
 
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AMESOS_IMPL );
+        aParameterLists.set( "Solver_Type", "Amesos_Klu" );    // the Amesos default (Pardiso) is not built in every Trilinos
 
         /*
     // Solver type: GMRES, Flexible GMRES, Block CG , PseudoBlockCG, Stochastic CG, Recycling GMRES, Recycling CG, MINRES, LSQR, TFQMR
@@ -1780,7 +1784,12 @@ Matrix<DDRMat> compute_objectives( const Vector< real >& aADVs, const Vector< re
         aParameterLists.set( "remeshing_copy_old_pattern_to_pattern", "0, 3; 1, 4; 2, 5" );
         aParameterLists.set( "remeshing_refinement_pattern", "0;0;0;0;0,1" );
 
-        aParameterLists.set( "minimum_refinement_level", "0, 0, 30, 10, 100, 0, 500; 1, 0, 30, 0, 500;2, 0, 500" );
+        // showcase: a level-1 floor on pattern 0, so a newly cut cell needs one remesh, not two (two failed
+        // decompositions in a row crash the remesh, MB-033); the regression schedule asks level 10 for
+        // iterations 30-99, which it never reaches
+        aParameterLists.set( "minimum_refinement_level",
+                moris::exa::pick( std::string( "0, 0, 30, 10, 100, 0, 500; 1, 0, 30, 0, 500;2, 0, 500" ),
+                        std::string( "0, 1, 500; 1, 0, 500; 2, 0, 500" ) ) );
 
         aParameterLists.set( "output_meshes", true );
     }

@@ -134,8 +134,10 @@ namespace moris::gen
                     tSomethingHasBeenBuilt = true;
                 }
 
-                // Check if design needs building
-                if ( iParameterList.exists( "design_type" ) )
+                // Check if design needs building (only once its field dependencies exist; otherwise the outer loop retries it.
+                // Without the tCanBuild check a level-set geometry listed before its dependency fields hit the
+                // "does not recognize geometry type" error, and a property was built on the wrong field. MB-009)
+                if ( iParameterList.exists( "design_type" ) and tCanBuild )
                 {
                     // Get design type
                     std::string tDesignType = iParameterList.get< std::string >( "design_type" );
@@ -147,7 +149,7 @@ namespace moris::gen
                         std::string tGeometryType = iParameterList.get< std::string >( "geometry_type" );
 
                         // Level-set field
-                        if ( tGeometryType == "level_set" and tCanBuild )
+                        if ( tGeometryType == "level_set" )
                         {
                             mGeometries( tGeometryIndex++ ) = std::make_shared< Level_Set_Geometry >( mFields( tFieldIndex - 1 ), Level_Set_Parameters( iParameterList ), aNodeManager );
                         }

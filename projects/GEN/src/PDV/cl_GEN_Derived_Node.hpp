@@ -149,5 +149,18 @@ namespace moris::gen
          * Sets the flag for overriding linear interpolation, for when multilinear intersections are being used.
          */
         static void set_override_linear_interpolation();
+
+        /**
+         * Clears the flag for overriding linear interpolation. Needed when a level set uses cell-order intersections
+         * (use_cell_order_intersection): its derived nodes must keep the background cell's own-order basis.
+         */
+        static void clear_override_linear_interpolation();
+
+        /**
+         * Gets whether derived nodes are currently forced to linear interpolation.
+         *
+         * @return Override flag
+         */
+        static bool get_override_linear_interpolation();
     };
 }

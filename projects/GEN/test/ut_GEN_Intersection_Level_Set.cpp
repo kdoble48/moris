@@ -391,6 +391,18 @@ namespace moris::gen
                 CHECK_EQUAL(
                         tNodeManager.get_coordinate_determining_adv_ids_from_derived_node( iNodeIndex ),
                         tIntersectionIDs( iNodeIndex - 9 ), );
+
+                // MB-022: the sensitivities are linear in the incoming chain factor, D(A) = A * D(I), at every
+                // nesting depth. A non-commuting A also checks the order of the recursive product (A * J, not J * A).
+                // Nodes 21 and 22 have intersection-node parents; before the fix they ignored A in the parent terms.
+                Matrix< DDRMat > tChainFactor = { { 1.0, 2.0 }, { -3.0, 0.5 } };
+                Matrix< DDRMat > tFactoredSensitivities;
+                tNodeManager.append_dcoordinate_dadv_from_derived_node( iNodeIndex, tFactoredSensitivities, tChainFactor );
+                Matrix< DDRMat > tExpectedFactoredSensitivities = tChainFactor * tHostADVSensitivities;
+                CHECK_EQUAL(
+                        tFactoredSensitivities,
+                        tExpectedFactoredSensitivities,
+                        1E8, );
             }
 
             //------------------------------------------------------------------------------------------------------
@@ -974,6 +986,108 @@ namespace moris::gen
                     mtk::Geometry_Type::QUAD,
                     mtk::Interpolation_Order::LINEAR );
             CHECK( !tIntersectionQueued );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Bilinear Intersections with Zero Corner Values", "[gen], [pdv], [intersection], [bilinear intersection], [MB-020]" )
+    {
+        if ( par_size() == 1 )
+        {
+            // Regression test for MB-020: the multilinear intersection scales the corner level-set values by the
+            // inverse of their norm. If every corner value of the background cell is exactly zero (the multilinear
+            // field vanishes on the whole cell, e.g. an order-2 field that is nonzero only at mid-side and interior
+            // nodes), the scaling was 1/0 = inf, every scaled value became NaN, and the Newton search aborted with
+            // "Newton did not converge: Reference residual nan". The local coordinate must stay finite instead.
+
+            // One QUAD4 element on the unit square
+            uint             tNumDim = 2;
+            Matrix< DDRMat > tCoords = {
+                { 0.0, 0.0 },
+                { 1.0, 0.0 },
+                { 1.0, 1.0 },
+                { 0.0, 1.0 }
+            };
+            Matrix< IdMat > tElemConn          = { { 1, 2, 3, 4 } };
+            Matrix< IdMat > tElemLocaltoGlobal = { { 1 } };
+
+            // Nodal level-set field
+            mtk::Scalar_Field_Info< DDRMat > tLSF;
+            std::string                      tLSFName = "lsf_zero";
+            tLSF.set_field_name( tLSFName );
+            tLSF.set_field_entity_rank( mtk::EntityRank::NODE );
+            mtk::MtkFieldsInfo tFieldsInfo;
+            add_field_for_mesh_input( &tLSF, tFieldsInfo );
+
+            // Create mesh
+            mtk::MtkMeshData tMeshData;
+            tMeshData.CreateAllEdgesAndFaces    = true;
+            tMeshData.SpatialDim                = &tNumDim;
+            tMeshData.ElemConn( 0 )             = &tElemConn;
+            tMeshData.NodeCoords                = &tCoords;
+            tMeshData.LocaltoGlobalElemMap( 0 ) = &tElemLocaltoGlobal;
+            tMeshData.FieldsInfo                = &tFieldsInfo;
+            mtk::Interpolation_Mesh* tMesh      = mtk::create_interpolation_mesh( mtk::MeshType::STK, tMeshData );
+
+            // Every corner value exactly zero
+            uint             tNumNodes = tMesh->get_num_entities( mtk::EntityRank::NODE );
+            Matrix< DDRMat > tLevelSetValues( tNumNodes, 1, 0.0 );
+            tMesh->add_mesh_field_real_scalar_data_loc_inds( tLSFName, mtk::EntityRank::NODE, tLevelSetValues );
+
+            // Multilinear level-set geometry on the zero isocontour
+            Level_Set_Parameters tLevelSetParameters;
+            tLevelSetParameters.mUseMultilinearInterpolation  = true;
+            tLevelSetParameters.mIsocontourThreshold          = 0.0;
+            std::shared_ptr< Mesh_Field >         tField      = std::make_shared< Mesh_Field >( tMesh, tLSFName );
+            Vector< std::shared_ptr< Geometry > > tGeometries = { std::make_shared< Level_Set_Geometry >( tField, tLevelSetParameters ) };
+
+            Geometry_Engine_Parameters tGeometryEngineParameters;
+            tGeometryEngineParameters.mGeometries = tGeometries;
+            Geometry_Engine tGeometryEngine( tMesh, tGeometryEngineParameters );
+
+            // Background cell
+            mtk::Cell&         tCell          = tMesh->get_mtk_cell( 0 );
+            Matrix< IndexMat > tVertexInds    = tCell.get_vertex_inds();
+            Matrix< DDUMat >   tVertexIndsDDU = { { (uint)tVertexInds( 0 ), (uint)tVertexInds( 1 ), (uint)tVertexInds( 2 ), (uint)tVertexInds( 3 ) } };
+
+            // Queue an intersection on every edge and both diagonals: each one calls
+            // Level_Set_Geometry::compute_intersection_local_coordinate() on the all-zero cell
+            Matrix< DDUMat > tParentPairs = {
+                { 0, 1 },
+                { 1, 2 },
+                { 2, 3 },
+                { 3, 0 },
+                { 0, 2 },
+                { 1, 3 }
+            };
+            for ( uint iPair = 0; iPair < tParentPairs.n_rows(); iPair++ )
+            {
+                uint tFirstNode  = tParentPairs( iPair, 0 );
+                uint tSecondNode = tParentPairs( iPair, 1 );
+
+                REQUIRE_NOTHROW( tGeometryEngine.queue_intersection(
+                        tVertexIndsDDU( tFirstNode ),
+                        tVertexIndsDDU( tSecondNode ),
+                        tQuadParametricCoordinates( tFirstNode ),
+                        tQuadParametricCoordinates( tSecondNode ),
+                        tVertexIndsDDU,
+                        mtk::Geometry_Type::QUAD,
+                        mtk::Interpolation_Order::LINEAR ) );
+
+                // Local coordinate along the parent edge is finite and in [-1, 1]
+                real tLocalCoordinate = tGeometryEngine.get_queued_intersection_local_coordinate();
+                CHECK( std::isfinite( tLocalCoordinate ) );
+                CHECK( tLocalCoordinate >= -1.0 );
+                CHECK( tLocalCoordinate <= 1.0 );
+
+                // Both parents lie on the zero isocontour
+                CHECK( tGeometryEngine.queued_intersection_first_parent_on_interface() );
+                CHECK( tGeometryEngine.queued_intersection_second_parent_on_interface() );
+            }
+
+            // Clean up
+            delete tMesh;
         }
     }
 

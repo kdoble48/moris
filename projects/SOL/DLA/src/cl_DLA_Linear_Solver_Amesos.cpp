@@ -235,6 +235,22 @@ Linear_Solver_Amesos::set_solver_internal_parameters()
 #endif
     }
 
+    // Create a parameter sublist for the SuperLU_DIST solver
+    if ( tSolverType == "Amesos_Superludist" )
+    {
+        // Amesos_Superludist reads its options from a sublist named "Superludist".
+        // These control the fill-reducing ordering (dominant memory driver for
+        // large 3D / high-order immersed factorizations) and static pivoting
+        // (numeric robustness on ill-conditioned cut systems). Defaults are
+        // registered in fn_PRM_SOL_Parameters::create_linear_algorithm_parameter_list_amesos.
+        Teuchos::ParameterList& tSuperluList = params.sublist( "Superludist" );
+
+        tSuperluList.set( "ColPerm", mParameterList.get< std::string >( "Superludist_ColPerm" ) );
+        tSuperluList.set( "RowPerm", mParameterList.get< std::string >( "Superludist_RowPerm" ) );
+        tSuperluList.set( "ReplaceTinyPivot", mParameterList.get< bool >( "Superludist_ReplaceTinyPivot" ) );
+        tSuperluList.set( "ReuseSymbolic", mParameterList.get< bool >( "Superludist_ReuseSymbolic" ) );
+    }
+
     // Create a parameter sublist for PARDISO solver
     //    const char* tSolverType1 = "Amesos_Pardiso";
     ////    if ( mParameterList.get< const char * >( "solver_type" ) == tSolverType1 )

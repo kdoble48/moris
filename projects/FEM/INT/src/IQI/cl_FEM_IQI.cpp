@@ -2579,6 +2579,9 @@ namespace moris::fem
         // store QI value
         Matrix< DDRMat > tQIStore = mSet->get_QI()( tIQIAssemblyIndex );
 
+        // clear the CM/SP evaluation caches left by the last perturbed geometry (MB-011)
+        this->reset_eval_flags();
+
         // reset the QI
         mSet->get_QI()( tIQIAssemblyIndex ).fill( 0.0 );
 

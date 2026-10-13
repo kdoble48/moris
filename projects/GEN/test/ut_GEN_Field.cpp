@@ -754,6 +754,97 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    TEST_CASE( "Design ADV positions", "[gen], [field], [B-spline geometry], [MB-017]" )
+    {
+        // Two named B-spline level sets share one ADV vector. A design's coefficient IDs are global IDs of the
+        // distributed ADV map; get_design_adv_positions() must return their positions in the optimizer's ADV
+        // vector (what set_advs() consumes). MB-017: writing at the IDs shifted a redistanced design.
+        if ( par_size() == 1 )
+        {
+            Vector< std::string >                 tNames = { "Inner", "Outer" };
+            Matrix< DDRMat >                      tRadii = { { 0.25, 0.5 } };
+            Vector< std::shared_ptr< Geometry > > tGeometries( 2 );
+            for ( uint iGeometry = 0; iGeometry < 2; iGeometry++ )
+            {
+                Submodule_Parameter_Lists tFieldParameterLists( "FIELDS" );
+                tFieldParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::CIRCLE ) );
+                tFieldParameterLists.set( "name", tNames( iGeometry ) );
+                tFieldParameterLists.set( "center_x", 0.0 );
+                tFieldParameterLists.set( "center_y", 0.0 );
+                tFieldParameterLists.set( "radius", tRadii( iGeometry ) );
+                tFieldParameterLists.set( "discretization_mesh_index", 0 );
+                tFieldParameterLists.set( "discretization_lower_bound", -1.0 );
+                tFieldParameterLists.set( "discretization_upper_bound", 1.0 );
+                ADV_Manager    tADVManager;
+                Design_Factory tDesignFactory( tFieldParameterLists, tADVManager );
+                tGeometries( iGeometry ) = tDesignFactory.get_geometries()( 0 );
+            }
+
+            mtk::Interpolation_Mesh*   tMesh = create_simple_mesh( 10, 10, 1, 1, 0 );
+            Geometry_Engine_Parameters tGeometryEngineParameters;
+            tGeometryEngineParameters.mGeometries = tGeometries;
+            Geometry_Engine_Test tGeometryEngine( tMesh, tGeometryEngineParameters );
+
+            Vector< real > tADVs    = tGeometryEngine.get_advs();
+            uint           tNumADVs = tADVs.size();
+
+            // every position valid, no position shared, the two designs cover the whole vector
+            Vector< sint > tInner = tGeometryEngine.get_design_adv_positions( "Inner" );
+            Vector< sint > tOuter = tGeometryEngine.get_design_adv_positions( "Outer" );
+            REQUIRE( tInner.size() + tOuter.size() == tNumADVs );
+            std::vector< uint > tCount( tNumADVs, 0 );
+            for ( Vector< sint >* tPositions : { &tInner, &tOuter } )
+            {
+                for ( sint tPosition : *tPositions )
+                {
+                    REQUIRE( tPosition >= 0 );
+                    REQUIRE( tPosition < (sint)tNumADVs );
+                    tCount[ tPosition ]++;
+                }
+            }
+            for ( uint iADV = 0; iADV < tNumADVs; iADV++ )
+            {
+                CHECK( tCount[ iADV ] == 1 );
+            }
+
+            // the case MB-017 needs: IDs are not positions for at least one design (otherwise this test could not tell them apart)
+            Vector< sint > tInnerIds  = tGeometryEngine.get_design_determining_adv_ids( "Inner" );
+            Vector< sint > tOuterIds  = tGeometryEngine.get_design_determining_adv_ids( "Outer" );
+            bool           tIdsDiffer = false;
+            for ( uint iCoefficient = 0; iCoefficient < tInner.size(); iCoefficient++ )
+            {
+                tIdsDiffer = tIdsDiffer || tInnerIds( iCoefficient ) != tInner( iCoefficient );
+            }
+            for ( uint iCoefficient = 0; iCoefficient < tOuter.size(); iCoefficient++ )
+            {
+                tIdsDiffer = tIdsDiffer || tOuterIds( iCoefficient ) != tOuter( iCoefficient );
+            }
+            REQUIRE( tIdsDiffer );
+
+            // slice write as the SDF workflow does: 1 at Outer's positions -> Outer's field is 1 everywhere (B-spline
+            // partition of unity), Inner's field is 0 everywhere
+            Vector< real > tNewADVs( tNumADVs, 0.0 );
+            for ( sint tPosition : tOuter )
+            {
+                tNewADVs( tPosition ) = 1.0;
+            }
+            tGeometryEngine.set_advs( tNewADVs );
+            std::shared_ptr< Level_Set_Geometry > tInnerGeometry = std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometryEngine.get_geometry( 0 ) );
+            std::shared_ptr< Level_Set_Geometry > tOuterGeometry = std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometryEngine.get_geometry( 1 ) );
+            REQUIRE( tInnerGeometry );
+            REQUIRE( tOuterGeometry );
+            for ( uint iNode = 0; iNode < tMesh->get_num_nodes(); iNode++ )
+            {
+                CHECK( tOuterGeometry->get_field_value( iNode, { {} } ) == Approx( 1.0 ) );
+                CHECK( tInnerGeometry->get_field_value( iNode, { {} } ) == Approx( 0.0 ).margin( 1e-12 ) );
+            }
+
+            delete tMesh;
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     TEST_CASE( "Stored Field", "[gen], [field], [stored field]" )
     {
         // Create mesh
@@ -896,6 +987,40 @@ namespace moris::gen
         CHECK_EQUAL( tCombinedField->get_dfield_dadvs( 0, tCoordinates0 ), Matrix< DDRMat >( { { 0.0, 1.0, -1.0 } } ), );
         CHECK_EQUAL( tCombinedField->get_dfield_dadvs( 0, tCoordinates1 ), Matrix< DDRMat >( { { -2.0 / sqrt( 5.0 ), 1.0 / sqrt( 5.0 ), -1.0 } } ), );
         CHECK_EQUAL( tCombinedField->get_dfield_dadvs( 0, tCoordinates2 ), Matrix< DDRMat >( { { -1.0, 0.0, -1.0 } } ), );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // Regression MB-009 (moris/doc/internal/BUG_LEDGER.md): a geometry listed BEFORE the fields it depends on must be
+    // deferred to a later factory pass, not rejected as an unrecognized geometry type.
+    TEST_CASE( "Combined Field Declared Before Its Fields", "[gen], [field], [combined field]" )
+    {
+        Submodule_Parameter_Lists tParameterLists( "FIELDS" );
+        tParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::COMBINED_FIELDS ) );
+        tParameterLists( 0 ).set( "dependencies", "Circle 1", "Circle 2" );
+        tParameterLists.add_parameter_list( prm::create_field_parameter_list( Field_Type::CIRCLE ) );
+        tParameterLists( 1 ).set( "center_x", 0.0 );
+        tParameterLists( 1 ).set( "center_y", 1.0 );
+        tParameterLists( 1 ).set( "radius", 1.0 );
+        tParameterLists( 1 ).set( "name", "Circle 1" );
+        tParameterLists.add_parameter_list( prm::create_field_parameter_list( Field_Type::CIRCLE ) );
+        tParameterLists( 2 ).set( "center_x", 0.0 );
+        tParameterLists( 2 ).set( "center_y", 2.0 );
+        tParameterLists( 2 ).set( "radius", 2.0 );
+        tParameterLists( 2 ).set( "name", "Circle 2" );
+
+        ADV_Manager                           tADVManager;
+        Design_Factory                        tDesignFactory( tParameterLists, tADVManager );
+        Vector< std::shared_ptr< Geometry > > tGeometries = tDesignFactory.get_geometries();
+        REQUIRE( tGeometries.size() == 1 );
+        std::shared_ptr< Level_Set_Geometry > tCombinedField = std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometries( 0 ) );
+        REQUIRE( tCombinedField != nullptr );
+
+        // same values as "Combined Field": min of the two circle fields
+        Matrix< DDRMat > tCoordinates0 = { { 0.0, 0.0 } };
+        Matrix< DDRMat > tCoordinates1 = { { 1.0, 1.0 } };
+        CHECK( tCombinedField->get_field_value( 0, tCoordinates0 ) == Approx( 0.0 ) );
+        CHECK( tCombinedField->get_field_value( 0, tCoordinates1 ) == Approx( sqrt( 2.0 ) - 2.0 ) );
     }
 
     //--------------------------------------------------------------------------------------------------------------

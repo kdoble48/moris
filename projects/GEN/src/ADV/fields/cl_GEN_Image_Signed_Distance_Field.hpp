@@ -67,8 +67,9 @@ namespace moris::gen
                 real                  aSdfScaling,
                 real                  aSdfShift,
                 real                  aSdfDefault,
-                bool                  aSdfInterpolate )
-                : Field_Analytic< 0 >( {}, aImageFileName )
+                bool                  aSdfInterpolate,
+                const std::string&    aName = "" )    // MB-019: the "name" parameter was ignored (field named after the image file)
+                : Field_Analytic< 0 >( {}, aName.empty() ? aImageFileName : aName )
                 , mDomainDimensions( aDomainDimensions )
                 , mDomainOffset( aDomainOffset )
                 , mSdfScaling( aSdfScaling )

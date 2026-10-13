@@ -13,6 +13,8 @@
 
 #include "fn_linspace.hpp"
 
+#include <cmath>
+
 namespace moris::opt
 {
 
@@ -325,12 +327,17 @@ namespace moris::opt
                 return;
             }
             case opt::SA_Type::backward:
-            {
-                mFiniteDifferenceEpsilons = -1.0 * mFiniteDifferenceEpsilons;
-                [[fallthrough]];
-            }
             case opt::SA_Type::forward:
             {
+                // the perturbation sign selects the scheme; set it absolutely (backward -|eps|, forward +|eps|). Negating
+                // in place toggled the sign on every backward call, so a sweep over several epsilons or evaluation points
+                // alternated between the schemes and saved them under the wrong labels (MB-026)
+                const real tSign = aType == opt::SA_Type::backward ? -1.0 : 1.0;
+                for ( uint iEntry = 0; iEntry < mFiniteDifferenceEpsilons.numel(); iEntry++ )
+                {
+                    mFiniteDifferenceEpsilons( iEntry ) = tSign * std::abs( mFiniteDifferenceEpsilons( iEntry ) );
+                }
+
                 compute_design_criteria_gradients_by_type = &Algorithm::compute_design_criteria_gradients_fd_fwbw;
                 get_objective_gradients_by_type           = &Algorithm::get_objective_gradients_by_fd;
                 get_constraint_gradients_by_type          = &Algorithm::get_constraint_gradients_by_fd;
@@ -453,12 +460,18 @@ namespace moris::opt
     void
     Algorithm::write_advs_to_file( const Vector< real >& aADVs )
     {
-        // Get iteration from global clock
-        uint tOptIter = gLogger.get_opt_iteration();
+        // Name the file from the iteration of the global clock
+        this->write_advs_to_file( aADVs, gLogger.get_opt_iteration() );
+    }
 
+    // -------------------------------------------------------------------------------------------------------------
+
+    void
+    Algorithm::write_advs_to_file( const Vector< real >& aADVs, uint aOptIter )
+    {
         // Create file name
         std::string tRestartFileName =
-                "ADV_Alg_" + std::to_string( mCurrentOptAlgInd ) + "_Iter_" + std::to_string( tOptIter ) + ".hdf5";
+                "ADV_Alg_" + std::to_string( mCurrentOptAlgInd ) + "_Iter_" + std::to_string( aOptIter ) + ".hdf5";
 
         // Create file
         // Note: only processor 0 creates this file; therefore no parallel name extension is used

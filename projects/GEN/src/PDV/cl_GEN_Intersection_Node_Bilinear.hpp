@@ -12,6 +12,11 @@
 
 #include "cl_GEN_Intersection_Node_Level_Set.hpp"
 
+namespace moris::mtk
+{
+    class Interpolation_Function_Base;
+}
+
 namespace moris::gen
 {
     class Intersection_Node_Bilinear : public Intersection_Node_Level_Set
@@ -39,6 +44,17 @@ namespace moris::gen
                 mtk::Geometry_Type       aBackgroundGeometryType,
                 mtk::Interpolation_Order aBackgroundInterpolationOrder,
                 Level_Set_Geometry&      aInterfaceGeometry );
+
+        /**
+         * Creates the Lagrange interpolation function of a background cell from its spatial dimension and number of
+         * nodes (2D: QUAD4/9/16, 3D: HEX8/27/64). Used by cell-order intersections (use_cell_order_intersection).
+         * The caller owns (deletes) the returned object.
+         *
+         * @param aNumDims Number of spatial dimensions
+         * @param aNumBases Number of background cell nodes
+         * @return Interpolation function
+         */
+        static mtk::Interpolation_Function_Base* create_cell_interpolation( uint aNumDims, uint aNumBases );
 
       private:
 

@@ -27,6 +27,7 @@ namespace moris::gen
         real mDiscretizationLowerBound;       // Lower bound for the B-spline coefficients in this field
         real mDiscretizationUpperBound;       // Upper bound for the B-spline coefficients in this field
         bool mUseMultilinearInterpolation;    // Whether to use multilinear interpolation for all derived node field values
+        bool mUseCellOrderIntersection;       // Multilinear path, but on the background cell's own-order interpolant (no linear override)
 
         /**
          * Constructor with a given parameter list
@@ -160,6 +161,14 @@ namespace moris::gen
          * @return Multilinear interpolation flag
          */
         bool use_multilinear_interpolation() const;
+
+        /**
+         * Gets whether intersections and derived node field values use the background cell's own-order Lagrange
+         * interpolant (QUAD9/QUAD16/HEX27/HEX64) instead of the corner multilinear one. Implies multilinear interpolation.
+         *
+         * @return Cell-order intersection flag
+         */
+        bool use_cell_order_intersection() const;
 
         /**
          * Updates the dependencies of this design based on the given designs

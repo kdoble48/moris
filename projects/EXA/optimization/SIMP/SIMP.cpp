@@ -22,6 +22,7 @@
 #include "fn_equal_to.hpp"
 
 #include "AztecOO.h"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -206,12 +207,27 @@ namespace moris
         aParameterLists.set( "domain_dimensions", 2.0, 1.0 );
         aParameterLists.set( "lagrange_output_meshes", "0" );
 
-        aParameterLists.set( "lagrange_orders", "1" );
-        aParameterLists.set( "lagrange_pattern", "0" );
-        aParameterLists.set( "bspline_orders", "1" );
-        aParameterLists.set( "bspline_pattern", "0" );
+        if ( moris::exa::mode() == moris::exa::Mode::SHOWCASE )
+        {
+            // implicit density filter: the densities live on a quadratic B-spline over the coarse
+            // pattern 1 (40 x 20); the analysis runs on pattern 0, refined once (80 x 40)
+            aParameterLists.set( "lagrange_orders", "2" );
+            aParameterLists.set( "lagrange_pattern", "0" );
+            aParameterLists.set( "bspline_orders", "1,2" );
+            aParameterLists.set( "bspline_pattern", "0,1" );
+            aParameterLists.set( "pattern_initial_refinement", 1, 0 );
 
-        aParameterLists.set( "lagrange_to_bspline", "0" );
+            aParameterLists.set( "lagrange_to_bspline", "0,1" );
+        }
+        else
+        {
+            aParameterLists.set( "lagrange_orders", "1" );
+            aParameterLists.set( "lagrange_pattern", "0" );
+            aParameterLists.set( "bspline_orders", "1" );
+            aParameterLists.set( "bspline_pattern", "0" );
+
+            aParameterLists.set( "lagrange_to_bspline", "0" );
+        }
 
         aParameterLists.set( "refinement_buffer", 3 );
         aParameterLists.set( "staircase_buffer", 3 );
@@ -226,7 +242,7 @@ namespace moris
     {
         aParameterLists.set( "decompose", true );
         aParameterLists.set( "decomposition_type", "conformal" );
-        aParameterLists.set( "enrich_mesh_indices", "0" );
+        aParameterLists.set( "enrich_mesh_indices", moris::exa::pick( std::string( "0" ), std::string( "0,1" ) ) );
         aParameterLists.set( "ghost_stab", true );
         aParameterLists.set( "multigrid", false );
         aParameterLists.set( "verbose", true );
@@ -250,7 +266,7 @@ namespace moris
         aParameterLists( GEN::PROPERTIES ).add_parameter_list( gen::Field_Type::CONSTANT );
         aParameterLists.set( "name", "density" );
         aParameterLists.set( "constant", 0.4 );
-        aParameterLists.set( "discretization_mesh_index", 0 );
+        aParameterLists.set( "discretization_mesh_index", moris::exa::pick( 0, 1 ) );    // showcase: quadratic coarse B-spline (filter)
         aParameterLists.set( "discretization_lower_bound", 0.001 );
         aParameterLists.set( "discretization_upper_bound", 1.0 );
         aParameterLists.set( "pdv_type", "DENSITY" );
@@ -435,7 +451,8 @@ namespace moris
         aParameterLists.set( "library", "./SIMP.so" );
 
         aParameterLists( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::GCMMA );
-        aParameterLists.set( "max_its", 2 );
+        aParameterLists.set( "max_its", moris::exa::pick( 2, 200 ) );
+        aParameterLists.set( "step_size", moris::exa::pick( 0.01, 0.1 ) );    // 0.01 = GCMMA default
     }
 
     void

@@ -167,9 +167,21 @@ namespace moris::opt
         void dummy_solve();
 
         /**
-         * @brief write restart file with advs as well as upper and lower bounds
+         * @brief write restart file with advs as well as upper and lower bounds, named from the current
+         * optimization iteration of the global logger
          */
         void write_advs_to_file( const Vector< real >& aADVs );
+
+        /**
+         * @brief write restart file ADV_Alg_<alg>_Iter_<aOptIter>.hdf5 with advs as well as upper and lower bounds
+         *
+         * Use this overload to rewrite the file of an evaluation after compute_design_criteria(), which advances
+         * the logger's optimization iteration (MB-021).
+         *
+         * @param aADVs    design variables
+         * @param aOptIter optimization iteration the file is named after
+         */
+        void write_advs_to_file( const Vector< real >& aADVs, uint aOptIter );
 
         /**
          * @brief set restart index

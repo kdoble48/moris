@@ -227,6 +227,19 @@ namespace moris::gen
                 const Matrix< DDRMat >& aCoordinates );
 
         /**
+         * Gets the global ADV IDs of every coefficient/parameter this field owns, in coefficient
+         * order (for a discretized B-spline field, the per-coefficient design-variable IDs). Used
+         * to write reinitialized coefficients into the correct slice of the global ADV vector
+         * without disturbing other designs' ADVs or PDVs.
+         *
+         * @return Determining ADV IDs of this field's coefficients
+         */
+        Vector< sint > get_coefficient_adv_ids()
+        {
+            return mADVHandler.get_determining_adv_ids();
+        }
+
+        /**
          * Gets the IDs of ADVs that this field depends on for evaluations at a derived node.
          *
          * @param aDeterminingADVIDs Determining ADV IDs to fill for the given derived node

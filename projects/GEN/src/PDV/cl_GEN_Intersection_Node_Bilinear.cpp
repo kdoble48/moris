@@ -50,9 +50,71 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    mtk::Interpolation_Function_Base*
+    Intersection_Node_Bilinear::create_cell_interpolation( uint aNumDims, uint aNumBases )
+    {
+        mtk::Geometry_Type       tGeometryType = aNumDims == 2 ? mtk::Geometry_Type::QUAD : mtk::Geometry_Type::HEX;
+        mtk::Interpolation_Order tOrder        = mtk::Interpolation_Order::UNDEFINED;
+
+        if ( ( aNumDims == 2 and aNumBases == 4 ) or ( aNumDims == 3 and aNumBases == 8 ) )
+        {
+            tOrder = mtk::Interpolation_Order::LINEAR;
+        }
+        else if ( ( aNumDims == 2 and aNumBases == 9 ) or ( aNumDims == 3 and aNumBases == 27 ) )
+        {
+            tOrder = mtk::Interpolation_Order::QUADRATIC;
+        }
+        else if ( ( aNumDims == 2 and aNumBases == 16 ) or ( aNumDims == 3 and aNumBases == 64 ) )
+        {
+            tOrder = mtk::Interpolation_Order::CUBIC;
+        }
+
+        MORIS_ERROR( tOrder != mtk::Interpolation_Order::UNDEFINED,
+                "Intersection_Node_Bilinear::create_cell_interpolation - no Lagrange QUAD/HEX cell with %u nodes in %uD.",
+                aNumBases,
+                aNumDims );
+
+        mtk::Interpolation_Function_Factory tFactory;
+        return tFactory.create_interpolation_function( tGeometryType, mtk::Interpolation_Type::LAGRANGE, tOrder );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     real
     Intersection_Node_Bilinear::get_dxi_dfield_from_ancestor( uint aAncestorIndex ) const
     {
+        // Cell-order intersection: the root of the cell's own-order interpolant phi(xi) = sum_k N_k(xi) phi_k along the
+        // edge, so d(edge coordinate)/d(phi_k) = -N_k(xi*) / (d phi / d edge coordinate) for every cell node k
+        if ( mInterfaceGeometry.use_cell_order_intersection() )
+        {
+            const Vector< Basis_Node >& tCellNodes = this->get_background_nodes();
+            uint                        tNumBases  = tCellNodes.size();
+
+            mtk::Interpolation_Function_Base* tCellInterpolation =
+                    create_cell_interpolation( this->get_global_coordinates().length(), tNumBases );
+
+            Matrix< DDRMat > tPhiCellNodes( tNumBases, 1 );
+            for ( uint iNode = 0; iNode < tNumBases; ++iNode )
+            {
+                tPhiCellNodes( iNode ) = mInterfaceGeometry.get_field_value(
+                        tCellNodes( iNode ).get_index(),
+                        tCellNodes( iNode ).get_global_coordinates() );
+            }
+
+            const Matrix< DDRMat >& tCellCoordinate = this->get_parametric_coordinates();
+
+            Matrix< DDRMat > tCellBasis;
+            tCellInterpolation->eval_N( tCellCoordinate, tCellBasis );
+
+            Matrix< DDRMat > tCellDBasisDxi;
+            tCellInterpolation->eval_dNdXi( tCellCoordinate, tCellDBasisDxi );
+            Matrix< DDRMat > tCellJacobian = 0.5 * mParametricParentVector * tCellDBasisDxi * tPhiCellNodes;
+
+            delete tCellInterpolation;
+
+            return -1.0 * tCellBasis( aAncestorIndex ) / ( tCellJacobian( 0 ) + MORIS_REAL_EPS );
+        }
+
         // number of nodes to be used for interpolation
         uint tNumBases = 0;
 
