@@ -262,6 +262,7 @@ def render(example, choice, out):
         source.ClipType.Origin = [0.5 * (bounds[0] + bounds[1]), cutaway, 0.5 * (bounds[4] + bounds[5])]
         source.ClipType.Normal = [0.0, 1.0, 0.0]
         source.Invert = 1
+    volume = source            # the 3D dataset before its surface is extracted: what clips act on
     if three_d:
         source = pv.ExtractSurface(Input=source)
     source.UpdatePipeline(times[-1] if times else 0.0)
@@ -300,6 +301,13 @@ def render(example, choice, out):
             interface = (level_set, value)
             add_interface(view, reader, level_set, value, bounds)    # built on ``reader``: follows its file
     set_camera(view, three_d, face_cut=cutaway is not None)
+    # the attached view: declarative keys in overrides.json, then the example's view script
+    scene = Scene(example, choice, view, reader, source, rep, bounds, three_d, times, readers, phases, volume)
+    apply_view_overrides(scene, override)
+    script = example.get("view_script")
+    if script:
+        load_view_script(script).view(scene)
+    source = scene.source
     step = None
     series = gs.series_paths(choice.path, example.get("files", []))
     if len(series) > 1:
@@ -308,8 +316,181 @@ def render(example, choice, out):
         step = gs.step_labels(choice.path, [], len(times))[0][-1]
     if cutaway is not None:
         step = (step + ", " if step else "") + f"cut away at y = {cutaway:.4g}"
+    if scene.notes:
+        step = (step + ", " if step else "") + ", ".join(scene.notes)
     shown = (sorted(phases), hidden) if phases else None
-    return view, three_d, cells, step, by_block, source, times, interface, readers, shown
+    return view, three_d, cells, step, by_block, source, times, interface, readers, shown, scene.caption_extra
+
+
+class Scene:
+    """What an attached view can change after the default pipeline has been built.
+
+    ``source`` is the displayed dataset (its representation is ``rep``); a helper that inserts a
+    filter re-shows the result with the same coloring. The camera is already set to the default
+    (straight down z in 2D, isometric in 3D); ``camera()`` adjusts it from there."""
+
+    def __init__(self, example, choice, view, reader, source, rep, bounds, three_d, times, readers, phases,
+                 volume=None):
+        self.example, self.choice, self.view, self.reader = example, choice, view, reader
+        self.source, self.rep, self.bounds, self.three_d, self.times = source, rep, bounds, three_d, times
+        self.readers, self.phases = readers, phases
+        self.volume = volume if volume is not None else source    # 3D: the cells; 2D: the same as source
+        self.notes, self.caption_extra = [], ""
+
+    def _cut(self, filter_source, face_cut=False):
+        """Show a filter applied to the volume: in 3D its surface is extracted, and the camera is
+        reset to the new bounds (from the +y side when a y-cut face is to be seen)."""
+        self.volume = filter_source
+        shown = pv.ExtractSurface(Input=filter_source) if self.three_d else filter_source
+        self.replace(shown)
+        self.bounds = self.source.GetDataInformation().GetBounds()
+        set_camera(self.view, self.three_d, face_cut=face_cut)
+        return self.source
+
+    @property
+    def time(self):
+        return self.times[-1] if self.times else 0.0
+
+    def replace(self, new_source):
+        """Show ``new_source`` (a filter built on ``self.source``) in place of the current source."""
+        coloring = self.rep.ColorArrayName
+        representation = self.rep.Representation
+        pv.Hide(self.source, self.view)
+        self.source = new_source
+        self.source.UpdatePipeline(self.time)
+        self.rep = pv.Show(self.source, self.view)
+        self.rep.Representation = representation
+        if coloring and coloring[1]:
+            pv.ColorBy(self.rep, (coloring[0], coloring[1]))
+            self.rep.SetScalarBarVisibility(self.view, True)
+        return self.source
+
+    def clip(self, normal, origin=None, invert=False, crinkle=False, note=True):
+        """Keep the half-space on the side ``normal`` points to (``invert`` keeps the other)."""
+        b = self.bounds
+        origin = origin or [0.5 * (b[0] + b[1]), 0.5 * (b[2] + b[3]), 0.5 * (b[4] + b[5])]
+        clip = pv.Clip(Input=self.volume, ClipType="Plane", Crinkleclip=int(crinkle))
+        clip.ClipType.Origin = list(origin)
+        clip.ClipType.Normal = list(normal)
+        clip.Invert = int(invert)
+        axis = "xyz"[max(range(3), key=lambda i: abs(normal[i]))]
+        if note:
+            self.notes.append(f"clipped at {axis} = {origin['xyz'.index(axis)]:.4g}")
+        # keeping y <= origin (invert with +y normal) exposes a face toward +y: look at it from there
+        return self._cut(clip, face_cut=(axis == "y" and bool(invert) == (normal[1] > 0)))
+
+    def threshold(self, array, lower, upper, association="POINTS"):
+        """Keep the cells whose ``array`` lies in [lower, upper]."""
+        threshold = pv.Threshold(Input=self.volume, Scalars=[association, array])
+        threshold.LowerThreshold, threshold.UpperThreshold = lower, upper
+        return self._cut(threshold)
+
+    def contour(self, array, values, color=(0.0, 0.0, 0.0), width=3.0):
+        """Draw isolines/isosurfaces of a point array over the scene."""
+        contour = pv.Contour(Input=self.source, ContourBy=["POINTS", array], Isosurfaces=list(values))
+        rep = pv.Show(contour, self.view)
+        rep.ColorArrayName = ["POINTS", ""]
+        rep.DiffuseColor = rep.AmbientColor = list(color)
+        rep.LineWidth = width
+        return contour
+
+    def _hide_scalar_bar(self):
+        name = self.rep.ColorArrayName[1] if self.rep.ColorArrayName else ""
+        if name:
+            pv.HideScalarBarIfNotNeeded(pv.GetColorTransferFunction(name), self.view)
+            self.rep.SetScalarBarVisibility(self.view, False)
+
+    def color_by(self, array, association="POINTS", preset=None):
+        self._hide_scalar_bar()
+        pv.ColorBy(self.rep, (association, array))
+        lut = pv.GetColorTransferFunction(array)
+        if preset:
+            lut.ApplyPreset(preset, True)
+        self.rep.SetScalarBarVisibility(self.view, True)
+        return lut
+
+    def color_blocks(self):
+        """Color by element block (one color per phase, block names in the legend) instead of a field."""
+        self._hide_scalar_bar()
+        color_blocks(self.rep, self.reader, self.view)
+
+    def color_range(self, lower, upper):
+        name = self.rep.ColorArrayName[1]
+        lut = pv.GetColorTransferFunction(name)
+        lut.RescaleTransferFunction(lower, upper)
+        lut.AutomaticRescaleRangeMode = "Never"
+        return lut
+
+    def edges(self, on=True, color=(0.55, 0.55, 0.55)):
+        self.rep.SetRepresentationType("Surface With Edges" if on else "Surface")
+        if on:
+            self.rep.EdgeColor = list(color)
+
+    def camera(self, azimuth=0.0, elevation=0.0, zoom=1.0, position=None, focal=None, up=None, parallel=None):
+        """Adjust the camera from the default: rotate (degrees), zoom (> 1 closer), or set it outright."""
+        cam = self.view.GetActiveCamera()
+        if position:
+            cam.SetPosition(*position)
+        if focal:
+            cam.SetFocalPoint(*focal)
+        if up:
+            cam.SetViewUp(*up)
+        if parallel is not None:
+            self.view.CameraParallelProjection = int(parallel)
+        if azimuth:
+            cam.Azimuth(azimuth)
+        if elevation:
+            cam.Elevation(elevation)
+            cam.OrthogonalizeViewUp()
+        if zoom and zoom != 1.0:
+            cam.Zoom(zoom)
+
+    def reset_camera(self):
+        set_camera(self.view, self.three_d)
+
+    def caption(self, text):
+        """Appended to the page caption."""
+        self.caption_extra += (" " if self.caption_extra else "") + text
+
+    def note(self, text):
+        """Appended to the one-line summary under the legend."""
+        self.notes.append(text)
+
+
+VIEW_KEYS = {"camera", "clip", "contour", "color_range", "caption", "edges", "threshold"}
+
+
+def apply_view_overrides(scene, override):
+    """The declarative part of an attached view (overrides.json), applied in a fixed order."""
+    if "clip" in override:
+        c = override["clip"]
+        scene.clip(c["normal"], c.get("origin"), c.get("invert", False), c.get("crinkle", False))
+    if "threshold" in override:
+        t = override["threshold"]
+        scene.threshold(t["array"], t["lower"], t["upper"], t.get("association", "POINTS"))
+    if "contour" in override:
+        c = override["contour"]
+        scene.contour(c["array"], c["values"], tuple(c.get("color", (0.0, 0.0, 0.0))), c.get("width", 3.0))
+    if "color_range" in override:
+        scene.color_range(*override["color_range"])
+    if "edges" in override and isinstance(override["edges"], bool) and not override["edges"]:
+        scene.edges(False)
+    if "camera" in override:
+        scene.camera(**override["camera"])
+    if "caption" in override:
+        scene.caption(override["caption"])
+
+
+def load_view_script(path):
+    """The example's view module (``def view(scene): ...``)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gallery_view_" + os.path.basename(path).replace(".", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "view"):
+        raise ValueError(f"{path}: a view script must define view(scene)")
+    return module
 
 
 def series_number(path):
@@ -399,7 +580,7 @@ def export_example(example, out):
     choice = gs.choose(infos, override)
     if choice is None:
         return None, "no file with geometry"
-    view, three_d, cells, step, by_block, source, times, interface, readers, shown = render(example, choice, out)
+    view, three_d, cells, step, by_block, source, times, interface, readers, shown, extra = render(example, choice, out)
     base = example["id"]
     file_name = os.path.basename(choice.path.replace("\\", "/"))
     caption = KIND_CAPTION[choice.kind].format(label=choice.label)
@@ -414,6 +595,8 @@ def export_example(example, out):
         caption += "; black lines: the boundaries of the bulk phases (interfaces and outer edges)"
     elif interface:
         caption += f"; black line: the level-set interface, {interface[0]} = {interface[1]:g}"
+    if extra:
+        caption += ". " + extra
     summary = [f"{file_name}" + (f", {step}" if step else ""), f"{cells} cells, {'3D' if three_d else '2D'}"]
     over = se.overlays(view)
     pv.SaveScreenshot(os.path.join(out, f"{base}.png"), view, ImageResolution=SIZE)

@@ -144,6 +144,10 @@ def _deck_tags(deck_text):
         tags.append("von Mises stress")
     if re.search(r"\bEIGEN\b|eigen_vectors", deck_text):
         tags.append("eigenvalue")
+    if "Bedding" in deck_text:
+        tags.append("bedding")    # a light spring on the bulk: keeps detached material regular
+    if "PressureSpring" in deck_text:
+        tags.append("pressure spring")
 
     dimension = _dimension(deck_text)
     if dimension:
