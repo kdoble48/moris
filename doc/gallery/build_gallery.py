@@ -89,6 +89,8 @@ RUN_OUTPUTS = re.compile(r"(\.exo|\.e-s\.|^ADV_Alg_|^Parameter_Receipt|\.log$|^x
 
 
 MORIS_ERROR = "Moris encountered an error"
+# failure signatures of a run: a MORIS error, a crash (the MPI signal handler's trailer), a NaN objective
+RUN_FAILURES = (MORIS_ERROR, "*** End of error message ***", "GCMMA - Objective: [nan]")
 
 
 def showcase_completed(run_dir: Path, accept_error: bool = False) -> bool:
@@ -101,7 +103,8 @@ def showcase_completed(run_dir: Path, accept_error: bool = False) -> bool:
     log = run_dir / "run.log"
     if not (run_dir / "DONE").exists() or not log.exists():
         return False
-    return accept_error or MORIS_ERROR not in log.read_text(errors="replace")
+    text = log.read_text(errors="replace")
+    return accept_error or not any(signature in text for signature in RUN_FAILURES)
 
 
 def showcase_capable(example: dict, source_root: Path = ROOT) -> bool:

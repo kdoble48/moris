@@ -48,6 +48,9 @@ def test_showcase_completed(tmp_path):
     (tmp_path / "run.log").write_text("*** Error - Moris encountered an error.***\n")
     assert not bg.showcase_completed(tmp_path)                       # crashed run: fall back
     assert bg.showcase_completed(tmp_path, accept_error=True)        # override: a later deck failed
+    for failure in ["|_GCMMA - Objective: [nan] \n", "[host:1] *** End of error message ***\n"]:
+        (tmp_path / "run.log").write_text("ok\n" + failure)
+        assert not bg.showcase_completed(tmp_path)                   # NaN objective / segfault
 
 
 def test_crop_thumbnail_centers_content(tmp_path):
