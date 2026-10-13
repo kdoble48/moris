@@ -1,0 +1,43 @@
+name: Documentation
+
+# Builds the Sphinx site (doc/) as a check on pull requests and pushes.
+# Publishing to GitHub Pages is the separate docs-deploy.yml workflow.
+# Uses only actions/checkout; doc/ci_build.sh installs the pinned toolchain.
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "doc/**"
+      - "projects/**/*.hpp"
+      - "projects/EXA/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "doc/**"
+      - "projects/**/*.hpp"
+      - "projects/EXA/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build site
+        env:
+          GH_TOKEN: ${{ github.token }}    # gh release download gallery-assets
+        run: bash doc/ci_build.sh
