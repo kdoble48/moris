@@ -162,7 +162,9 @@ def render(example, choice, out):
     source.UpdatePipeline(times[-1] if times else 0.0)
     rep = pv.Show(source, view)
     cells = source.GetDataInformation().GetNumberOfCells()
-    if cells <= (XTK_EDGE_CELL_LIMIT if choice.kind == "xtk" else EDGE_CELL_LIMIT):
+    # override "edges": true draws the cells whatever their number (adaptive refinement is the point there)
+    if example.get("override", {}).get("edges") or \
+            cells <= (XTK_EDGE_CELL_LIMIT if choice.kind == "xtk" else EDGE_CELL_LIMIT):
         rep.SetRepresentationType("Surface With Edges")
         rep.EdgeColor = [0.55, 0.55, 0.55]
     if by_block:
