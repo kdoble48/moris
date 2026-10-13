@@ -53,6 +53,17 @@ namespace moris
             Vector< std::string >      mRefinementFunctionForField;
         };
 
+        /**
+         * Minimum refinement level of one minimum_refinement_level entry at an optimization iteration.
+         *
+         * @param aEntry   pattern, level_1, until_1, level_2, until_2, ...: level_k holds while the iteration is below until_k
+         * @param aOptIter optimization iteration
+         * @return level of the first pair whose until-iteration exceeds aOptIter; 0 past the last pair
+         */
+        uint minimum_refinement_level_at(
+                const Vector< uint >& aEntry,
+                uint                  aOptIter );
+
         class Remeshing_Mini_Performer
         {
           private:
