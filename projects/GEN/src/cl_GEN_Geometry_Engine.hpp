@@ -224,6 +224,33 @@ namespace moris::gen
                 const Matrix< DDRMat >&   aNodeCoordinates );
 
         /**
+         * Returns if the given geometry can change geometric region inside a background cell whose corner nodes all lie
+         * in one region (an analytic level set evaluated exactly at derived nodes, MB-031). If so, cut-cell detection
+         * must also test the points at which the decomposition will create vertices.
+         *
+         * @param aGeometryIndex Geometry index
+         * @return If interior points need to be tested
+         */
+        bool can_change_region_inside_cell( uint aGeometryIndex );
+
+        /**
+         * Returns if the element is intersected by the given geometry, testing its nodes and additionally the given
+         * interior points (the vertices the decomposition will create inside the element). The interior points are only
+         * evaluated for geometries that can change region inside a cell (see can_change_region_inside_cell()).
+         *
+         * @param aGeometryIndex Geometry index
+         * @param aNodeIndices Node indices
+         * @param aNodeCoordinates Node coordinates, indexed by node index
+         * @param aInteriorPoints Global coordinates of the interior points (row vectors)
+         * @return If the element is intersected
+         */
+        bool is_intersected(
+                uint                                                         aGeometryIndex,
+                const Matrix< IndexMat >&                                    aNodeIndices,
+                Vector< std::shared_ptr< moris::Matrix< moris::DDRMat > > >* aNodeCoordinates,
+                const Vector< Matrix< DDRMat > >&                            aInteriorPoints );
+
+        /**
          * Returns if the element consisting of provided node indices and coordinates is intersected by the given geometry.
          *
          * @param aGeometryIndex Geometry index

@@ -39,6 +39,7 @@ set(TEST_SOURCES
     #xtk/UT_XTK_Multigrid.cpp
     xtk/UT_XTK_Octree_Refinement.cpp
     xtk/UT_XTK_Unenrichment.cpp
+    xtk/UT_XTK_Interior_Cut_Detection.cpp
     xtk/UT_XTK_Basis_Extention.cpp
 	)
 
