@@ -10,6 +10,7 @@
 
 #include "cl_WRK_Performer_Manager.hpp"
 #include "cl_WRK_Workflow_HMR_XTK.hpp"
+#include "cl_Communication_Tools.hpp"
 #include "cl_HMR.hpp"
 #include "cl_MTK_Mesh_Manager.hpp"
 #include "cl_MTK_Mesh_Checker.hpp"
@@ -445,11 +446,31 @@ namespace moris::wrk
                 bool tRedistance = tEveryStep ? ( tOptIter > 0 && tOptIter % tReinitFreq == 0 ) : tScheduled;
                 bool tDoSmooth   = tEveryStep ? ( tOptIter % tReinitFreq == 0 ) : true;
 
+                // The native MMA in reinit_on_accept_only mode suppresses the in-place redistance for its inner
+                // conservatism trials (they must be evaluated at the design the approximation was built for). The flag is
+                // set on rank 0 only; broadcast it so that every rank takes the same branch.
+                uint tSuppressMsg = 0;
+                if ( tEveryStep )
+                {
+                    tSuppressMsg = this->is_reinit_suppressed() ? 1 : 0;
+                    broadcast( tSuppressMsg );
+
+                    // the taper decision is made on rank 0 (notify_accepted_iterate); share it
+                    uint tWeanedMsg = mSDFWeanedOff ? 1 : 0;
+                    broadcast( tWeanedMsg );
+                    mSDFWeanedOff = tWeanedMsg == 1;
+                }
+                bool tSuppressed = tSuppressMsg == 1;
+
                 // Skip SDF reinit on restart pass (first iteration after restart)
                 if ( mSkipNextSDFReinit )
                 {
                     MORIS_LOG_INFO( "Skipping SDF reinit on restart pass" );
                     mSkipNextSDFReinit = false;
+                }
+                else if ( tSuppressed && ( tInitAtStart || tRedistance ) )
+                {
+                    MORIS_LOG_INFO( "SDF redistance suppressed for this evaluation (inner GCMMA trial, reinit_on_accept_only)" );
                 }
                 // Trigger SDF reinit: the one-time start-of-run init, every-step redistance, or schedule
                 else if ( ( tInitAtStart || tRedistance ) && !mSDFReinitPending && !mSDFWeanedOff )
@@ -508,7 +529,8 @@ namespace moris::wrk
                         // requirement that the single-field coefficient count equal the whole
                         // composite ADV vector. The next optimizer iteration's normal set_advs()
                         // re-syncs all fields and PDVs consistently.
-                        Matrix< DDRMat > const& tCoeffs   = tReinitPerformer->get_coefficients();
+                        // a copy: the interface-preserving option below edits it
+                        Matrix< DDRMat > tCoeffs = tReinitPerformer->get_coefficients();
                         // positions in aNewADVs, not global ADV IDs (MB-017: using the IDs shifted the design by one index)
                         Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
                                 ->get_design_adv_positions( tReinitPerformer->get_adv_field_name() );
@@ -520,6 +542,32 @@ namespace moris::wrk
 
                         if ( tLSAdvIds.size() == tCoeffs.n_rows() && tCoeffs.n_rows() > 0 )
                         {
+                            if ( tReinitPerformer->get_diagnostics() || tReinitPerformer->get_preserve_interface() )
+                            {
+                                // psi: the design coefficients this evaluation was called with, gathered from the same slice
+                                Matrix< DDRMat > tOldCoeffs( tCoeffs.n_rows(), 1, 0.0 );
+                                for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
+                                {
+                                    sint tAdvId = tLSAdvIds( iC );
+                                    if ( tAdvId >= 0 && tAdvId < (sint)aNewADVs.size() )
+                                    {
+                                        tOldCoeffs( iC ) = aNewADVs( tAdvId );
+                                    }
+                                }
+
+                                // sdf_preserve_interface (MB-027): keep every coefficient that can reach a cut cell, so the
+                                // cut, the criteria and their sensitivities are those of psi bit for bit
+                                if ( tReinitPerformer->get_preserve_interface() )
+                                {
+                                    tReinitPerformer->preserve_interface( mPerformerManager->mGENPerformer, tOldCoeffs, tCoeffs );
+                                }
+
+                                if ( tReinitPerformer->get_diagnostics() )
+                                {
+                                    tReinitPerformer->log_redistance_footprint( mPerformerManager->mGENPerformer, tOldCoeffs, tCoeffs );
+                                }
+                            }
+
                             uint tWritten = 0;
                             for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
                             {
@@ -821,6 +869,63 @@ namespace moris::wrk
     }
 
     //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Workflow_HMR_XTK::notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted )
+    {
+        if ( mPerformerManager->mReinitializePerformer.size() == 0 || mSDFWeanedOff )
+        {
+            return;
+        }
+        Reinitialize_Performer* tReinitPerformer = mPerformerManager->mReinitializePerformer( 0 ).get();
+        if ( tReinitPerformer->get_reinit_mode() != ReinitMode::INTERFACE_SDF || !tReinitPerformer->get_reinit_every_step() )
+        {
+            return;
+        }
+        if ( !mWeanMonitor )
+        {
+            mWeanMonitor = std::make_unique< SDF_Wean_Monitor >( tReinitPerformer->create_wean_monitor() );
+        }
+        if ( mWeanMonitor->mTol <= 0.0 && mWeanMonitor->mStopIter == 0 )
+        {
+            return;    // taper not configured
+        }
+
+        // an empty accepted vector: accepted at the inner-loop cap, not a convergence sample
+        if ( aAccepted.size() == 0 )
+        {
+            bool tWeanedCapped = mWeanMonitor->update_capped();
+            MORIS_LOG_INFO( "SDF taper: accepted iterate %u at the inner-loop cap (not counted as a small change)%s",
+                    mWeanMonitor->mAccepted, tWeanedCapped ? " -> weaned off" : "" );
+            if ( tWeanedCapped )
+            {
+                MORIS_LOG_INFO( "SDF in-place redistance weaned off: %s; no further redistances", mWeanMonitor->mReason.c_str() );
+                mSDFWeanedOff = true;
+            }
+            return;
+        }
+
+        real tNumer = 0.0;
+        real tDenom = 0.0;
+        for ( uint iADV = 0; iADV < aPrevious.size() && iADV < aAccepted.size(); iADV++ )
+        {
+            tNumer += std::pow( aAccepted( iADV ) - aPrevious( iADV ), 2 );
+            tDenom += std::pow( aPrevious( iADV ), 2 );
+        }
+        real tChange = tDenom > 0.0 ? std::sqrt( tNumer / tDenom ) : 0.0;
+
+        bool tWeaned = mWeanMonitor->update( tChange );
+        MORIS_LOG_INFO( "SDF taper: accepted iterate %u, relative design change %.4e (wean tol %.4e, %u/%u below, stop iter %u)%s",
+                mWeanMonitor->mAccepted, tChange, mWeanMonitor->mTol, mWeanMonitor->mBelow, mWeanMonitor->mPatience,
+                mWeanMonitor->mStopIter, tWeaned ? " -> weaned off" : "" );
+        if ( tWeaned )
+        {
+            MORIS_LOG_INFO( "SDF in-place redistance weaned off: %s; no further redistances", mWeanMonitor->mReason.c_str() );
+            mSDFWeanedOff = true;
+        }
+    }
+
+    //------------------------------------------------------------------------------
 
     Matrix< DDRMat >
     Workflow_HMR_XTK::compute_dcriteria_dadv()

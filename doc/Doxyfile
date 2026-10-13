@@ -1,0 +1,74 @@
+# Doxygen configuration for the Sphinx documentation site (doc/).
+#
+# Produces XML for Breathe (curated API pages) and a standalone HTML index
+# that the site publishes under /doxygen/. Paths come from the environment so
+# the same file serves `make -C doc html`, the CMake `docs` target, and CI:
+#
+#   MORIS_SOURCE_DIR   repository root            (default: run from doc/)
+#   DOXYGEN_OUTPUT_DIR where xml/ and html/ land   (default: doc/_build/doxygen)
+#
+# The legacy hand-written Doxygen pages (share/doc/*.dox, the `doxy` target)
+# are configured separately by share/doc/Doxyfile.in.
+
+PROJECT_NAME           = MORIS
+PROJECT_BRIEF          = "Multi-physics Optimization Research and Innovation System"
+OUTPUT_DIRECTORY       = $(DOXYGEN_OUTPUT_DIR)
+CREATE_SUBDIRS         = NO
+
+INPUT                  = $(MORIS_SOURCE_DIR)/projects
+FILE_PATTERNS          = *.hpp
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */test/* \
+                         */EXA/* \
+                         */GUI/* \
+                         */PYBIND/* \
+                         */mains/*
+STRIP_FROM_PATH        = $(MORIS_SOURCE_DIR)
+STRIP_FROM_INC_PATH    = $(MORIS_SOURCE_DIR)
+
+# Document what exists, not only what is commented: most of MORIS is uncommented,
+# and the class/member listing is still the useful part of the reference.
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_RELATIONS   = NO
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+PREDEFINED             = DOXYGEN_SHOULD_SKIP_THIS \
+                         MORIS_HAVE_ROL \
+                         MORIS_HAVE_GCMMA \
+                         MORIS_HAVE_LBFGS \
+                         MORIS_HAVE_PETSC \
+                         MORIS_HAVE_SLEPC \
+                         MORIS_HAVE_ARBORX
+
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+XML_PROGRAMLISTING     = NO
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+SEARCHENGINE           = YES
+GENERATE_TREEVIEW      = YES
+SOURCE_BROWSER         = NO
+GENERATE_LATEX         = NO
+USE_MATHJAX            = YES
+
+# Graphs need graphviz and multiply the run time; the class lists suffice.
+HAVE_DOT               = NO
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = NO
+WARN_NO_PARAMDOC       = NO
+WARN_LOGFILE           = $(DOXYGEN_OUTPUT_DIR)/doxygen-warnings.log

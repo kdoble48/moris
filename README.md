@@ -10,6 +10,8 @@ This code provides a research platform for PDE constrained optimization with foc
 
 ## Documentation
 
+The documentation site — build and run instructions, the input-deck user guide, the developer guide, and the C++ API reference — is published at <https://kdoble48.github.io/moris/>. Its sources are in [`doc/`](doc/); build it locally with `make -C doc html` (see `doc/developer/documentation.md`).
+
 ### Installation 
 A script to install moris can be found in [InstallScript](https://github.com/kkmaute/moris/tree/main/share/install/InstallScript.sh). Edit the script and verify/update a small number of installation parameters. Should the script fail, detailed install instructions can be found at [Install_Step_By_Step.txt](https://github.com/kkmaute/moris/tree/main/share/install/Install_Step_By_Step.txt)
 

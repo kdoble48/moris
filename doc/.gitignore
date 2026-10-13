@@ -1,0 +1,6 @@
+# generated at build time; the gallery assets come from the gallery-assets release
+_static/gallery/
+_static/viewer.html
+# trame-vtk vendored for pvpython (doc/gallery/build_gallery.py --vendor)
+gallery/_vendor/
+__pycache__/
