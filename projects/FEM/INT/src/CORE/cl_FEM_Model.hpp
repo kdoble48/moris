@@ -137,6 +137,11 @@ namespace moris
             uint mDoubleSidedSideSetsGaussPoints  = 0;
             uint mNonconformalSideSetsGaussPoints = 0;
 
+            //! moment-fitted cut-cell quadrature (default OFF; see FEM computation parameter list)
+            bool mUseMomentFitting    = false;
+            uint mMomentFittingDegree = 4;
+            real mMomentFittingTol    = 1e-10;
+
             //------------------------------------------------------------------------------
             /**
              * @brief constructor
@@ -385,7 +390,17 @@ namespace moris
             set_parameter_list( const Module_Parameter_Lists &aParameterList )
             {
                 mParameterList = aParameterList;
+
+                // unpack the moment-fitted cut-cell quadrature settings (default OFF)
+                this->parse_moment_fitting_parameters();
             }
+
+            //------------------------------------------------------------------------------
+            /**
+             * @brief unpack the moment-fitted cut-cell quadrature settings from the
+             * FEM computation parameter list (kept OFF if the keys are absent)
+             */
+            void parse_moment_fitting_parameters();
 
             //------------------------------------------------------------------------------
             /**

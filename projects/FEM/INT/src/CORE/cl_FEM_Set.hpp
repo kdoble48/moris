@@ -129,6 +129,19 @@ namespace moris
             // integration weights
             Matrix< DDRMat > mIntegWeights;
 
+            // space-only and time-only parts of the integration rule
+            // (needed by the moment-fitted cut-cell quadrature to build per-cluster rules)
+            Matrix< DDRMat > mSpaceIntegPoints;
+            Matrix< DDRMat > mSpaceIntegWeights;
+            Matrix< DDRMat > mTimeIntegPoints;
+            Matrix< DDRMat > mTimeIntegWeights;
+
+            // per-cluster integration rule override (moment-fitted cut-cell quadrature);
+            // installed by fem::Cluster around the evaluation of a single host element
+            bool             mHaveIntegRuleOverride = false;
+            Matrix< DDRMat > mOverrideIntegPoints;
+            Matrix< DDRMat > mOverrideIntegWeights;
+
             // map for the dof type
             Matrix< DDSMat > mUniqueDofTypeMap;
             Matrix< DDSMat > mUniqueDvTypeMap;
@@ -794,6 +807,10 @@ namespace moris
             uint
             get_number_of_integration_points()
             {
+                if ( mHaveIntegRuleOverride )
+                {
+                    return mOverrideIntegWeights.numel();
+                }
                 return mIntegWeights.numel();
             }
 
@@ -805,6 +822,10 @@ namespace moris
             const Matrix< DDRMat >&
             get_integration_points()
             {
+                if ( mHaveIntegRuleOverride )
+                {
+                    return mOverrideIntegPoints;
+                }
                 return mIntegPoints;
             }
 
@@ -816,7 +837,71 @@ namespace moris
             const Matrix< DDRMat >&
             get_integration_weights()
             {
+                if ( mHaveIntegRuleOverride )
+                {
+                    return mOverrideIntegWeights;
+                }
                 return mIntegWeights;
+            }
+
+            //------------------------------------------------------------------------------
+            /**
+             * get the space-only part of the set integration rule
+             */
+            const Matrix< DDRMat >&
+            get_space_integration_points() const
+            {
+                return mSpaceIntegPoints;
+            }
+
+            const Matrix< DDRMat >&
+            get_space_integration_weights() const
+            {
+                return mSpaceIntegWeights;
+            }
+
+            //------------------------------------------------------------------------------
+            /**
+             * get the time-only part of the set integration rule
+             */
+            const Matrix< DDRMat >&
+            get_time_integration_points() const
+            {
+                return mTimeIntegPoints;
+            }
+
+            const Matrix< DDRMat >&
+            get_time_integration_weights() const
+            {
+                return mTimeIntegWeights;
+            }
+
+            //------------------------------------------------------------------------------
+            /**
+             * install a temporary per-cluster integration rule override
+             * (moment-fitted cut-cell quadrature); points are given in the parametric
+             * space of the host IG element, weights carry the material measure
+             * @param[ in ] aIntegPoints  space-time integration points ( (dim+1) x nGP )
+             * @param[ in ] aIntegWeights integration weights ( 1 x nGP )
+             */
+            void
+            set_integration_rule_override(
+                    const Matrix< DDRMat >& aIntegPoints,
+                    const Matrix< DDRMat >& aIntegWeights )
+            {
+                mOverrideIntegPoints   = aIntegPoints;
+                mOverrideIntegWeights  = aIntegWeights;
+                mHaveIntegRuleOverride = true;
+            }
+
+            //------------------------------------------------------------------------------
+            /**
+             * remove the per-cluster integration rule override
+             */
+            void
+            clear_integration_rule_override()
+            {
+                mHaveIntegRuleOverride = false;
             }
 
             //------------------------------------------------------------------------------

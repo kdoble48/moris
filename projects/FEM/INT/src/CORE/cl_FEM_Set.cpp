@@ -381,6 +381,13 @@ namespace moris::fem
 
         // get integration weights
         tIntegrator.get_weights( mIntegWeights );
+
+        // store the space-only and time-only parts of the rule
+        // (used by the moment-fitted cut-cell quadrature to build per-cluster rules)
+        mSpaceIntegPoints  = tIntegrator.get_space_points();
+        mSpaceIntegWeights = tIntegrator.get_space_weights();
+        mTimeIntegPoints   = tIntegrator.get_time_points();
+        mTimeIntegWeights  = tIntegrator.get_time_weights();
     }
 
     //------------------------------------------------------------------------------

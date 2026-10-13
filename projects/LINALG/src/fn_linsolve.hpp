@@ -29,7 +29,9 @@ namespace moris
      *
      * @param[in] A The LHS Matrix
      * @param[in] B The RHS Vector
-     * @param[in] aSolver Optional solver type
+     * @param[in] aSolver Optional solver type. NOTE: currently IGNORED by both
+     *            backends (kept for API compatibility). Both debug and opt
+     *            builds use the backend's default (accuracy-checked) algorithm.
      *
      * @return The vector of solutions, x. Similar to B/A in Matlab
      *
@@ -50,6 +52,81 @@ namespace moris
         MORIS_ASSERT( aA.n_rows() > 10, "For matrices smaller than 10x10 use inv() instead of solve().\n" );
 
         return solve( aA.matrix_data(), aB.matrix_data() );
+    }
+
+    /**
+     * @brief Dense least-squares solve into a caller-provided output:
+     *        aX = argmin || aA aX - aB ||_2 for a tall ( m >= k )
+     *        full-column-rank system, via the backend's compiled LAPACK
+     *        path (dgels for the Armadillo backend).
+     *
+     * Intended for REPEATED small/medium dense solves: writes into aX
+     * (resized only when needed - reuse the same output across calls to
+     * avoid per-call allocation of the result), and never falls back to an
+     * approximate (pseudo-inverse) solution.
+     *
+     * @param[in]  aA tall dense matrix ( m x k, m >= k )
+     * @param[in]  aB right-hand side ( m x nrhs )
+     * @param[out] aX solution ( k x nrhs ), written in place
+     *
+     * @return true on success; false if the backend flags the system as
+     *         (numerically) rank deficient or the solve fails - the caller
+     *         must handle that case (no approximate solution is returned).
+     *
+     * @note Only implemented for the Armadillo backend; the Eigen build
+     *       returns false so callers exercise their fallback path.
+     */
+    inline bool
+    solve_least_squares(
+            Matrix< DDRMat > const & aA,
+            Matrix< DDRMat > const & aB,
+            Matrix< DDRMat >&        aX )
+    {
+#ifdef MORIS_USE_ARMA
+        return arma::solve(
+                aX.matrix_data(),
+                aA.matrix_data(),
+                aB.matrix_data(),
+                arma::solve_opts::fast + arma::solve_opts::no_approx );
+#else
+        return false;
+#endif
+    }
+
+    /**
+     * @brief Workspace variant of solve_least_squares: solves on the LEADING
+     *        aNumCols columns of aA (backend submatrix view - no copy of aA).
+     *
+     * Lets a caller keep one geometrically-grown gather buffer and re-solve
+     * subproblems of varying column count without any per-call allocation of
+     * the system matrix (active-set methods, column-selection loops).
+     *
+     * @param[in]  aA       workspace matrix ( m x >= aNumCols )
+     * @param[in]  aNumCols number of leading columns forming the system
+     * @param[in]  aB       right-hand side ( m x nrhs )
+     * @param[out] aX       solution ( aNumCols x nrhs ), written in place
+     *
+     * @return true on success (see solve_least_squares)
+     */
+    inline bool
+    solve_least_squares(
+            Matrix< DDRMat > const & aA,
+            uint                     aNumCols,
+            Matrix< DDRMat > const & aB,
+            Matrix< DDRMat >&        aX )
+    {
+        MORIS_ASSERT( aNumCols > 0 && aNumCols <= aA.n_cols(),
+                "solve_least_squares - invalid leading column count." );
+
+#ifdef MORIS_USE_ARMA
+        return arma::solve(
+                aX.matrix_data(),
+                aA.matrix_data().head_cols( aNumCols ),
+                aB.matrix_data(),
+                arma::solve_opts::fast + arma::solve_opts::no_approx );
+#else
+        return false;
+#endif
     }
 }    // namespace moris
 
