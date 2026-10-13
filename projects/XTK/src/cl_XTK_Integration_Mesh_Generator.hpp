@@ -303,6 +303,40 @@ namespace moris::xtk
 
         // ----------------------------------------------------------------------------------
 
+        /**
+         * @brief Parametric coordinates (w.r.t. the background cell) of the vertices the regular subdivision creates
+         * inside a background cell: the cell centre for QUAD4, the cell and face centres for HEX8. Empty if no
+         * regular subdivision is part of the decomposition, or if an octree refinement precedes it (its vertices
+         * are not known before the refinement).
+         *
+         * @return list of parametric coordinates (row vectors)
+         */
+        Vector< Matrix< DDRMat > >
+        get_regular_subdivision_vertex_parametric_coordinates();
+
+        // ----------------------------------------------------------------------------------
+
+        /**
+         * @brief MB-016 / MB-031: before the node hierarchy processes geometry aGeometryIndex, add every already
+         * decomposed background cell whose current child-mesh vertices (regular-subdivision vertices and the
+         * intersection vertices of earlier geometries) lie in different geometric regions of this geometry. An
+         * analytic level set is evaluated exactly at these vertices, so a cell whose corners lie in one region can
+         * still be cut inside, e.g. at a cut vertex shared with a neighbouring cell that is flagged by its corners.
+         * Without this both cells would split the shared edge differently (nonconforming facets).
+         * No-op for geometries that are interpolated from the corner values.
+         *
+         * @param aMeshGenerationData mesh generation data holding the per-geometry list of intersected cells
+         * @param aCutIntegrationMesh cut integration mesh holding the child-mesh vertex groups
+         * @param aGeometryIndex index of the geometry about to be processed
+         */
+        void
+        add_background_cells_intersected_at_child_vertices(
+                Integration_Mesh_Generation_Data* aMeshGenerationData,
+                Cut_Integration_Mesh*             aCutIntegrationMesh,
+                uint                              aGeometryIndex );
+
+        // ----------------------------------------------------------------------------------
+
         enum Subdivision_Method
         determine_order_elevation_template();
 
@@ -353,6 +387,21 @@ namespace moris::xtk
                 Integration_Mesh_Generation_Data& aMeshGenerationData,
                 Cut_Integration_Mesh*             aCutIntegrationMesh,
                 moris::mtk::Mesh*                 aBackgroundMesh );
+
+        // ----------------------------------------------------------------------------------
+
+        /**
+         * @brief Global coordinates of the regular-subdivision vertices inside a background cell (MB-031)
+         *
+         * @param aBackgroundCell background cell
+         * @param aParametricCoordinates parametric coordinates of the vertices w.r.t. the cell
+         * @param aInteriorPoints output: global coordinates (row vectors)
+         */
+        void
+        compute_interior_sample_points(
+                const moris::mtk::Cell&           aBackgroundCell,
+                const Vector< Matrix< DDRMat > >& aParametricCoordinates,
+                Vector< Matrix< DDRMat > >&       aInteriorPoints );
 
         // ----------------------------------------------------------------------------------
 

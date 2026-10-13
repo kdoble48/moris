@@ -126,6 +126,22 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Level_Set_Geometry::can_change_region_inside_cell() const
+    {
+        return not this->use_multilinear_interpolation() and mField->has_exact_derived_node_values();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Geometric_Region Level_Set_Geometry::get_geometric_region_at_point( const Matrix< DDRMat >& aCoordinates )
+    {
+        MORIS_ASSERT( this->can_change_region_inside_cell(),
+                "Level_Set_Geometry::get_geometric_region_at_point() - only for fields evaluated exactly at derived nodes." );
+        return this->determine_geometric_region( mField->get_field_value_at_point( aCoordinates ) );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Intersection_Node* Level_Set_Geometry::create_intersection_node(
             uint                              aNodeIndex,
             const Vector< Background_Node* >& aBackgroundNodes,

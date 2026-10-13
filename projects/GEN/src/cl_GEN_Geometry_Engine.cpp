@@ -354,6 +354,49 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     bool
+    Geometry_Engine::can_change_region_inside_cell( uint aGeometryIndex )
+    {
+        return mGeometries( aGeometryIndex )->can_change_region_inside_cell();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    Geometry_Engine::is_intersected(
+            uint                                                         aGeometryIndex,
+            const Matrix< IndexMat >&                                    aNodeIndices,
+            Vector< std::shared_ptr< moris::Matrix< moris::DDRMat > > >* aNodeCoordinates,
+            const Vector< Matrix< DDRMat > >&                            aInteriorPoints )
+    {
+        // The nodes alone already show an intersection
+        if ( this->is_intersected( aGeometryIndex, aNodeIndices, aNodeCoordinates ) )
+        {
+            return true;
+        }
+
+        // Interpolated fields are bounded by the node values: nothing to find inside (MB-031)
+        if ( aInteriorPoints.size() == 0 or not mGeometries( aGeometryIndex )->can_change_region_inside_cell() )
+        {
+            return false;
+        }
+
+        // All nodes share the region of the first node; compare the interior points against it
+        Geometric_Region tNodeGeometricRegion = mGeometries( aGeometryIndex )->get_geometric_region( aNodeIndices( 0 ), *( *aNodeCoordinates )( aNodeIndices( 0 ) ) );
+        for ( const Matrix< DDRMat >& iPoint : aInteriorPoints )
+        {
+            if ( mGeometries( aGeometryIndex )->get_geometric_region_at_point( iPoint ) != tNodeGeometricRegion )
+            {
+                return true;
+            }
+        }
+
+        // Uniform region at the nodes and the interior points
+        return false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
     Geometry_Engine::queue_intersection(
             uint                     aEdgeFirstNodeIndex,
             uint                     aEdgeSecondNodeIndex,

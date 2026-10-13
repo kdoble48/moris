@@ -116,6 +116,27 @@ namespace moris::gen
         virtual real get_field_value( const Matrix< DDRMat >& aCoordinates ) = 0;
 
         /**
+         * An analytic field evaluates derived nodes at their coordinates.
+         *
+         * @return true
+         */
+        bool has_exact_derived_node_values() const override
+        {
+            return true;
+        }
+
+        /**
+         * Evaluates the analytic field at a point.
+         *
+         * @param aCoordinates Point coordinates
+         * @return Field value
+         */
+        real get_field_value_at_point( const Matrix< DDRMat >& aCoordinates ) override
+        {
+            return this->get_field_value( aCoordinates );
+        }
+
+        /**
          * Given a node index or coordinates, returns a vector of the field derivatives with respect to its ADVs.
          *
          * @param aNodeIndex Node index

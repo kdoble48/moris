@@ -45,6 +45,20 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Scaled_Field::has_exact_derived_node_values() const
+    {
+        return mField->has_exact_derived_node_values();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Scaled_Field::get_field_value_at_point( const Matrix< DDRMat >& aCoordinates )
+    {
+        return mADVHandler.get_variable( 0 ) * mField->get_field_value_at_point( aCoordinates );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     const Matrix< DDRMat >& Scaled_Field::get_dfield_dadvs(
             uint                    aNodeIndex,
             const Matrix< DDRMat >& aCoordinates )
