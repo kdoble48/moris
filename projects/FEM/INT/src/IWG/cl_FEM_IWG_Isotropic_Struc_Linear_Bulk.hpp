@@ -87,6 +87,26 @@ namespace moris::fem
         void compute_dRdp( real aWStar ) override;
 
         //------------------------------------------------------------------------------
+        /**
+         * analytical geometric sensitivities are available if the elasticity CM is a linear structural CM
+         * with exact spatial strain derivatives (see CM_Struc_Linear::has_spatial_strain_derivatives)
+         */
+        bool supports_analytical_dRdp_geometry() override;
+
+        //------------------------------------------------------------------------------
+        /**
+         * derivatives of the residual contribution wrt the evaluation point location, at fixed weight
+         * (see IWG::compute_dRdx_geometry_integrand); spatial variations of the properties are not differentiated
+         * @param[ in ]  aWStar weight associated to the evaluation point
+         * @param[ out ] adRdx  derivatives wrt the evaluation point location, one column per space direction
+         * @param[ out ] adRdn  derivatives wrt the normal components (empty for bulk)
+         */
+        void compute_dRdx_geometry_integrand(
+                real                        aWStar,
+                Vector< Matrix< DDRMat > >& adRdx,
+                Vector< Matrix< DDRMat > >& adRdn ) override;
+
+        //------------------------------------------------------------------------------
     };
     //------------------------------------------------------------------------------
 }    // namespace moris::fem

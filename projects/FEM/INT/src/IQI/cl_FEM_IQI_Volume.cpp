@@ -175,4 +175,28 @@ namespace moris::fem
         }
     }
 
+    //------------------------------------------------------------------------------
+
+    bool
+    IQI_Volume::supports_analytical_dQIdp_geometry()
+    {
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI_Volume::compute_dQIdx_geometry_integrand(
+            real              aWStar,
+            Matrix< DDRMat > &adQIdx,
+            Matrix< DDRMat > &adQIdn )
+    {
+        // the integrand (density, held fixed in space) does not depend on the evaluation point location
+        const uint tSpaceDim = mLeaderFIManager->get_IP_geometry_interpolator()->get_number_of_space_dimensions();
+
+        adQIdx.set_size( tSpaceDim, 1, 0.0 );
+        adQIdn.set_size( 0, 0 );
+    }
+
+    //------------------------------------------------------------------------------
 }    // namespace moris::fem

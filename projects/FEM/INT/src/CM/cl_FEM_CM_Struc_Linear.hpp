@@ -203,6 +203,61 @@ namespace moris::fem
 
         //--------------------------------------------------------------------------------------------------------------
         /**
+         * check whether the spatial derivatives of strain and test strain below are exact for this model:
+         * no thermal expansion, no eigen strain, no pressure dof and not axisymmetric
+         * (used by the analytical geometric sensitivities of the structural IWGs and IQIs)
+         */
+        bool has_spatial_strain_derivatives() const;
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the test strain (strain-displacement matrix B) wrt the spatial coordinate x_k,
+         * same layout as testStrain(); the derivative of the strain is adTestStraindx * vec( displacement coefficients )
+         * @param[ in ]  aDirection       spatial direction k
+         * @param[ out ] adTestStraindx   d B / d x_k
+         */
+        void eval_dTestStraindx(
+                uint              aDirection,
+                Matrix< DDRMat >& adTestStraindx );
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the strain wrt the spatial coordinate x_k (same layout as strain())
+         * @param[ in ]  aDirection spatial direction k
+         * @param[ out ] adStraindx d strain / d x_k
+         */
+        void eval_dStraindx(
+                uint              aDirection,
+                Matrix< DDRMat >& adStraindx );
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * build the strain-displacement matrix from an arbitrary shape function gradient matrix
+         * ( space dim x number of bases ); with dnNdxn( 1 ) this reproduces testStrain()
+         * (plane stress, plane strain and 3D; not axisymmetric)
+         * @param[ in ]  adNdx shape function gradient-like matrix
+         * @param[ out ] aB    strain-displacement matrix
+         */
+        void build_test_strain_from_gradient(
+                const Matrix< DDRMat >& adNdx,
+                Matrix< DDRMat >&       aB );
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * get the flattened normal used in traction() and testTraction(): traction = flat( n ) * flux
+         * @param[ in ]  aNormal     normal
+         * @param[ out ] aFlatNormal flattened normal
+         */
+        void
+        get_flattened_normal(
+                const Matrix< DDRMat >& aNormal,
+                Matrix< DDRMat >&       aFlatNormal )
+        {
+            this->flatten_normal( aNormal, aFlatNormal );
+        }
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
          * returns the E prime values used in the computation of the Stress Intensity Factor(s)
          */
         //     virtual

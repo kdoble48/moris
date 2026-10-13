@@ -11,6 +11,9 @@
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_IQI_Strain_Energy.hpp"
+#include "cl_FEM_CM_Struc_Linear.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
+#include "fn_dot.hpp"
 
 namespace moris::fem
 {
@@ -266,6 +269,95 @@ namespace moris::fem
 
             // combine the two bounds that satisfy both
             return tUpperBound and tLowerBound;
+        }
+    }
+
+    //------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------
+
+    bool
+    IQI_Strain_Energy::supports_analytical_dQIdp_geometry()
+    {
+        // the spatial derivatives are implemented for the linear structural CMs
+        const CM_Struc_Linear *tCMStrucLinear = dynamic_cast< const CM_Struc_Linear * >(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST ) ).get() );
+
+        return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI_Strain_Energy::compute_dQIdx_geometry_integrand(
+            real              aWStar,
+            Matrix< DDRMat > &adQIdx,
+            Matrix< DDRMat > &adQIdn )
+    {
+        // number of space dimensions
+        const uint tSpaceDim = mLeaderFIManager->get_IP_geometry_interpolator()->get_number_of_space_dimensions();
+
+        adQIdx.set_size( tSpaceDim, 1, 0.0 );
+        adQIdn.set_size( 0, 0 );
+
+        // outside the box bounds the QI contribution is zero (box bounds are held fixed in space)
+        if ( !this->is_within_box_bounds() )
+        {
+            return;
+        }
+
+        // get the elasticity CM
+        CM_Struc_Linear *tCMElasticity = dynamic_cast< CM_Struc_Linear * >(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST ) ).get() );
+
+        MORIS_ASSERT( tCMElasticity != nullptr,
+                "IQI_Strain_Energy::compute_dQIdx_geometry_integrand - elasticity CM is not a CM_Struc_Linear" );
+
+        // get bedding property
+        const std::shared_ptr< Property > &tPropBedding =
+                mLeaderProp( static_cast< uint >( IWG_Property_Type::BEDDING ) );
+
+        // get thickness property
+        const std::shared_ptr< Property > &tPropThickness =
+                mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
+
+        // multiplying aWStar by user defined thickness
+        aWStar *= ( tPropThickness != nullptr ) ? tPropThickness->val()( 0 ) : 1;
+
+        // unperturbed flux and strain, constitutive matrix
+        const Matrix< DDRMat > &tFlux   = tCMElasticity->flux();
+        const Matrix< DDRMat > &tStrain = tCMElasticity->strain();
+        const Matrix< DDRMat > &tConst  = tCMElasticity->constitutive();
+
+        // displacement field interpolator (bedding)
+        Field_Interpolator *tDisplacementFI = nullptr;
+        Matrix< DDRMat >    tUHat;
+        if ( tPropBedding != nullptr )
+        {
+            tDisplacementFI = mLeaderFIManager->get_field_interpolators_for_type( MSI::Dof_Type::UX );
+            vectorize_coefficients( tDisplacementFI->get_coeff(), tUHat );
+        }
+
+        Matrix< DDRMat > tdStraindx;
+        Matrix< DDRMat > tNk;
+        for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+        {
+            // d/dx_k ( 1/2 sigma^T eps ) = 1/2 ( C deps^T eps + sigma^T deps )
+            tCMElasticity->eval_dStraindx( iDir, tdStraindx );
+            Matrix< DDRMat > tdFluxdx = tConst * tdStraindx;
+
+            adQIdx( iDir ) = aWStar * 0.5 * ( dot( tdFluxdx, tStrain ) + dot( tFlux, tdStraindx ) );
+
+            // bedding: d/dx_k ( 1/2 k u^T u ) = k u^T du/dx_k
+            if ( tPropBedding != nullptr )
+            {
+                const Matrix< DDRMat > &tdNdx  = tDisplacementFI->dnNdxn( 1 );
+                Matrix< DDRMat >        tdNdxk = tdNdx( { iDir, iDir }, { 0, tdNdx.n_cols() - 1 } );
+                build_vector_shape_function_matrix( tdNdxk, tDisplacementFI->get_number_of_fields(), tNk );
+
+                Matrix< DDRMat > tdUdx = tNk * tUHat;
+
+                adQIdx( iDir ) += aWStar * tPropBedding->val()( 0 ) * dot( tDisplacementFI->val(), tdUdx );
+            }
         }
     }
 

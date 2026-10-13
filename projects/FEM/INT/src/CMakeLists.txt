@@ -57,6 +57,7 @@ set(HEADERS
     CORE/fn_FEM_Check.hpp
     CORE/fn_FEM_FD_Scheme.hpp
     CORE/fn_FEM_Remap_Nonconformal_Ray.hpp
+    CORE/fn_FEM_Geometric_Sensitivity.hpp
 
     ELEM/cl_FEM_Cluster.hpp
     ELEM/cl_FEM_Element_Factory.hpp
@@ -300,6 +301,7 @@ set(LIB_SOURCES
     CORE/cl_FEM_Model.cpp
     CORE/cl_FEM_Field.cpp
     CORE/fn_FEM_Remap_Nonconformal_Ray.cpp
+    CORE/fn_FEM_Geometric_Sensitivity.cpp
 
     ELEM/cl_FEM_Cluster.cpp
     ELEM/cl_FEM_Element_Factory.cpp
