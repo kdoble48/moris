@@ -353,9 +353,10 @@ def main(argv=None) -> int:
     if args.vendor or not (HERE / "_vendor" / "trame_vtk").exists():
         vendor()
     out = args.out.resolve()
-    if out.exists():
+    # a full export starts clean; --only updates the named examples and keeps the rest of the gallery
+    if out.exists() and not args.only:
         shutil.rmtree(out)
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
     overrides_file = HERE / "overrides.json"
     overrides = json.loads(overrides_file.read_text()) if overrides_file.exists() else {}
     examples = build_examples(args.build.resolve(), args.only, overrides, args.showcase_runs)
