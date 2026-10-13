@@ -895,6 +895,21 @@ namespace moris::fem
                 Matrix< DDSMat >&             aGeoLocalAssembly,
                 Vector< Matrix< IndexMat > >& aVertexIndices );
 
+        /**
+         * evaluate the derivative of the residual wrt the geometry design variables
+         * by finite difference for a bulk element, sweeping all integration points
+         * of the set inside; each perturbed configuration (nodal coordinate
+         * perturbation + inverse map + interpolator update) is built once per
+         * element instead of once per integration point
+         * @param[ in ] aPerturbation     real for relative dv perturbation
+         * @param[ in ] aFDSchemeType     enum for FD scheme
+         * @param[ in ] aGeoLocalAssembly matrix filled with pdv local assembly indices
+         */
+        void compute_dRdp_FD_geometry_elementwise_bulk(
+                moris::real        aPerturbation,
+                fem::FDScheme_Type aFDSchemeType,
+                Matrix< DDSMat >&  aGeoLocalAssembly );
+
         void select_dRdp_FD_geometry_sideset(
                 moris::real                   aWStar,
                 moris::real                   aPerturbation,

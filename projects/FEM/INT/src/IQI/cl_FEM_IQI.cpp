@@ -2390,6 +2390,301 @@ namespace moris::fem
     //------------------------------------------------------------------------------
 
     void
+    IQI::compute_dQIdp_FD_geometry_elementwise_bulk(
+            moris::real        aPerturbation,
+            fem::FDScheme_Type aFDSchemeType,
+            Matrix< DDSMat >&  aGeoLocalAssembly )
+    {
+        // get the IQI index
+        uint tIQIAssemblyIndex = mSet->get_QI_assembly_index( mName );
+
+        // store QI value
+        Matrix< DDRMat > tQIStore = mSet->get_QI()( tIQIAssemblyIndex );
+
+        // get the field interpolator manager
+        Field_Interpolator_Manager* tFIManager = mSet->get_field_interpolator_manager();
+
+        // get the GI for the IP and IG element considered
+        Geometry_Interpolator* tIPGI = tFIManager->get_IP_geometry_interpolator();
+        Geometry_Interpolator* tIGGI = tFIManager->get_IG_geometry_interpolator();
+
+        // get number of leader GI bases and space dimensions
+        uint tDerNumBases      = tIGGI->get_number_of_space_bases();
+        uint tDerNumDimensions = tIPGI->get_number_of_space_dimensions();
+
+        // coefficients for dv type wrt which derivative is computed
+        Matrix< DDRMat > tCoeff      = tIGGI->get_space_coeff();
+        Matrix< DDRMat > tParamCoeff = tIGGI->get_space_param_coeff();
+
+        // get the integration rule of the set
+        uint                    tNumGPs       = mSet->get_number_of_integration_points();
+        const Matrix< DDRMat >& tIntegPoints  = mSet->get_integration_points();
+        const Matrix< DDRMat >& tIntegWeights = mSet->get_integration_weights();
+
+        // pre-scan the FD scheme and step size for each active pdv; both depend
+        // only on the unperturbed nodal coordinates, i.e. they are GP independent
+        Matrix< DDRMat >             tDeltaHMat( tDerNumBases, tDerNumDimensions, 0.0 );
+        Vector< fem::FDScheme_Type > tUsedFDSchemeTypes( tDerNumBases * tDerNumDimensions, aFDSchemeType );
+        bool                         tUseUnperturbedQI = false;
+
+        for ( uint iCoeffCol = 0; iCoeffCol < tDerNumDimensions; iCoeffCol++ )
+        {
+            for ( uint iCoeffRow = 0; iCoeffRow < tDerNumBases; iCoeffRow++ )
+            {
+                // if pdv is active
+                if ( aGeoLocalAssembly( iCoeffRow, iCoeffCol ) != -1 )
+                {
+                    // check point location and define perturbation size and FD scheme accordingly
+                    fem::FDScheme_Type tUsedFDScheme = aFDSchemeType;
+
+                    tDeltaHMat( iCoeffRow, iCoeffCol ) = this->check_ig_coordinates_inside_ip_element(
+                            aPerturbation,
+                            tCoeff( iCoeffRow, iCoeffCol ),
+                            iCoeffCol,
+                            tUsedFDScheme );
+
+                    tUsedFDSchemeTypes( iCoeffCol * tDerNumBases + iCoeffRow ) = tUsedFDScheme;
+
+                    // one-sided schemes need the unperturbed QI contribution
+                    tUseUnperturbedQI = tUseUnperturbedQI                                            //
+                                     || ( tUsedFDScheme == fem::FDScheme_Type::POINT_1_BACKWARD )    //
+                                     || ( tUsedFDScheme == fem::FDScheme_Type::POINT_1_FORWARD );
+                }
+            }
+        }
+
+        // pre-scan the integration points on the unperturbed configuration:
+        // active points (detJ above threshold, as in the per-GP assembly loop),
+        // reconstructed integration weights, and, if needed, the per-GP
+        // unperturbed QI (kept per GP so that the final accumulation into
+        // dQIdp reproduces the per-GP addition order bit-identically)
+        Vector< uint > tActiveGPs;
+        tActiveGPs.reserve( tNumGPs );
+        Matrix< DDRMat > tGPWStar( tNumGPs, 1, 0.0 );
+        Matrix< DDRMat > tGPWeight( tNumGPs, 1, 0.0 );
+        Matrix< DDRMat > tQIUnpertGP( tNumGPs, 1, 0.0 );
+
+        for ( uint iGP = 0; iGP < tNumGPs; iGP++ )
+        {
+            // set evaluation point for interpolators (FIs and GIs)
+            tFIManager->set_space_time_from_local_IG_point( tIntegPoints.get_column( iGP ) );
+
+            // compute detJ of integration domain
+            real tDetJ = tIGGI->det_J();
+
+            // skip if detJ smaller than threshold
+            if ( tDetJ < Geometry_Interpolator::sDetJInvJacLowerLimit )
+            {
+                continue;
+            }
+
+            tActiveGPs.push_back( iGP );
+            tGPWStar( iGP ) = tIntegWeights( iGP ) * tDetJ;
+
+            // reconstruct the integration weight as aWStar / detJ to keep the
+            // FD arithmetic bit-identical to the per-GP path
+            tGPWeight( iGP ) = tGPWStar( iGP ) / tDetJ;
+
+            // reset and evaluate the QI for the unperturbed case
+            if ( tUseUnperturbedQI )
+            {
+                this->reset_eval_flags();
+                mSet->get_QI()( tIQIAssemblyIndex ).fill( 0.0 );
+                this->compute_QI( tGPWStar( iGP ) );
+                tQIUnpertGP( iGP ) = mSet->get_QI()( tIQIAssemblyIndex )( 0 );
+            }
+        }
+
+        // if all integration points are degenerate there is nothing to assemble
+        if ( tActiveGPs.empty() )
+        {
+            // reset the coefficients values and the QI value
+            tIGGI->set_space_coeff( tCoeff );
+            tIGGI->set_space_param_coeff( tParamCoeff );
+            mSet->get_QI()( tIQIAssemblyIndex ) = tQIStore;
+            return;
+        }
+
+        // init scratch for perturbed configurations
+        Matrix< DDRMat >         tCoeffPert;
+        Matrix< DDRMat >         tParamCoeffPert;
+        Vector< Vector< real > > tFDScheme;
+
+        // storage for the perturbed QIs: per pdv, one value per FD point and
+        // integration point
+        Vector< Matrix< DDRMat > > tQIPert( tDerNumBases * tDerNumDimensions );
+
+        // sweep the perturbed configurations: each configuration (nodal
+        // coordinate perturbation + inverse map + interpolator update) is GP
+        // independent and hence built only once per element, with the
+        // integration point loop inside
+        for ( uint iCoeffCol = 0; iCoeffCol < tDerNumDimensions; iCoeffCol++ )
+        {
+            // loop over the IG nodes/loop one nodes
+            for ( uint iCoeffRow = 0; iCoeffRow < tDerNumBases; iCoeffRow++ )
+            {
+                // get the geometry pdv assembly index
+                sint tPdvAssemblyIndex = aGeoLocalAssembly( iCoeffRow, iCoeffCol );
+
+                // if pdv is active
+                if ( tPdvAssemblyIndex != -1 )
+                {
+                    // get the pre-scanned FD scheme and step size
+                    uint               tPdvFlatIndex = iCoeffCol * tDerNumBases + iCoeffRow;
+                    fem::FDScheme_Type tUsedFDScheme = tUsedFDSchemeTypes( tPdvFlatIndex );
+                    real               tDeltaH       = tDeltaHMat( iCoeffRow, iCoeffCol );
+
+                    // finalize FD scheme
+                    fd_scheme( tUsedFDScheme, tFDScheme );
+                    uint tNumFDPoints = tFDScheme( 0 ).size();
+
+                    // set starting point for FD
+                    uint tStartPoint = 0;
+
+                    // if backward or forward the unperturbed contribution is used
+                    if ( ( tUsedFDScheme == fem::FDScheme_Type::POINT_1_BACKWARD ) ||    //
+                            ( tUsedFDScheme == fem::FDScheme_Type::POINT_1_FORWARD ) )
+                    {
+                        // skip first point in FD
+                        tStartPoint = 1;
+                    }
+
+                    // allocate storage for the perturbed QIs of this pdv
+                    tQIPert( tPdvFlatIndex ).set_size( tNumFDPoints, tNumGPs, 0.0 );
+
+                    // loop over point of FD scheme
+                    for ( uint iPoint = tStartPoint; iPoint < tNumFDPoints; iPoint++ )
+                    {
+                        // reset and perturb the coefficients
+                        tCoeffPert = tCoeff;
+                        tCoeffPert( iCoeffRow, iCoeffCol ) += tFDScheme( 0 )( iPoint ) * tDeltaH;
+
+                        // setting the perturbed coefficients
+                        tIGGI->set_space_coeff( tCoeffPert );
+
+                        // update local coordinates
+                        Matrix< DDRMat > tXCoords  = tCoeffPert.get_row( iCoeffRow );
+                        Matrix< DDRMat > tXiCoords = tParamCoeff.get_row( iCoeffRow );
+
+                        tIPGI->update_parametric_coordinates( tXCoords, tXiCoords );
+
+                        tParamCoeffPert                      = tParamCoeff;
+                        tParamCoeffPert.get_row( iCoeffRow ) = tXiCoords.matrix_data();
+
+                        tIGGI->set_space_param_coeff( tParamCoeffPert );
+
+                        // sweep the integration points on the perturbed configuration
+                        for ( uint iGP : tActiveGPs )
+                        {
+                            // set evaluation point for interpolators (FIs and GIs)
+                            tFIManager->set_space_time_from_local_IG_point( tIntegPoints.get_column( iGP ) );
+
+                            // reset properties, CM and SP for IQI
+                            this->reset_eval_flags();
+
+                            // reset the QI
+                            mSet->get_QI()( tIQIAssemblyIndex ).fill( 0.0 );
+
+                            // compute the QI
+                            real tWStarPert = tGPWeight( iGP ) * tIGGI->det_J();
+                            this->compute_QI( tWStarPert );
+
+                            // store the QI of this integration point
+                            tQIPert( tPdvFlatIndex )( iPoint, iGP ) = mSet->get_QI()( tIQIAssemblyIndex )( 0 );
+                        }
+                    }
+                }
+            }
+        }
+
+        // assemble the FD contributions into dQIdp in the same order as the
+        // per-GP path (integration point outer, pdv and FD point inner) so that
+        // the accumulated dQIdp is bit-identical to the per-GP evaluation
+        for ( uint iGP : tActiveGPs )
+        {
+            // loop over the spatial directions/loop on pdv type
+            for ( uint iCoeffCol = 0; iCoeffCol < tDerNumDimensions; iCoeffCol++ )
+            {
+                // loop over the IG nodes/loop one nodes
+                for ( uint iCoeffRow = 0; iCoeffRow < tDerNumBases; iCoeffRow++ )
+                {
+                    // get the geometry pdv assembly index
+                    sint tPdvAssemblyIndex = aGeoLocalAssembly( iCoeffRow, iCoeffCol );
+
+                    // if pdv is active
+                    if ( tPdvAssemblyIndex != -1 )
+                    {
+                        // get the pre-scanned FD scheme and step size
+                        uint               tPdvFlatIndex = iCoeffCol * tDerNumBases + iCoeffRow;
+                        fem::FDScheme_Type tUsedFDScheme = tUsedFDSchemeTypes( tPdvFlatIndex );
+                        real               tDeltaH       = tDeltaHMat( iCoeffRow, iCoeffCol );
+
+                        // finalize FD scheme
+                        fd_scheme( tUsedFDScheme, tFDScheme );
+                        uint tNumFDPoints = tFDScheme( 0 ).size();
+
+                        // set starting point for FD
+                        uint tStartPoint = 0;
+
+                        // if backward or forward fd
+                        if ( ( tUsedFDScheme == fem::FDScheme_Type::POINT_1_BACKWARD ) ||    //
+                                ( tUsedFDScheme == fem::FDScheme_Type::POINT_1_FORWARD ) )
+                        {
+                            // add unperturbed QI contribution to dQIdp
+                            mSet->get_dqidpgeo()( tIQIAssemblyIndex )( tPdvAssemblyIndex ) +=
+                                    tFDScheme( 1 )( 0 ) * tQIUnpertGP( iGP ) / ( tFDScheme( 2 )( 0 ) * tDeltaH );
+
+                            // skip first point in FD
+                            tStartPoint = 1;
+                        }
+
+                        // loop over point of FD scheme
+                        for ( uint iPoint = tStartPoint; iPoint < tNumFDPoints; iPoint++ )
+                        {
+                            // add the perturbed QI contribution to dQIdp
+                            mSet->get_dqidpgeo()( tIQIAssemblyIndex )( tPdvAssemblyIndex ) +=
+                                    tFDScheme( 1 )( iPoint ) * tQIPert( tPdvFlatIndex )( iPoint, iGP ) / ( tFDScheme( 2 )( 0 ) * tDeltaH );
+                        }
+                    }
+                }
+            }
+        }
+
+        // reset the coefficients values
+        tIGGI->set_space_coeff( tCoeff );
+        tIGGI->set_space_param_coeff( tParamCoeff );
+
+        // reset QI value
+        mSet->get_QI()( tIQIAssemblyIndex ) = tQIStore;
+
+        // add contribution of cluster measures to dQIdp, per integration point
+        // as in the per-GP path
+        if ( mActiveCMEAFlag )
+        {
+            for ( uint iGP : tActiveGPs )
+            {
+                // set evaluation point for interpolators (FIs and GIs)
+                tFIManager->set_space_time_from_local_IG_point( tIntegPoints.get_column( iGP ) );
+
+                // reset properties, CM and SP for IQI
+                this->reset_eval_flags();
+
+                // add their contribution to dQIdp
+                this->add_cluster_measure_dQIdp_FD_geometry(
+                        tGPWStar( iGP ),
+                        aPerturbation,
+                        aFDSchemeType );
+            }
+        }
+
+        // check for nan, infinity
+        MORIS_ASSERT( isfinite( mSet->get_dqidpgeo()( tIQIAssemblyIndex ) ),
+                "IQI::compute_dQIdp_FD_geometry_elementwise_bulk - dQIdp contains NAN or INF, exiting!" );
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
     IQI::select_dQIdp_FD_geometry_sideset(
             moris::real                   aWStar,
             moris::real                   aPerturbation,
