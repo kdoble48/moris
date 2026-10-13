@@ -1,6 +1,7 @@
 name: Documentation deploy
 
-# Publishes the Sphinx site (doc/) to GitHub Pages on pushes to develop.
+# Publishes the Sphinx site (doc/) to GitHub Pages weekly and on manual
+# dispatch. Not on every push: the site need not track each commit.
 #
 # Requires (repository settings):
 #   - Pages enabled with source "GitHub Actions";
@@ -10,15 +11,8 @@ name: Documentation deploy
 # checkout-only allow-list.
 
 on:
-  push:
-    branches:
-      - develop
-    paths:
-      - "doc/**"
-      - "projects/**/*.hpp"
-      - "projects/EXA/**"
-      - "CMakeLists.txt"
-      - ".github/workflows/docs-deploy.yml"
+  schedule:
+    - cron: "0 6 * * 0"    # Sundays 06:00 UTC, from develop
   workflow_dispatch:
 
 permissions:
