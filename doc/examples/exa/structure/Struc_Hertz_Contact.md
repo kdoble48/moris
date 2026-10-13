@@ -11,6 +11,16 @@ with the Hertz pressure distribution in post-processing.
 ```{exa-summary} projects/EXA/structure/contact/Struc_Hertz_Contact
 ```
 
+```{figure} ../../gallery/hertz_syy_field.png
+:alt: Vertical stress in the indenter and the flat body at the contact zone
+:width: 85%
+
+Vertical stress $\sigma_{yy}$ in both bodies on the 160 × 160 mesh at δ = 0.005 (case 5), rendered
+from the VIS output with the displacement scaled 5×. The compressive bulb under the indenter is
+the Hertz pressure; the initial gap is not scaled with the displacement, so the outlines appear to
+overlap slightly.
+```
+
 ## Problem
 
 | | |

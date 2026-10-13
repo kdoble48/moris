@@ -9,5 +9,6 @@
   "boxbeam_3d.jpg": "<workspace>/runs/studies/boxbeam_3d_frameless_lean/final_230.png",
   "kirsch_order.png": "<workspace>/runs/_validation/figures/kirsch_order_refine.png",
   "hertz_profile.png": "<workspace>/runs/studies/hertz_contact/figures/hertz_profile.png",
-  "mbb_evolution.webp": "<workspace>/runs/studies/lunch_and_learn_xiga/renders_v001/x9_evolution.webp"
+  "mbb_evolution.webp": "<workspace>/runs/studies/lunch_and_learn_xiga/renders_v001/x9_evolution.webp",
+  "hertz_syy_field.png": "<workspace>/runs/studies/hertz_contact/figures/hertz_syy_field.png"
 }
