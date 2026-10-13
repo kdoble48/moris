@@ -129,6 +129,19 @@ def _deck_tags(deck_text):
         tags.append("STK mesh")
     if "MORIS_DECK" in deck_text:
         tags.append("Deck API v2")
+    # design representation and optimization-specific machinery
+    if re.search(r'"discretization_mesh_index"\s*,\s*[0-9]', deck_text):
+        tags.append("level-set design")
+    if re.search(r"\bSIMP\b", deck_text) and "density" in deck_text:
+        tags.append("density (SIMP)")
+    if re.search(r"HEAT_METHOD|HeatMethod", deck_text):
+        tags.append("heat method")
+    if '"remeshing_field_names"' in deck_text:
+        tags.append("adaptive refinement")
+    if "VON_MISES" in deck_text:
+        tags.append("von Mises stress")
+    if re.search(r"\bEIGEN\b|eigen_vectors", deck_text):
+        tags.append("eigenvalue")
 
     dimension = _dimension(deck_text)
     if dimension:
@@ -320,11 +333,21 @@ class ExaSummaryDirective(SphinxDirective):
         # a new gallery build (manifest.json) must re-render every example page, not only edited ones
         self.env.note_dependency(str(Path(self.env.srcdir) / moris_gallery.ASSETS / "manifest.json"))
         scene = moris_gallery.scene_for(directory, self.env.docname)
-        return self.parse_text_to_nodes(scene + "\n" + summary_markdown(self.env.app, matches[0]))
+        import exa_graph  # the "Related examples" block: nearest examples by shared tags
+
+        related = exa_graph.related_markdown(self.env.app, matches[0], collect_examples(source_dir),
+                                             self.env.docname)
+        return self.parse_text_to_nodes(scene + "\n" + summary_markdown(self.env.app, matches[0])
+                                        + "\n\n" + related)
 
 
 def setup(app):
+    import exa_graph
+
     app.add_config_value("moris_source_dir", "", "env")
     app.connect("builder-inited", write_catalog)
     app.add_directive("exa-summary", ExaSummaryDirective)
-    return {"parallel_read_safe": True, "parallel_write_safe": True}
+    exa_graph.setup(app)
+    # env_version: bump when the generated page content changes shape, so an incremental build
+    # re-reads every example page (their .md sources are unchanged by an extension edit)
+    return {"env_version": 4, "parallel_read_safe": True, "parallel_write_safe": True}
