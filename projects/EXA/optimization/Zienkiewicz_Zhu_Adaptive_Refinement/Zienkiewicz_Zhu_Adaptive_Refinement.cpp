@@ -82,9 +82,9 @@ namespace moris
 
     real tMMAPenalty  = 100.0;
     real tMMAStepSize = 0.02;
-    // showcase: the design settles by ~30 iterations and holds to ~125; past ~130 (density shift > 0.5) it
-    // breaks up and empties out (zero stress satisfies the constraint, D-153), so the showcase stops at 120
-    int  tMMAMaxIter  = moris::exa::pick( 19, 120 );
+    // showcase: the design settles by ~30 iterations and holds to ~118; from ~119 (two thirds into the density-shift ramp) it
+    // breaks up and empties out (zero stress satisfies the constraint, D-153), so the showcase stops at 115
+    int  tMMAMaxIter  = moris::exa::pick( 19, 115 );
 
     real tInitialStrainEnergy = 90.00;
     real tStrainEnergyPen     = 0.1;
