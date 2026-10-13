@@ -117,6 +117,27 @@ def showcase_completed(run_dir: Path, accept_error: bool = False) -> bool:
     return accept_error or not (any(signature in text for signature in RUN_FAILURES) or diverged(text))
 
 
+KNOWN_OVERRIDES = {"file", "array", "label", "vector", "skip", "no_animation", "edges", "interface", "phases",
+                   "showcase_accept_error", "camera", "clip", "contour", "color_range", "caption", "threshold"}
+
+
+def check_overrides(overrides: dict) -> list[str]:
+    """Unknown keys in overrides.json (typos silently do nothing otherwise); ``_``-prefixed keys are notes."""
+    problems = []
+    for leaf, entry in overrides.items():
+        for key in entry:
+            if not key.startswith("_") and key not in KNOWN_OVERRIDES:
+                problems.append(f"{leaf}: unknown override '{key}' (known: {', '.join(sorted(KNOWN_OVERRIDES))})")
+    return problems
+
+
+def view_script_for(example: dict, source_root: Path = ROOT, views_dir: Path = HERE / "views") -> Path | None:
+    """The example's attached view script: ``doc/gallery/views/<Example>.py``, else
+    ``gallery_view.py`` in the example's source directory; None when there is neither."""
+    candidates = [views_dir / f"{example['leaf']}.py", source_root / example["directory"] / "gallery_view.py"]
+    return next((p for p in candidates if p.exists()), None)
+
+
 def showcase_capable(example: dict, source_root: Path = ROOT) -> bool:
     """Whether the example's decks, in the source tree the build compiles, call exa::pick()."""
     decks = [source_root / deck for deck in example["decks"]]
@@ -203,6 +224,7 @@ def build_examples(build: Path, only: list[str] | None, overrides: dict,
         examples.append({
             "interface_value": gallery_select.isocontour_threshold("\n".join(deck_texts)),
             "deck_texts": deck_texts,          # export_scenes finds the bulk phases of the shown field in them
+            "view_script": str(view_script_for(example)) if view_script_for(example) else None,
             "id": example["leaf"], "directory": example["directory"], "category": example["category"],
             "title": page_title(example), "files": [str(f) for f in files], "showcase": showcase,
             "override": overrides.get(example["leaf"], {}),
@@ -371,8 +393,12 @@ def main(argv=None) -> int:
     overrides_file = HERE / "overrides.json"
     overrides = json.loads(overrides_file.read_text()) if overrides_file.exists() else {}
     examples = build_examples(args.build.resolve(), args.only, overrides, args.showcase_runs)
+    for problem in check_overrides(overrides):
+        print(f"warning: {problem}")
     for example in examples:
         example["files"] = [to_tool_path(f, args.pvpython) for f in example["files"]]
+        if example.get("view_script"):
+            example["view_script"] = to_tool_path(example["view_script"], args.pvpython)
     examples_json = out / "examples.json"
     examples_json.write_text(json.dumps(examples, indent=1), encoding="utf-8")
     print(f"{len(examples)} examples with output under {args.build}")

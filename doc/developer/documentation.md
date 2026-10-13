@@ -107,8 +107,36 @@ The example pages say which kind of run each scene comes from.
 | `doc/gallery/export_scenes.py` | pvpython: renders the choice and writes `<id>.png`, `<id>-thumb-raw.png`, `<id>.vtksz`, `<id>.json`; for a series of three or more steps (an `.e-s.NNNN` optimization series, or a transient run) also one frame per step, up to 60, under one color range |
 | `doc/gallery/scene_export.py` | serializes a render view with trame-vtk (partitioned-dataset and categorical-color workarounds) |
 | `doc/gallery/build_gallery.py` | one pvpython process per example, thumbnails, the animated WebP from the frames, scene validation, `manifest.json`, zip, upload |
-| `doc/gallery/overrides.json` | optional per-example choices: `{"<Example>": {"file": …, "array": …, "skip": true}}` |
+| `doc/gallery/overrides.json` | optional per-example choices and the declarative part of an attached view (below) |
+| `doc/gallery/views/<Example>.py` | an attached view script: `def view(scene)` adjusting the default scene (below) |
 | `doc/_ext/moris_gallery.py` | Sphinx: scenes on the example pages, the gallery cards, `viewer.html` |
+
+#### Attaching a view to an example
+
+The default scene is chosen automatically: the VIS result field of the last iteration on the bulk
+phases only, outlined, straight down z in 2D and an isometric cutaway in 3D. To decide what an
+example's page shows, attach a view in one or both of these places:
+
+- **`doc/gallery/overrides.json`**, declarative, for the common adjustments. Keys: `file` (which
+  output, or the stem of an `.e-s` series), `array`/`label`/`vector` (what to color by), `phases`
+  (the element-block phases to show, overriding the bulk-phase detection), `interface` (`false`,
+  or the level-set value of the contour), `edges` (`true` draws cells whatever their number,
+  `false` never), `clip` (`{"normal": [0, 1, 0], "origin": [x, y, z], "invert": false, "crinkle": false}`),
+  `threshold` (`{"array": "TEMP", "lower": 0, "upper": 1}`), `contour` (`{"array": "LVLSET", "values": [0]}`),
+  `color_range` (`[lower, upper]`), `camera` (`{"azimuth": 30, "elevation": 15, "zoom": 1.2}` from
+  the default, or `position`/`focal`/`up`/`parallel` outright), `caption` (appended to the page
+  caption), `no_animation`, `skip`. Keys starting with `_` are notes. Unknown keys are reported
+  when the gallery is built.
+- **`doc/gallery/views/<Example>.py`** (or `gallery_view.py` next to the deck), a pvpython script
+  with `def view(scene)`, run after the declarative keys. `scene` holds the displayed `source` and
+  its `rep`, the `view`, the `reader`, `bounds`, `three_d`, `times` and `phases`, and offers
+  `clip()`, `threshold()` (both act on the cells, extract the surface in 3D and re-centre the
+  camera), `contour()`, `color_by()`, `color_blocks()`, `color_range()`, `edges()`, `camera()`,
+  `reset_camera()`, `replace(filter)` for any other ParaView filter, `caption()` and `note()`.
+  `paraview.simple` is available as usual. Example: `doc/gallery/views/Voxel_Grain_Structure.py`
+  cuts the cube open and colors the cut face by grain.
+
+Both apply to the still image, the interactive scene and every animation frame alike.
 
 `build_gallery.py` runs Windows ParaView 6 through WSL when it is installed, otherwise the `pvpython`
 on the `PATH` (`--pvpython` overrides). To preview without uploading, unzip the archive into

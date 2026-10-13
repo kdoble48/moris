@@ -15,6 +15,7 @@
   },
   "Zienkiewicz_Zhu_Adaptive_Refinement": {
     "edges": true,
-    "_why": "edges show the stress-driven (ZZ) refinement"
+    "camera": {"zoom": 1.12},
+    "_why": "edges show the stress-driven (ZZ) refinement; the bracket fills the frame better zoomed in a little"
   }
 }
