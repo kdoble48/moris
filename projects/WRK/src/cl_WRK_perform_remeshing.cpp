@@ -38,6 +38,24 @@
 namespace moris::wrk
 {
 
+    uint
+    minimum_refinement_level_at(
+            const Vector< uint >& aEntry,
+            uint                  aOptIter )
+    {
+        // aEntry = pattern, level_1, until_1, level_2, until_2, ...: pair k sits at ( 2k + 1, 2k + 2 ) (MB-034)
+        for ( uint iPair = 0; 2 * iPair + 2 < aEntry.size(); iPair++ )
+        {
+            if ( aEntry( 2 * iPair + 2 ) > aOptIter )
+            {
+                return aEntry( 2 * iPair + 1 );
+            }
+        }
+        return 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Remeshing_Mini_Performer::Remeshing_Mini_Performer(
             Parameter_List&               aParameterlist,
             std::shared_ptr< Library_IO > aLibrary )
@@ -241,15 +259,7 @@ namespace moris::wrk
             {
                 tMinRefinementPattern( Ik ) = mParameters.mMinimumRefinementLevel( Ik )( 0 );
 
-                for ( uint Ia = 0; Ia < std::floor( ( (real)mParameters.mMinimumRefinementLevel( Ik ).size() ) / 2.0 ); Ia++ )
-                {
-                    if ( mParameters.mMinimumRefinementLevel( Ik )( Ia + 2 ) > tOptIter )
-                    {
-                        tMinRefinement( Ik ) = mParameters.mMinimumRefinementLevel( Ik )( Ia + 1 );
-
-                        break;
-                    }
-                }
+                tMinRefinement( Ik ) = minimum_refinement_level_at( mParameters.mMinimumRefinementLevel( Ik ), tOptIter );
             }
 
             // set initial/minimum refinement
