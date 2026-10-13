@@ -37,14 +37,14 @@ namespace moris
     //------------------------------------------------------------------------------
     // Main problem parameters
 
-    real tInitialStrainEnergy = 3.26439;
-    real tInitialPerimeter    = 29.0669;
-    real tPerimeterPenalty    = 0.2;
+    real tInitialStrainEnergy = moris::exa::pick( 3.26439, 6.155 );    // showcase: frame + interior SE at iteration 0
+    real tInitialPerimeter    = moris::exa::pick( 29.0669, 36.18 );    // showcase: perimeter at iteration 0
+    real tPerimeterPenalty    = moris::exa::pick( 0.2, 0.01 );         // showcase: ~1% of the objective while topology forms
 
     real tMaxMass = 1.0;
 
     real tMMAPenalty  = 5.0;
-    real tMMAStepSize = 0.01;
+    real tMMAStepSize = moris::exa::pick( 0.01, 0.02 );
     int  tMMAMaxIter  = moris::exa::pick( 2, 150 );
 
     int tInitialRef    = 2;
@@ -58,7 +58,7 @@ namespace moris
 
     real tWallThickness = 0.05;
 
-    real tBsplineLimit = 0.06;
+    real tBsplineLimit = moris::exa::pick( 0.06, 1.0 );    // showcase: unclamped seed; +-0.06 pins most ADVs
 
     bool tIsOpt    = true;
     bool tUseGhost = true;
@@ -555,6 +555,7 @@ namespace moris
     {
 
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AMESOS_IMPL );
+        aParameterLists.set( "Solver_Type", "Amesos_Klu" );    // the Amesos default (Pardiso) is not built in every Trilinos
 
         aParameterLists( SOL::LINEAR_SOLVERS ).add_parameter_list();
 

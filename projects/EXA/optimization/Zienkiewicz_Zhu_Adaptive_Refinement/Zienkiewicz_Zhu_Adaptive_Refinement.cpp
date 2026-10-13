@@ -1618,6 +1618,7 @@ Matrix<DDRMat> compute_objectives( const Vector< real >& aADVs, const Vector< re
     {
 
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AMESOS_IMPL );
+        aParameterLists.set( "Solver_Type", "Amesos_Klu" );    // the Amesos default (Pardiso) is not built in every Trilinos
 
         /*
     // Solver type: GMRES, Flexible GMRES, Block CG , PseudoBlockCG, Stochastic CG, Recycling GMRES, Recycling CG, MINRES, LSQR, TFQMR
