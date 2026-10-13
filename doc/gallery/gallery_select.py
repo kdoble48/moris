@@ -191,7 +191,91 @@ def sample_indices(count: int, limit: int = MAX_FRAMES) -> list[int]:
     return sorted({round(i * (count - 1) / (limit - 1)) for i in range(limit)})
 
 
+def series_paths(path: str, all_paths: list[str]) -> list[str]:
+    """The files of the ``.e-s.NNNN`` series ``path`` belongs to, in iteration order ([path] if not a series).
+
+    Each file is read on its own: XTK renumbers element blocks between iterations (a phase that
+    appears later takes over another phase's block id), so a reader that opens the series as one
+    time series takes the first file's block layout and mislabels the blocks of later files."""
+    match = SERIES.match(PurePath(path.replace("\\", "/")).name)
+    if not match:
+        return [path]
+    parent = PurePath(path.replace("\\", "/")).parent
+    found = {}
+    for other in all_paths:
+        p = PurePath(other.replace("\\", "/"))
+        m = SERIES.match(p.name)
+        if m and m["stem"] == match["stem"] and p.parent == parent:
+            found[int(m["index"])] = other
+    return [found[k] for k in sorted(found)] or [path]
+
+
 PHASE = re.compile(r"_(?P<cut>[cn])_p(?P<phase>\d+)$", re.IGNORECASE)
+SET_PHASE = re.compile(r"HMR_dummy_[cn]_p(\d+)", re.IGNORECASE)
+STRING_DECL = re.compile(r"std::string\s+(\w+)\s*=\s*([^;]+);")
+STRING_LITERAL = re.compile(r'^(?:std::string\s*\(\s*)?"([^"]*)"\s*\)?$')
+PARAMETER = re.compile(r'"(IWG_name|IWG_type|dof_residual|mesh_set_names)"\s*,\s*(.+?)\s*\)\s*;', re.DOTALL)
+
+
+def _string_value(expr: str, variables: dict[str, str]) -> str:
+    """Value of a C++ string expression built from literals, ``std::string( "..." )`` and string variables
+    joined with ``+``; unknown parts (function calls, other types) evaluate to "". A conditional
+    ``c ? a : b`` gives both branches, comma-joined (e.g. the 2D and the 3D DOF list)."""
+    ternary = re.fullmatch(r'[^?"]*\?\s*(.+?)\s*:\s*([^:]+)', expr.strip())
+    if ternary:
+        return _string_value(ternary.group(1), variables) + "," + _string_value(ternary.group(2), variables)
+    parts, depth, current, quoted = [], 0, "", False
+    for ch in expr:
+        if ch == '"':
+            quoted = not quoted
+        elif not quoted and ch in "()":
+            depth += 1 if ch == "(" else -1
+        if ch == "+" and not quoted and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    value = ""
+    for part in (p.strip() for p in parts):
+        literal = STRING_LITERAL.match(part)
+        if literal:
+            value += literal.group(1)
+        elif re.fullmatch(r"\w+", part):
+            value += variables.get(part, "")
+    return value
+
+
+def bulk_phases(deck_texts: list[str], array: str | None, vector: bool) -> set[int] | None:
+    """Phases with physics for ``array``: those whose sets a bulk IWG solving for that field integrates over.
+
+    Void phases often carry auxiliary bulk IWGs (heat-method or level-set regularization fields on
+    THETA/PHID) or none at all, and the solution field is nonzero there too (ersatz material), so the
+    residual DOF is the test: |U| needs a bulk IWG with residual UX/UY(/UZ), TEMP one with residual TEMP.
+    None when the decks give no answer (e.g. Deck API v2 helpers), meaning: show every phase."""
+    if not array:
+        return None
+
+    def matches(dof: str) -> bool:
+        return dof == array or (vector and len(dof) == len(array) + 1 and dof.startswith(array) and dof[-1] in "XYZ")
+
+    phases: set[int] = set()
+    for text in deck_texts:
+        variables: dict[str, str] = {}
+        for name, expr in STRING_DECL.findall(text):
+            variables[name] = _string_value(expr, variables)
+        # one IWG per "IWG_name": its type, residual and sets follow before the next one
+        for chunk in re.split(r'(?="IWG_name")', text)[1:]:
+            chunk = re.split(r'"IQI_name"|add_parameter_list', chunk)[0]
+            values = {key: expr for key, expr in PARAMETER.findall(chunk)}
+            if "BULK" not in values.get("IWG_type", "") or "mesh_set_names" not in values:
+                continue
+            residual = _string_value(values.get("dof_residual", ""), variables)
+            if not any(matches(d.strip()) for d in re.split(r"[,;]", residual)):
+                continue
+            sets = _string_value(values["mesh_set_names"], variables)
+            phases.update(int(p) for p in SET_PHASE.findall(sets))
+    return phases or None
 
 
 def block_phase(name: str) -> tuple[int | None, str]:
