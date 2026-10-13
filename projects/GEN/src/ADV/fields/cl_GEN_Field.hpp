@@ -171,6 +171,25 @@ namespace moris::gen
                 const Node_Manager& aNodeManager ) = 0;
 
         /**
+         * Whether derived-node values of this field are evaluated exactly at the node coordinates (an analytic field)
+         * rather than interpolated from background-node values. Only such a field can change sign inside a background
+         * cell while every corner value keeps one sign (MB-031). Default: false (interpolated).
+         *
+         * @return If derived-node values are exact point evaluations
+         */
+        virtual bool has_exact_derived_node_values() const;
+
+        /**
+         * Evaluates the field at an arbitrary point that is not (yet) a node. Only valid for fields that have exact
+         * derived-node values (see has_exact_derived_node_values()); the value is the one a derived node at this point
+         * would get.
+         *
+         * @param aCoordinates Point coordinates
+         * @return Field value
+         */
+        virtual real get_field_value_at_point( const Matrix< DDRMat >& aCoordinates );
+
+        /**
          * Gets an interpolated field value based on given basis nodes.
          *
          * @param aBasisNodes Basis nodes of a derived node

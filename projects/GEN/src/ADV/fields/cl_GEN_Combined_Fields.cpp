@@ -57,6 +57,32 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Combined_Fields::has_exact_derived_node_values() const
+    {
+        for ( const auto& iField : mFields )
+        {
+            if ( not iField->has_exact_derived_node_values() )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Combined_Fields::get_field_value_at_point( const Matrix< DDRMat >& aCoordinates )
+    {
+        real tResult = mScale * mFields( 0 )->get_field_value_at_point( aCoordinates );
+        for ( const auto& iField : mFields )
+        {
+            tResult = std::min( tResult, mScale * iField->get_field_value_at_point( aCoordinates ) );
+        }
+        return mScale * tResult;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     const Matrix< DDRMat >& Combined_Fields::get_dfield_dadvs(
             uint                    aNodeIndex,
             const Matrix< DDRMat >& aCoordinates )
