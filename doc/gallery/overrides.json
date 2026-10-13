@@ -1,0 +1,7 @@
+{
+  "LevelSet_Boxbeam_Adaptive_Refinement": {
+    "file": "Levelset_Boxbeam_Adaptive_Refinement.exo",
+    "showcase_accept_error": true,
+    "_why": "the example's tag runs the linear and the quadratic deck; the linear deck's showcase run completes (100 iterations), the quadratic one stops at a singular KLU factorization (D-149)"
+  }
+}

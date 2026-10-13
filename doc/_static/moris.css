@@ -1,0 +1,111 @@
+/* Site tweaks on top of the Furo theme. */
+
+/* Breathe signatures: keep long template signatures readable. */
+dl.cpp > dt.sig {
+    font-size: 0.85em;
+    overflow-x: auto;
+}
+
+/* Folded "Subclassed by" lists on API pages (see conf.py). */
+details.moris-subclasses {
+    margin: 0.5em 0 1em;
+}
+details.moris-subclasses > summary {
+    cursor: pointer;
+    color: var(--color-foreground-secondary);
+}
+
+/* Results gallery: responsive card grid of figures. */
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+    gap: 1.5rem;
+    margin: 1rem 0 2rem;
+}
+.gallery-grid.gallery-wide {
+    grid-template-columns: 1fr;
+}
+.gallery-grid figure {
+    margin: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--color-background-border);
+    border-radius: 6px;
+    background: var(--color-background-secondary);
+}
+.gallery-grid figure img {
+    width: 100%;
+    height: auto;
+    border-radius: 3px;
+    background: #f6f5f0;
+}
+.gallery-grid figcaption {
+    text-align: left;
+    font-size: 0.85em;
+    line-height: 1.45;
+    margin-top: 0.6rem;
+}
+.gallery-grid figcaption p {
+    margin: 0;
+}
+
+/* Example catalog: feature tags as compact pills; deck names may wrap. */
+.exa-tag {
+    display: inline-block;
+    white-space: nowrap;
+    font-size: 0.72em;
+    line-height: 1.5;
+    padding: 0 0.45em;
+    margin: 0.1em 0.1em 0.1em 0;
+    border-radius: 0.8em;
+    background: var(--color-background-hover);
+    border: 1px solid var(--color-background-border);
+}
+article table.docutils td {
+    overflow-wrap: anywhere;
+    font-size: 0.9em;
+}
+/* first column (labels, example titles): wrap only between words */
+article table.docutils td:first-child {
+    overflow-wrap: normal;
+    min-width: 7em;
+}
+
+/* Example scenes (moris_gallery.py): vtk.js viewer iframe, static image, HTML legends. */
+iframe.moris-scene {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border: 1px solid var(--color-background-border);
+    border-radius: 6px;
+    background: #ffffff;
+}
+img.moris-static {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--color-background-border);
+    border-radius: 6px;
+    background: #ffffff;
+}
+.moris-side {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+    align-items: flex-start;
+    margin: 0.5rem 0 1rem;
+}
+.moris-legend { min-width: 14rem; font-size: 0.85em; }
+.moris-legend-title { font-weight: 600; margin-bottom: 0.25rem; }
+.moris-bar { height: 0.8rem; border-radius: 3px; border: 1px solid var(--color-background-border); }
+.moris-bar-range { display: flex; justify-content: space-between; font-family: var(--font-stack--monospace); }
+.moris-cats { list-style: none; padding: 0; margin: 0; columns: 2; }
+.moris-cats li { margin: 0.1rem 0; break-inside: avoid; }
+.moris-swatch {
+    display: inline-block; width: 0.9em; height: 0.9em; margin-right: 0.4em;
+    vertical-align: -0.1em; border-radius: 2px; border: 1px solid rgba(0, 0, 0, 0.2);
+}
+pre.moris-summary { margin: 0; font-size: 0.8em; }
+
+/* Wide reference tables scroll instead of overflowing on narrow screens. */
+article table.docutils {
+    display: block;
+    overflow-x: auto;
+}

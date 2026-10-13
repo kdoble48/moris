@@ -36,20 +36,21 @@
 #include "cl_Input_Deck.hpp"
 #include "cl_Input_Deck_Vocabulary.hpp"
 #include "fn_FEM_Presets.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 namespace
 {
     using namespace moris;
 
     // ---- main problem parameters (identical to the legacy twin) -----------------
-    const real tInitialStrainEnergy = 3.26439;
-    const real tInitialPerimeter    = 29.0669;
-    const real tPerimeterPenalty    = 0.2;
+    const real tInitialStrainEnergy = exa::pick( 3.26439, 6.155 );    // showcase: frame + interior SE at iteration 0
+    const real tInitialPerimeter    = exa::pick( 29.0669, 36.18 );    // showcase: perimeter at iteration 0
+    const real tPerimeterPenalty    = exa::pick( 0.2, 0.01 );         // showcase: ~1% of the objective while topology forms
 
     const real tMaxMass = 1.0;
 
     const real tMMAPenalty  = 5.0;
-    const real tMMAStepSize = 0.01;
+    const real tMMAStepSize = exa::pick( 0.01, 0.02 );
 
     const int tInitialRef = 2;
 
@@ -62,7 +63,7 @@ namespace
 
     const real tWallThickness = 0.05;
 
-    const real tBsplineLimit = 0.06;
+    const real tBsplineLimit = exa::pick( 0.06, 1.0 );    // showcase: unclamped seed (superellipse field units); +-0.06 pins 91% of the ADVs
 
     const bool tUseGhost = true;
 
@@ -71,7 +72,7 @@ namespace
     max_iterations()
     {
         const char* tEnvMaxIts = std::getenv( "BOXBEAM_MAX_ITS" );
-        return tEnvMaxIts != nullptr ? std::atoi( tEnvMaxIts ) : 2;
+        return tEnvMaxIts != nullptr ? std::atoi( tEnvMaxIts ) : exa::pick( 2, 150 );
     }
 
     // GCMMA step size: legacy default, overridable for smoke tuning

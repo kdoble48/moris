@@ -11,6 +11,8 @@
 #pragma once
 
 #include "cl_WRK_Workflow.hpp"
+#include "cl_WRK_Reinitialize_Performer.hpp"
+#include <memory>
 #include "cl_OPT_Criteria_Interface.hpp"
 #include "moris_typedefs.hpp"    //MRS/COR/src
 #include "cl_Vector.hpp"
@@ -74,6 +76,9 @@ namespace moris
             /// the design-variable change between reinits for the wean-off decision
             Vector< real > mPrevReinitADVs;
 
+            /// in-place taper over accepted iterates (created from the reinit performer's parameters on first use)
+            std::unique_ptr< SDF_Wean_Monitor > mWeanMonitor;
+
           public:
             //------------------------------------------------------------------------------
             /**
@@ -104,6 +109,21 @@ namespace moris
              * @return vector of criteria
              */
             Vector< real > perform( Vector< real >& aNewADVs ) override;
+
+            //------------------------------------------------------------------------------
+            /**
+             * SDF taper (in-place every-step mode): feeds the relative step ||aAccepted - aPrevious|| / ||aPrevious|| of
+             * an accepted optimizer iterate to the wean monitor; weans the redistance off for the rest of the run once it
+             * fires. Rank 0 (the optimizer's rank); perform() broadcasts the result. An empty aAccepted marks an iterate
+             * accepted at the inner-loop cap (not a convergence sample: resets the run of small changes).
+             */
+            void notify_accepted_iterate( const Vector< real >& aPrevious, const Vector< real >& aAccepted ) override;
+
+            /** false once the in-place redistance has been tapered off */
+            bool is_reinit_active() const override
+            {
+                return !mSDFWeanedOff;
+            }
 
             //------------------------------------------------------------------------------
             /**
