@@ -25,6 +25,7 @@
 #include "fn_stringify_matrix.hpp"
 
 #include "AztecOO.h"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -92,7 +93,7 @@ namespace moris
 
     real tMMAPenalty  = 5.0;
     real tMMAStepSize = 0.05;
-    int  tMMAMaxIter  = 12;
+    int  tMMAMaxIter  = moris::exa::pick( 12, 80 );
 
     real tBsplineLimit = tHoleRadius;
 

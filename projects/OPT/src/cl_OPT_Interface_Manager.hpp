@@ -77,6 +77,19 @@ namespace moris::opt
         Matrix< DDRMat > compute_dcriteria_dadv() override;
 
         /**
+         * Forwards the in-place redistance suppression to every sub-interface
+         */
+        void
+        set_reinit_suppressed( bool aSuppressed ) override
+        {
+            Criteria_Interface::set_reinit_suppressed( aSuppressed );
+            for ( uint iInterface = 0; iInterface < mInterfaces.size(); iInterface++ )
+            {
+                mInterfaces( iInterface )->set_reinit_suppressed( aSuppressed );
+            }
+        }
+
+        /**
          * Gets the local advs based on whether or not they are shared
          */
         Vector< real > get_local_advs(
