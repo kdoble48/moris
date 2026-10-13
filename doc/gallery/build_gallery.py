@@ -199,9 +199,10 @@ def build_examples(build: Path, only: list[str] | None, overrides: dict,
         if not files:
             continue
         tests = ctest_names(example)
-        deck_text = "\n".join((ROOT / deck).read_text(errors="replace") for deck in example["decks"])
+        deck_texts = [(ROOT / deck).read_text(errors="replace") for deck in example["decks"]]
         examples.append({
-            "interface_value": gallery_select.isocontour_threshold(deck_text),
+            "interface_value": gallery_select.isocontour_threshold("\n".join(deck_texts)),
+            "deck_texts": deck_texts,          # export_scenes finds the bulk phases of the shown field in them
             "id": example["leaf"], "directory": example["directory"], "category": example["category"],
             "title": page_title(example), "files": [str(f) for f in files], "showcase": showcase,
             "override": overrides.get(example["leaf"], {}),

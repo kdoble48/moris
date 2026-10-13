@@ -16,6 +16,7 @@ import math
 import os
 import sys
 import time
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -54,9 +55,13 @@ def new_view():
 
 
 def open_reader(path):
-    """IOSS reader (ParaView 6 default); the legacy Exodus reader when IOSS cannot read the file."""
+    """IOSS reader (ParaView 6 default) on this one file; the legacy Exodus reader when IOSS cannot read it.
+
+    Related files are not scanned: an ``.e-s.NNNN`` series is read file by file (see
+    ``gallery_select.series_paths``), since XTK renumbers element blocks between iterations."""
     try:
         reader = pv.IOSSReader(FileName=[path])
+        reader.ScanForRelatedFiles = 0
         reader.UpdatePipelineInformation()
         if reader.GetDataInformation() is not None:
             return reader
@@ -76,6 +81,94 @@ def file_info(path):
                        len(times))
     pv.Delete(reader)
     return info
+
+
+# Keeps the boundary edges of one phase's cells that have the phase on one side only: on an adaptively
+# refined mesh, the plain boundary edges also include the seams at hanging nodes (fine cells meeting
+# one coarse cell), which lie inside the phase. 2D only.
+OUTLINE_SCRIPT = r"""
+import vtk
+inp = self.GetInput()
+out = self.GetOutput()
+surf = vtk.vtkDataSetSurfaceFilter()
+surf.SetInputData(inp)
+edges_filter = vtk.vtkFeatureEdges()
+edges_filter.SetInputConnection(surf.GetOutputPort())
+edges_filter.BoundaryEdgesOn()
+edges_filter.FeatureEdgesOff()
+edges_filter.NonManifoldEdgesOff()
+edges_filter.ManifoldEdgesOff()
+edges_filter.ColoringOff()
+edges_filter.Update()
+edges = edges_filter.GetOutput()
+out.SetPoints(edges.GetPoints())
+lines = vtk.vtkCellArray()
+if inp.GetNumberOfCells() > 0:
+    locator = vtk.vtkCellLocator()
+    locator.SetDataSet(inp)
+    locator.BuildLocator()
+    pts = edges.GetPoints()
+    for i in range(edges.GetNumberOfCells()):
+        ids = edges.GetCell(i).GetPointIds()
+        a, b = pts.GetPoint(ids.GetId(0)), pts.GetPoint(ids.GetId(1))
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length = (dx * dx + dy * dy) ** 0.5
+        if length == 0.0:
+            continue
+        nx, ny = -dy / length * 0.05 * length, dx / length * 0.05 * length
+        mx, my, mz = 0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])
+        if (locator.FindCell([mx + nx, my + ny, mz]) >= 0) != (locator.FindCell([mx - nx, my - ny, mz]) >= 0):
+            lines.InsertNextCell(2)
+            lines.InsertCellPoint(ids.GetId(0))
+            lines.InsertCellPoint(ids.GetId(1))
+out.SetLines(lines)
+"""
+
+
+def available_blocks(reader):
+    try:
+        return list(reader.ElementBlocks.Available)
+    except AttributeError:
+        return list(getattr(reader, "ElementBlocks", []) or [])
+
+
+def select_phases(reader, phases):
+    """Read only the element blocks of ``phases`` (None: all). True when the selection took effect."""
+    if not phases:
+        return False
+    keep = [n for n in available_blocks(reader) if gs.block_phase(n)[0] in phases]
+    if not keep:
+        return False
+    reader.ElementBlocks = keep
+    return True
+
+
+def set_file(readers, path, view):
+    """Point every reader at ``path`` (one file of a series), redo its block selection, follow its time."""
+    for reader, phases in readers:
+        reader.FileName = [path]
+        reader.UpdatePipelineInformation()
+        select_phases(reader, phases)
+    times = list(getattr(readers[0][0], "TimestepValues", []) or [])
+    view.ViewTime = times[-1] if times else 0.0
+    return view.ViewTime
+
+
+def add_outline(view, path, phase, bounds):
+    """Black outline of one bulk phase: its interfaces with void and with other phases, and its outer edge."""
+    reader = open_reader(path)
+    select_phases(reader, {phase})
+    merged = pv.MergeBlocks(Input=reader)
+    merged.MergePoints = 1
+    outline = pv.ProgrammableFilter(Input=merged, OutputDataSetType="vtkPolyData", Script=OUTLINE_SCRIPT)
+    lifted = pv.Transform(Input=outline)
+    lifted.Transform.Translate = [0.0, 0.0, 1e-3 * max(bounds[1] - bounds[0], bounds[3] - bounds[2])]
+    rep = pv.Show(lifted, view)
+    rep.ColorArrayName = ["POINTS", ""]
+    rep.DiffuseColor = [0.0, 0.0, 0.0]
+    rep.AmbientColor = [0.0, 0.0, 0.0]
+    rep.LineWidth = 3.0
+    return reader
 
 
 def is_3d(bounds):
@@ -136,7 +229,16 @@ def color_field(rep, source, choice, view):
 
 def render(example, choice, out):
     """Build the view for ``choice``; return (view, caption text, step info)."""
+    override = example.get("override", {})
     reader = open_reader(choice.path)
+    # bulk phases only: void phases (often present in the VIS output, with an ersatz solution) are dropped
+    phases = None
+    if choice.kind in ("result", "gen"):
+        phases = set(override["phases"]) if override.get("phases") else \
+            gs.bulk_phases(example.get("deck_texts", []), choice.array, choice.vector)
+        if not select_phases(reader, phases):
+            phases = None
+    readers = [(reader, phases)]
     times = list(getattr(reader, "TimestepValues", []) or [])
     view = new_view()
     if times:
@@ -182,22 +284,34 @@ def render(example, choice, out):
     elif choice.kind in ("result", "gen"):
         color_field(rep, source, choice, view)
     interface = None
-    override = example.get("override", {})
-    level_set = gs.interface_array(list(reader.PointData.keys()))
-    if level_set and choice.kind in ("result", "gen") and not three_d and override.get("interface", True) is not False:
-        value = override["interface"] if isinstance(override.get("interface"), (int, float)) \
-            and not isinstance(override.get("interface"), bool) else example.get("interface_value", 0.0)
-        interface = (level_set, value)
-        add_interface(view, reader, level_set, value, bounds)
+    if phases and not three_d and override.get("interface", True) is not False:
+        # the bulk phases' own boundaries: material/void interfaces, interfaces between phases, outer edges
+        for phase in sorted(phases):
+            readers.append((add_outline(view, choice.path, phase, bounds), {phase}))
+        interface = "outline"
+    else:
+        level_set = gs.interface_array(list(reader.PointData.keys()))
+        if level_set and choice.kind in ("result", "gen") and not three_d and override.get("interface", True) is not False:
+            value = override["interface"] if isinstance(override.get("interface"), (int, float)) \
+                and not isinstance(override.get("interface"), bool) else example.get("interface_value", 0.0)
+            interface = (level_set, value)
+            add_interface(view, reader, level_set, value, bounds)    # built on ``reader``: follows its file
     set_camera(view, three_d, face_cut=cutaway is not None)
     step = None
-    if len(times) > 1:
-        labels, _ = gs.step_labels(choice.path, [], len(times))  # summary: the last step
-        step = labels[-1] if not gs.SERIES.match(os.path.basename(choice.path.replace("\\", "/"))) \
-            else f"last of {len(times)} steps in the .e-s series"
+    series = gs.series_paths(choice.path, example.get("files", []))
+    if len(series) > 1:
+        step = f"iteration {series_number(choice.path)}, the last of {len(series)} files in the .e-s series"
+    elif len(times) > 1:
+        step = gs.step_labels(choice.path, [], len(times))[0][-1]
     if cutaway is not None:
         step = (step + ", " if step else "") + f"cut away at y = {cutaway:.4g}"
-    return view, three_d, cells, step, by_block, source, times, interface
+    shown = sorted(phases) if phases else None
+    return view, three_d, cells, step, by_block, source, times, interface, readers, shown
+
+
+def series_number(path):
+    match = gs.SERIES.match(os.path.basename(path.replace("\\", "/")))
+    return int(match["index"]) if match else None
 
 
 def add_interface(view, reader, array, value, bounds):
@@ -219,20 +333,38 @@ MIN_FRAMES = 3                   # animate only series with at least this many s
 sample_indices = gs.sample_indices
 
 
-def export_frames(view, source, choice, times, base, out, all_paths):
+def export_frames(view, source, choice, times, base, out, all_paths, readers):
     """One overlay-free PNG per sampled step, fixed camera, one color range spanning all frames.
 
-    Returns ``{"frames", "labels", "unit", "steps", "legend"}`` or None for a series too short to
-    animate; build_gallery.py stamps the labels and assembles the animation."""
-    if len(times) < MIN_FRAMES:
+    An ``.e-s.NNNN`` series steps through its files (one optimization iteration each), pointing every
+    reader at the next file; a single file steps through its time steps. Returns ``{"frames",
+    "labels", "unit", "steps", "legend"}`` or None when there are too few steps to animate;
+    build_gallery.py stamps the labels and assembles the animation."""
+    series = gs.series_paths(choice.path, all_paths)
+    if len(series) >= MIN_FRAMES:
+        indices = sample_indices(len(series))
+        last = series_number(series[-1])
+        step_labels = [f"iteration {series_number(p)} of {last}" for p in series]
+        iterations, steps = len(series), len(series)
+
+        def go(i):
+            source.UpdatePipeline(set_file(readers, series[i], view))
+    elif len(times) >= MIN_FRAMES:
+        indices = sample_indices(len(times))
+        step_labels, iterations = gs.step_labels(choice.path, all_paths, len(times))
+        steps = len(times)
+
+        def go(i):
+            view.ViewTime = times[i]
+            source.UpdatePipeline(times[i])
+    else:
         return None
-    indices = sample_indices(len(times))
     name = (choice.label if choice.vector else choice.array) if choice.kind in ("result", "gen") else None
     legend = None
     if name:
         lo, hi = math.inf, -math.inf
         for i in indices:
-            source.UpdatePipeline(times[i])
+            go(i)
             r = source.PointData[name].GetRange(-1)
             lo, hi = min(lo, r[0]), max(hi, r[1])
         lut = pv.GetColorTransferFunction(name)
@@ -243,18 +375,17 @@ def export_frames(view, source, choice, times, base, out, all_paths):
         lut.AutomaticRescaleRangeMode = "Never"
         legend = se._legend(name, lut)
     se.hide_overlays(view)
-    step_labels, iterations = gs.step_labels(choice.path, all_paths, len(times))
     frames_dir = os.path.join(out, "frames")
     os.makedirs(frames_dir, exist_ok=True)
     files, labels = [], []
     for k, i in enumerate(indices, start=1):
-        view.ViewTime = times[i]
+        go(i)
         name_k = f"{base}-frame-{k:03d}.png"
         pv.SaveScreenshot(os.path.join(frames_dir, name_k), view, ImageResolution=SIZE)
         files.append(name_k)
         labels.append(step_labels[i])
     return {"frames": files, "labels": labels, "unit": "iteration" if iterations else "time step",
-            "steps": len(times), "iterations": iterations, "legend": legend}
+            "steps": steps, "iterations": iterations, "legend": legend}
 
 
 def export_example(example, out):
@@ -265,13 +396,18 @@ def export_example(example, out):
     choice = gs.choose(infos, override)
     if choice is None:
         return None, "no file with geometry"
-    view, three_d, cells, step, by_block, source, times, interface = render(example, choice, out)
+    view, three_d, cells, step, by_block, source, times, interface, readers, shown = render(example, choice, out)
     base = example["id"]
     file_name = os.path.basename(choice.path.replace("\\", "/"))
     caption = KIND_CAPTION[choice.kind].format(label=choice.label)
     if choice.kind == "mesh" and by_block:
         caption = "Mesh, colored by element block"
-    if interface:
+    if shown:
+        caption += f", on the bulk phase{'s' if len(shown) > 1 else ''} {', '.join(map(str, shown))} only " \
+                   "(void phases hidden)"
+    if interface == "outline":
+        caption += "; black lines: the boundaries of the bulk phases (interfaces and outer edges)"
+    elif interface:
         caption += f"; black line: the level-set interface, {interface[0]} = {interface[1]:g}"
     summary = [f"{file_name}" + (f", {step}" if step else ""), f"{cells} cells, {'3D' if three_d else '2D'}"]
     over = se.overlays(view)
@@ -292,7 +428,7 @@ def export_example(example, out):
     pv.SaveScreenshot(os.path.join(out, meta["thumb_raw"]), view, ImageResolution=SIZE)
     # the animation runs after the scene and images are written: its fixed color range changes the LUT
     if not override.get("no_animation"):
-        animation = export_frames(view, source, choice, times, base, out, example["files"])
+        animation = export_frames(view, source, choice, times, base, out, example["files"], readers)
         if animation:
             meta["animation"] = dict(animation, file=f"{base}-anim.webp")
     pv.Delete(view)
@@ -313,7 +449,11 @@ def main(argv=None):
         try:
             meta, reason = export_example(example, out)
         except Exception as exc:  # one broken output must not stop the gallery
-            meta, reason = None, f"error: {exc}"
+            traceback.print_exc(file=sys.stdout)    # into export.log
+            frames = traceback.extract_tb(exc.__traceback__)
+            where = next((f for f in reversed(frames) if f.filename.endswith(("export_scenes.py", "gallery_select.py"))),
+                         frames[-1])
+            meta, reason = None, f"error: {exc} ({os.path.basename(where.filename)}:{where.lineno})"
         if meta is None:
             print(f"skip {example['id']}: {reason}", flush=True)
             continue
@@ -329,4 +469,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # run from the imported module, not from __main__: ParaView executes ProgrammableFilter scripts in
+    # __main__'s namespace and star-imports vtk's numpy algorithms there, which replaces max/min/round
+    import export_scenes
+    sys.exit(export_scenes.main())
