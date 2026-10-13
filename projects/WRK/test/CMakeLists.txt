@@ -12,7 +12,8 @@
 set(TEST_SOURCES 
     test_main.cpp
     UT_WRK_Workflow.cpp
-    UT_WRK_Remeshing_Mini_Performer.cpp )
+    UT_WRK_Remeshing_Mini_Performer.cpp
+    UT_WRK_Reinitialize_Preserve.cpp )
 
 # List test dependencies
 set(TEST_DEPENDENCIES

@@ -25,6 +25,7 @@
 #include "fn_stringify_matrix.hpp"
 
 #include "AztecOO.h"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,7 +82,7 @@ namespace moris
 
     real tMMAPenalty  = 5.0;
     real tMMAStepSize = 0.05;
-    int  tMMAMaxIter  = 14;
+    int  tMMAMaxIter  = moris::exa::pick( 14, 100 );
 
     real tBsplineLimit = tHoleRadius;
 
@@ -698,6 +699,7 @@ namespace moris
     {
 
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AMESOS_IMPL );
+        aParameterLists.set( "Solver_Type", "Amesos_Klu" );    // the Amesos default (Pardiso) is not built in every Trilinos
 
         aParameterLists( SOL::LINEAR_SOLVERS ).add_parameter_list();
 

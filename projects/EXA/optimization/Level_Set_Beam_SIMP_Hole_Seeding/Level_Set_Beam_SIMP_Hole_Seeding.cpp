@@ -30,6 +30,7 @@
 #include "BelosLinearProblem.hpp"
 #include "BelosEpetraAdapter.hpp"
 #include "BelosBlockGmresSolMgr.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,13 +81,13 @@ namespace moris
 
     real tMMAPenalty  = 5.0;
     real tMMAStepSize = 0.021;
-    int  tMMAMaxIter  = 20;
+    int  tMMAMaxIter  = moris::exa::pick( 20, 300 );    // showcase: ramp (20..120) + ~180 level-set iterations
 
-    real tInitialStrainEnergy = 1437.01;
+    real tInitialStrainEnergy = moris::exa::pick( 1437.01, 7043.0 );    // showcase: measured SE at iteration 1
     real tMaxMass             = 400;
 
-    real tPerimeterPenalty = 0.02;
-    real tInitialPerimeter = 60.0;
+    real tPerimeterPenalty = moris::exa::pick( 0.02, 0.005 );    // showcase: ~1% of the objective
+    real tInitialPerimeter = moris::exa::pick( 60.0, 320.0 );    // showcase: measured perimeter once holes form
 
     real tRegularizationPenalty = 0.02;    // 0.02
     real tInitialRegularization = 60;

@@ -81,11 +81,15 @@ namespace moris::gen
             }
         }
 
+        // Add parent coordinate sensitivities. The parent's chain factor is the incoming factor times this
+        // node's local parent Jacobian (A * J); recursing with J alone drops the factors of all
+        // descendants and is wrong for any nested intersection below the top level (MB-022)
+
         // Add first parent coordinate sensitivities
         if ( tFirstParentNode.depends_on_advs() )
         {
             Matrix< DDRMat > tLocCoord = ( 1.0 - this->get_local_coordinate() ) * eye( tParentVector.n_rows(), tParentVector.n_rows() );
-            Matrix< DDRMat > tSensitivityFactor = 0.5 * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_first_parent() );
+            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_first_parent() );
             tFirstParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
         }
 
@@ -93,7 +97,7 @@ namespace moris::gen
         if ( tSecondParentNode.depends_on_advs() )
         {
             Matrix< DDRMat > tLocCoord = ( 1.0 + this->get_local_coordinate() ) * eye( tParentVector.n_rows(), tParentVector.n_rows() );
-            Matrix< DDRMat > tSensitivityFactor = 0.5 * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_second_parent() );
+            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_second_parent() );
             tSecondParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
         }
     }

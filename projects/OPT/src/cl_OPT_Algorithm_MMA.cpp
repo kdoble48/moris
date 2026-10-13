@@ -14,6 +14,8 @@
 
 #include <cmath>
 #include <vector>
+#include <string>
+#include <cstdio>
 
 #include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_Communication_Tools.hpp"
@@ -37,9 +39,14 @@ namespace moris::opt
         mMaxIterationsInitial = aParameterList.get< sint >( "max_its" );
         mMaxIterations        = mMaxIterationsInitial;
         mReinitHook           = aParameterList.get< bool >( "reinit_in_place" );
+        mReinitOnAcceptOnly   = aParameterList.get< bool >( "reinit_on_accept_only" );
+        mDebugInnerTrials     = aParameterList.get< bool >( "debug_inner_trials" );
 
-        MORIS_LOG_INFO( "Native MMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f%s",
-                (int)mMaxIterations, mStepSize, mPenalty, mReinitHook ? ", in-place reinit hook ON" : "" );
+        MORIS_LOG_INFO( "Native MMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f%s%s%s",
+                (int)mMaxIterations, mStepSize, mPenalty, mReinitHook ? ", in-place reinit hook ON" : "",
+                mReinitHook && mReinitOnAcceptOnly ? ", redistance on accepted iterates only" : "",
+                mDebugInnerTrials ? ", inner-trial diagnostics ON" : "" );
+        MORIS_ERROR( !mReinitOnAcceptOnly || mReinitHook, "Native MMA: reinit_on_accept_only needs reinit_in_place = true." );
     }
 
     //------------------------------------------------------------------------------
@@ -114,6 +121,12 @@ namespace moris::opt
         Vector< real > tADVs( mNumVar );
         for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = aX[ i ];
 
+        // Write the restart file for this design, as the TPL GCMMA wrapper does before every
+        // criteria evaluation (MB-016: the native port wrote none, so no warm restart was possible).
+        // Capture the index first: compute_design_criteria() advances the optimization iteration (MB-021)
+        const uint tOptIter = gLogger.get_opt_iteration();
+        this->write_advs_to_file( tADVs, tOptIter );
+
         this->compute_design_criteria( tADVs );
 
         aF0 = mObjScale * this->get_objectives()( 0 );
@@ -131,6 +144,12 @@ namespace moris::opt
         {
             mLastRedistanced.assign( mNumVar, 0.0 );
             for ( int i = 0; i < mNumVar; ++i ) mLastRedistanced[ i ] = tADVs( i );
+
+            // rewrite this iteration's restart file with the redistanced design the criteria were evaluated at, so
+            // checkpoints (and restarts) hold phi = R(psi) rather than the raw trial point psi (written above).
+            // Name it from the index captured before the evaluation: the logger has already advanced to the next
+            // iteration, whose file the next trial point would overwrite (MB-021)
+            this->write_advs_to_file( tADVs, tOptIter );
         }
     }
 
@@ -165,6 +184,12 @@ namespace moris::opt
             MORIS_LOG_INFO( "Native MMA: objective scale -> %.1e (raw max|df0dx| = %.4e).",
                     tNewScale, tRawMax );
             f0val    *= tNewScale / mObjScale;
+            // in-place redistance mode: keep the conservatism weight consistent with the objective's scale,
+            // so a scale change does not jump the approximation's curvature (raa0 is in objective units)
+            if ( mReinitHook )
+            {
+                raa0 *= tNewScale / mObjScale;
+            }
             mObjScale = tNewScale;
         }
 
@@ -176,11 +201,200 @@ namespace moris::opt
     //------------------------------------------------------------------------------
 
     bool
+    Algorithm_MMA::accept_only_redistance() const
+    {
+        // without an inner loop there is no conservatism test, so evaluating the trial at R(psi) is already consistent
+        // and the cheapest ordering is the old one (one evaluation per iteration)
+        return mReinitHook && mReinitOnAcceptOnly && mMaxInnerIter > 0;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Algorithm_MMA::trial_func( int aIter, int aInner, int& aNumFunc )
+    {
+        const bool tRawTrial = this->accept_only_redistance();
+
+        real                  tAltF0 = 0.0;
+        std::vector< double > tAltF( mNumCon, 0.0 );
+        real                  tDeltaR  = 0.0;
+        bool                  tHaveAlt = false;
+
+        // diagnostic evaluation of the OTHER design first (raw psi if the trial is redistanced, R(psi) if it is raw), so
+        // that the Problem afterwards holds the state of the real trial evaluation. No restart file is written for it and
+        // mLastRedistanced is not touched. It advances the evaluation counter (decks that ramp by evaluation must pin it).
+        if ( mDebugInnerTrials && mReinitHook )
+        {
+            mProblem->set_reinit_suppressed( !tRawTrial );
+
+            Vector< real > tADVs( mNumVar );
+            for ( int i = 0; i < mNumVar; ++i ) tADVs( i ) = xmma[ i ];
+
+            this->compute_design_criteria( tADVs );
+            aNumFunc++;
+
+            if ( !mProblem->restart_optimization() )
+            {
+                tAltF0 = mObjScale * this->get_objectives()( 0 );
+                const Matrix< DDRMat >& tCon = this->get_constraints();
+                for ( int j = 0; j < mNumCon; ++j ) tAltF[ j ] = tCon( j );
+                for ( int i = 0; i < mNumVar; ++i ) tDeltaR = mx( tDeltaR, std::abs( tADVs( i ) - xmma[ i ] ) );
+                tHaveAlt = true;
+            }
+        }
+
+        // the real trial evaluation: raw psi in accept-only mode, otherwise the workflow redistances it as before
+        if ( mReinitHook )
+        {
+            mProblem->set_reinit_suppressed( tRawTrial );
+        }
+        this->func( xmma.data(), f0valnew, fvalnew );
+        aNumFunc++;
+
+        if ( mReinitHook && !tRawTrial )
+        {
+            for ( int i = 0; i < mNumVar && (int)mLastRedistanced.size() == mNumVar; ++i )
+            {
+                tDeltaR = mx( tDeltaR, std::abs( mLastRedistanced[ i ] - xmma[ i ] ) );
+            }
+        }
+
+        if ( mDebugInnerTrials && !mProblem->restart_optimization() )
+        {
+            this->log_trial( aIter, aInner, tAltF0, tAltF, tDeltaR, tHaveAlt );
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Algorithm_MMA::log_trial( int aIter, int aInner, real aAltF0, const std::vector< double >& aAltF, real aDeltaR, bool aHaveAlt ) const
+    {
+        // what the conservatism test compares: the approximation (f0app, fapp) at the subproblem solution psi = xmma
+        // against the evaluated criteria (f0valnew, fvalnew); "at" names the design the evaluation used
+        const bool  tRawTrial = this->accept_only_redistance() || !mReinitHook;
+        std::string tLine     = "MMA-TRIAL iter=" + std::to_string( aIter ) + " inner=" + std::to_string( aInner )
+                          + " at=" + ( tRawTrial ? "psi" : "R(psi)" ) + " alt=" + ( aHaveAlt ? ( tRawTrial ? "R(psi)" : "psi" ) : "none" );
+
+        char tBuf[ 512 ];
+        std::snprintf( tBuf, sizeof( tBuf ), " |R(psi)-psi|inf=%.6e conservative=%d | obj app=%.12e true=%.12e alt=%.12e raa0=%.6e",
+                aDeltaR, this->is_conservative() ? 1 : 0, f0app, f0valnew, aHaveAlt ? aAltF0 : std::nan( "" ), raa0 );
+        tLine += tBuf;
+        for ( int j = 0; j < mNumCon; ++j )
+        {
+            std::snprintf( tBuf, sizeof( tBuf ), " | c%d app=%.12e true=%.12e alt=%.12e raa=%.6e",
+                    j, fapp[ j ], fvalnew[ j ], aHaveAlt ? aAltF[ j ] : std::nan( "" ), raa[ j ] );
+            tLine += tBuf;
+        }
+        MORIS_LOG_INFO( "%s", tLine.c_str() );
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::all_finite( real aF0, const std::vector< double >& aF ) const
+    {
+        if ( !std::isfinite( aF0 ) ) return false;
+        for ( int j = 0; j < mNumCon; ++j )
+            if ( !std::isfinite( aF[ j ] ) ) return false;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
     Algorithm_MMA::criteria_finite() const
     {
-        if ( !std::isfinite( f0valnew ) ) return false;
+        return this->all_finite( f0valnew, fvalnew );
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::is_conservative() const
+    {
+        if ( ( f0app + epsimin ) < f0valnew ) return false;
         for ( int j = 0; j < mNumCon; ++j )
-            if ( !std::isfinite( fvalnew[ j ] ) ) return false;
+            if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) return false;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Algorithm_MMA::Trial_Status
+    Algorithm_MMA::backtrack_non_finite( int aIter, int& aNumFunc )
+    {
+        // NaN guard: a non-finite trial criterion means the forward evaluation failed -- almost
+        // always an XTK decomposition failure where the moving interface's cut spans two HMR
+        // refinement levels ("not all child meshes on the same level"), which poisons every IQI
+        // integral (including the geometric volume/perimeter). Reject the step and shrink the
+        // move limit, re-solving until the criteria are finite. As the move limit -> 0 the trial
+        // design -> xval, which was finite when committed.
+        int       tBacktrack    = 0;
+        const int tMaxBacktrack = 15;
+        while ( !this->criteria_finite() && tBacktrack < tMaxBacktrack )
+        {
+            tBacktrack++;
+            mMoveScale *= 0.5;
+            MORIS_LOG_INFO( "Native MMA iter %d: non-finite criteria -- likely XTK decomposition failure "
+                            "(interface cut spans different HMR refinement levels). Rejecting step; "
+                            "move limit x%.4g (backtrack %d/%d).",
+                    aIter, mMoveScale, tBacktrack, tMaxBacktrack );
+            this->gcmmasub( aIter );
+            this->trial_func( aIter, -tBacktrack, aNumFunc );
+
+            if ( mProblem->restart_optimization() )
+            {
+                MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during backtrack; exiting solve loop.", aIter );
+                return Trial_Status::restart;
+            }
+        }
+
+        if ( !this->criteria_finite() )
+        {
+            MORIS_LOG_INFO( "Native MMA iter %d: criteria still non-finite after %d backtracks.", aIter, tMaxBacktrack );
+            return Trial_Status::failed;
+        }
+
+        // keep the (possibly shrunk) move limit for the rest of this outer iteration;
+        // it is reset to 1.0 at the top of the next one.
+        return Trial_Status::finite;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::restore_accepted_state( int aIter, int& aNumFunc )
+    {
+        MORIS_LOG_INFO( "Native MMA iter %d: rejecting the iteration; re-evaluating the accepted design to restore "
+                        "the problem state.",
+                aIter );
+
+        // evaluate into scratch criteria: the optimizer's own f0val/fval for xval stay as committed (in reinit mode
+        // the restore evaluates R(xval), so the Problem holds that redistance with criteria consistent with it)
+        real                  tF0 = 0.0;
+        std::vector< double > tF( mNumCon, 0.0 );
+        if ( mReinitHook )
+        {
+            // accept-only mode: restore exactly the committed design (it is already redistanced)
+            mProblem->set_reinit_suppressed( this->accept_only_redistance() );
+        }
+        this->func( xval.data(), tF0, tF );
+        aNumFunc++;
+
+        if ( mProblem->restart_optimization() )
+        {
+            MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested while restoring; exiting solve loop.", aIter );
+            return false;
+        }
+
+        // the accepted design evaluated finite when it was committed; failing now means the evaluation is not
+        // reproducible. Fail loudly (nonzero exit for the run sentinels) rather than iterate on an unevaluable design
+        MORIS_ERROR( this->all_finite( tF0, tF ),
+                "Native MMA iter %d: the accepted design no longer evaluates to finite criteria; restart from the last "
+                "checkpoint.",
+                aIter );
+
         return true;
     }
 
@@ -309,6 +523,7 @@ namespace moris::opt
                 tSumSp += tSp;
                 if ( tSp < 0.05 ) tLocked++;
             }
+            mNumLocked = tLocked;
             MORIS_LOG_INFO( "MMA asymptote spread iter %d: min=%.4f mean=%.4f max=%.4f | %d/%d vars at floor (locked)",
                     iter, tMinSp, tSumSp / (real)mNumVar, tMaxSp, tLocked, mNumVar );
         }
@@ -440,8 +655,9 @@ namespace moris::opt
         for ( int i = 0; i < mNumVar; ++i )
         {
             double rex   = df0dx[ i ] - xsi[ i ] + eta[ i ];
-            double rexsi = xsi[ i ] * ( xmma[ i ] - xmin[ i ] );
-            double reeta = eta[ i ] * ( xmax[ i ] - xmma[ i ] );
+            // complementarity at the committed design xval (== xmma unless the in-place redistance moved it)
+            double rexsi = xsi[ i ] * ( xval[ i ] - xmin[ i ] );
+            double reeta = eta[ i ] * ( xmax[ i ] - xval[ i ] );
 
             for ( int j = 0; j < mNumCon; ++j ) rex += dfdx[ j ][ i ] * lam[ j ];
 
@@ -889,7 +1105,15 @@ namespace moris::opt
         MORIS_ERROR( error1 == 0, "Native MMA: upper and lower bounds of some variables are numerically identical." );
         MORIS_ERROR( error2 == 0, "Native MMA: upper bound is smaller or equal to lower bound for some variables." );
 
-        // initial evaluation
+        // the suppression flag lives in the shared interface: never leave it set when this solve returns (restart, end)
+        struct Reinit_Suppression_Reset
+        {
+            std::shared_ptr< Problem > mProb;
+            ~Reinit_Suppression_Reset() { mProb->set_reinit_suppressed( false ); }
+        } tSuppressionReset{ mProblem };
+
+        // initial evaluation (an accepted iterate: redistanced in every in-place mode)
+        mProblem->set_reinit_suppressed( false );
         this->func( xval.data(), f0val, fval );
 
         // The workflow can request an optimization restart during a criteria evaluation
@@ -902,6 +1126,14 @@ namespace moris::opt
         {
             MORIS_LOG_INFO( "Native MMA: optimization restart requested during initial evaluation; exiting solve loop." );
             return istop;
+        }
+
+        // in-place redistance mode: the initial evaluation may have redistanced the design; start from the
+        // redistanced point so the gradient call sees the ADVs the criteria were computed for (MB-013: the
+        // consistency assert in Problem::compute_design_criteria_gradients fired here)
+        if ( mReinitHook && (int)mLastRedistanced.size() == mNumVar )
+        {
+            for ( int i = 0; i < mNumVar; ++i ) xval[ i ] = mLastRedistanced[ i ];
         }
 
         this->grad( xval.data() );
@@ -939,8 +1171,8 @@ namespace moris::opt
             this->asymp( iter );
             this->gcmmasub( iter );
 
-            this->func( xmma.data(), f0valnew, fvalnew );
-            nfunc++;
+            const int tNumFuncAtStart = nfunc;
+            this->trial_func( iter, 0, nfunc );
 
             // restart takes precedence over the NaN backtrack: the workflow has invalidated
             // the current design/mesh and the Manager must re-initialize the problem
@@ -950,69 +1182,123 @@ namespace moris::opt
                 return istop;
             }
 
-            // NaN guard: a non-finite trial criterion means the forward evaluation failed -- almost
-            // always an XTK decomposition failure where the moving interface's cut spans two HMR
-            // refinement levels ("not all child meshes on the same level"), which poisons every IQI
-            // integral (including the geometric volume/perimeter). Reject the step and shrink the
-            // move limit, re-solving until the criteria are finite. This is guaranteed to recover:
-            // as the move limit -> 0 the trial design -> xval, which was finite when committed.
-            int tBacktrack          = 0;
-            const int tMaxBacktrack = 15;
-            while ( !this->criteria_finite() && tBacktrack < tMaxBacktrack )
+            // NaN guard on the first trial (see backtrack_non_finite)
+            Trial_Status tTrialStatus = this->backtrack_non_finite( iter, nfunc );
+            if ( tTrialStatus == Trial_Status::restart )
             {
-                tBacktrack++;
-                mMoveScale *= 0.5;
-                MORIS_LOG_INFO( "Native MMA iter %d: non-finite criteria -- likely XTK decomposition failure "
-                                "(interface cut spans different HMR refinement levels). Rejecting step; "
-                                "move limit x%.4g (backtrack %d/%d).",
-                        (int)iter, mMoveScale, tBacktrack, tMaxBacktrack );
+                return istop;
+            }
+
+            bool tConservative = tTrialStatus == Trial_Status::finite && this->is_conservative();
+
+            int innerit = 0;
+            while ( tTrialStatus == Trial_Status::finite && !tConservative && innerit < mMaxInnerIter )
+            {
+                innerit++;
+                this->raaupdate();
                 this->gcmmasub( iter );
+                this->trial_func( iter, innerit, nfunc );
+
+                if ( mProblem->restart_optimization() )
+                {
+                    MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during inner iteration; exiting solve loop.", (int)iter );
+                    return istop;
+                }
+
+                // a failed inner trial must not reach the conservatism test: NaN comparisons are false, so it
+                // would pass as conservative and be committed and differentiated (MB-023)
+                tTrialStatus = this->backtrack_non_finite( iter, nfunc );
+                if ( tTrialStatus == Trial_Status::restart )
+                {
+                    return istop;
+                }
+                if ( tTrialStatus == Trial_Status::failed )
+                {
+                    break;
+                }
+
+                tConservative = this->is_conservative();
+            }
+
+            if ( tTrialStatus == Trial_Status::failed )
+            {
+                // could not recover: hold the previous (finite) design. The failed evaluations overwrote the
+                // shared Problem state, so re-evaluate xval before continuing; the Manager reads that state (MB-024)
+                if ( !this->restore_accepted_state( iter, nfunc ) )
+                {
+                    return istop;    // restart requested
+                }
+                MORIS_LOG_INFO( "Native MMA iter %d: holding previous design and continuing.", (int)iter );
+                continue;
+            }
+
+            // one summary line per outer iteration (inner-loop cap statistics)
+            MORIS_LOG_INFO( "Native MMA iter %d: accepted after %d inner cycles (cap %d)%s, %d trial evaluations",
+                    (int)iter, innerit, (int)mMaxInnerIter, tConservative ? ", conservative" : ", NOT conservative (cap reached)",
+                    nfunc - tNumFuncAtStart );
+
+            // SDF taper: tell the workflow about the accepted iterate (its step from the committed design, before any
+            // redistance) so that it can wean the in-place redistance off. An iterate accepted at the inner-loop cap is
+            // reported with an EMPTY accepted vector: its step was shrunk by failing conservatism tests, not by
+            // convergence, and must not count as a small change (MB-027: with the plain redistance every capped step is
+            // ~1e-7 relative, which weaned the redistance off at the third iteration)
+            if ( mReinitHook )
+            {
+                const bool     tCapped = mMaxInnerIter > 0 && !tConservative;
+                Vector< real > tPrevious( mNumVar );
+                Vector< real > tAccepted( tCapped ? 0 : mNumVar );
+                for ( int i = 0; i < mNumVar; ++i )
+                {
+                    tPrevious( i ) = xval[ i ];
+                    if ( !tCapped )
+                    {
+                        tAccepted( i ) = xmma[ i ];
+                    }
+                }
+                mProblem->notify_accepted_iterate( tPrevious, tAccepted );
+            }
+
+            // accept-only redistance: the trials were evaluated at the raw design; redistance the accepted xmma once and
+            // re-evaluate there, so that the committed design, its criteria and (below) its gradient all belong to
+            // phi = R(xmma). The trial criteria are no longer needed: f0valnew/fvalnew are overwritten with those at phi.
+            // (skipped once the redistance is tapered off: the trial evaluation at xmma is then the committed one)
+            if ( this->accept_only_redistance() && mProblem->is_reinit_active() )
+            {
+                const real            tF0Psi = f0valnew;
+                std::vector< double > tFPsi  = fvalnew;
+
+                mProblem->set_reinit_suppressed( false );
                 this->func( xmma.data(), f0valnew, fvalnew );
                 nfunc++;
 
                 if ( mProblem->restart_optimization() )
                 {
-                    MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during backtrack; exiting solve loop.", (int)iter );
+                    MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during the accept redistance; exiting solve loop.", (int)iter );
                     return istop;
                 }
-            }
-            if ( !this->criteria_finite() )
-            {
-                // could not recover: hold the previous (finite) design and continue
-                MORIS_LOG_INFO( "Native MMA iter %d: criteria still non-finite after %d backtracks; "
-                                "holding previous design and continuing.",
-                        (int)iter, tMaxBacktrack );
-                continue;
-            }
-            // keep the (possibly shrunk) move limit for the conservatism loop this iteration;
-            // it is reset to 1.0 at the top of the next outer iteration.
 
-            int conserv = 1;
-            if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
-            for ( int j = 0; j < mNumCon; ++j )
-                if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) conserv = 0;
-
-            int innerit = 0;
-            if ( conserv == 0 )
-            {
-                while ( conserv == 0 && innerit < mMaxInnerIter )
+                std::string tLine = "MMA-ACCEPT iter=" + std::to_string( iter );
+                char        tBuf[ 256 ];
+                std::snprintf( tBuf, sizeof( tBuf ), " obj psi=%.12e phi=%.12e", tF0Psi, f0valnew );
+                tLine += tBuf;
+                for ( int j = 0; j < mNumCon; ++j )
                 {
-                    innerit++;
-                    this->raaupdate();
-                    this->gcmmasub( iter );
+                    std::snprintf( tBuf, sizeof( tBuf ), " | c%d psi=%.12e phi=%.12e", j, tFPsi[ j ], fvalnew[ j ] );
+                    tLine += tBuf;
+                }
+                MORIS_LOG_INFO( "%s", tLine.c_str() );
+
+                if ( !this->criteria_finite() )
+                {
+                    // the redistanced design does not evaluate: commit the accepted raw design instead (delta = 0)
+                    MORIS_LOG_WARNING( "Native MMA iter %d: criteria at R(psi) are non-finite; committing the raw accepted design.", (int)iter );
+                    mProblem->set_reinit_suppressed( true );
                     this->func( xmma.data(), f0valnew, fvalnew );
                     nfunc++;
-
                     if ( mProblem->restart_optimization() )
                     {
-                        MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during inner iteration; exiting solve loop.", (int)iter );
                         return istop;
                     }
-
-                    conserv = 1;
-                    if ( ( f0app + epsimin ) < f0valnew ) conserv = 0;
-                    for ( int j = 0; j < mNumCon; ++j )
-                        if ( ( fapp[ j ] + epsimin ) < fvalnew[ j ] ) conserv = 0;
                 }
             }
 
@@ -1025,8 +1311,44 @@ namespace moris::opt
                 xold1[ i ] = xval[ i ];
                 xval[ i ]  = tUseRedist ? mLastRedistanced[ i ] : xmma[ i ];
             }
+
+            // Warm restart across the redistance: express the optimizer's history in the redistanced
+            // coordinates. The redistance R leaves the zero contour (hence the criteria) unchanged, so it
+            // is not a step: shift xold1, xold2 and the asymptotes by delta = R(xmma) - xmma, AFTER the
+            // rotation. asymp() then sees x_k - x_{k-1} = xmma - phi_{k-1} (the subproblem's own step) and
+            // keeps xold1 - low / upp - xold1 exactly. Without the shift, far-field redistance jumps
+            // (0.1-0.15 vs a 0.015 move limit) drive the oscillation test and collapse the asymptotes
+            // onto the floor (measured: 641/4961 variables locked after 26 iterations).
+            // Design note: runs/studies/lunch_and_learn_xiga (2026-10-10), MB-013.
+            if ( tUseRedist && mShiftHistory )
+            {
+                for ( int i = 0; i < mNumVar; ++i )
+                {
+                    const double tDelta = xval[ i ] - xmma[ i ];
+                    xold1[ i ] += tDelta;
+                    xold2[ i ] += tDelta;
+                    low[ i ] += tDelta;
+                    upp[ i ] += tDelta;
+                    MORIS_ASSERT( low[ i ] < xval[ i ] && xval[ i ] < upp[ i ],
+                            "Native MMA: asymptotes on the wrong side of the redistanced design (variable %d).", i );
+                }
+            }
             f0val = f0valnew;
             for ( int j = 0; j < mNumCon; ++j ) fval[ j ] = fvalnew[ j ];
+
+            {
+                // committed design of this outer iteration (trajectory record; before grad(), which may re-book the scale)
+                std::string tLine = "MMA-COMMIT iter=" + std::to_string( iter );
+                char        tBuf[ 128 ];
+                std::snprintf( tBuf, sizeof( tBuf ), " obj=%.12e", f0val / mObjScale );
+                tLine += tBuf;
+                for ( int j = 0; j < mNumCon; ++j )
+                {
+                    std::snprintf( tBuf, sizeof( tBuf ), " c%d=%.12e", j, fval[ j ] );
+                    tLine += tBuf;
+                }
+                MORIS_LOG_INFO( "%s", tLine.c_str() );
+            }
 
             this->grad( xval.data() );
             nsens++;

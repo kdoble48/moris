@@ -83,9 +83,25 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${LIB})
 # Add git revision
 # https://stackoverflow.com/questions/1435953/how-can-i-pass-git-sha1-to-compiler-as-definition-using-cmake
 
-include(${MORIS_CMAKE_DIR}/utilities/GetGitRevisionDescription.cmake)
-get_git_head_revision(MORIS_GIT_BRANCH MORIS_GIT_HASH)
-message(STATUS "done with GetGitRevisionDescription " ${MORIS_GIT_BRANCH} "  " ${MORIS_GIT_HASH})
+# Query git directly: the vendored GetGitRevisionDescription silently returns
+# empty values in git worktrees (where .git is a file, not a directory).
+# Refreshes at configure time, which is when this file is regenerated anyway.
+find_package(Git QUIET)
+set(MORIS_GIT_BRANCH "")
+set(MORIS_GIT_HASH "")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C ${CMAKE_SOURCE_DIR} rev-parse --abbrev-ref HEAD
+        OUTPUT_VARIABLE MORIS_GIT_BRANCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C ${CMAKE_SOURCE_DIR} rev-parse HEAD
+        OUTPUT_VARIABLE MORIS_GIT_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+message(STATUS "git revision for cl_Git_info: ${MORIS_GIT_BRANCH} ${MORIS_GIT_HASH}")
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cl_Git_info.cpp.in" "${CMAKE_CURRENT_BINARY_DIR}/cl_Git_info.cpp" @ONLY)
 

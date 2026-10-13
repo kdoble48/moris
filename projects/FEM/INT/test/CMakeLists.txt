@@ -138,6 +138,7 @@ set(TEST_SOURCES
     
     UT_FEM_IQI_Dof.cpp
     UT_FEM_IQI_Strain_Energy.cpp
+    UT_FEM_IQI_Cylindrical_Stress.cpp
     UT_FEM_IQI_Power_Dissipation.cpp
     UT_FEM_IQI_Power_Dissipation_Bulk.cpp
     UT_FEM_IQI_Max_Damage.cpp

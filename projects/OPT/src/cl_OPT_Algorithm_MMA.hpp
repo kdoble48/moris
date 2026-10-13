@@ -80,6 +80,12 @@ namespace moris::opt
         // ---- optional in-place reinitialization hook ----
         bool mReinitHook = false;   ///< if true, call Problem reinit on xval each outer iteration
         std::vector< double > mLastRedistanced;   ///< redistanced ADVs from the most recent func() eval
+        bool mShiftHistory = true;   ///< reinit mode: shift xold1/xold2/low/upp by the redistance (warm restart)
+        bool mReinitOnAcceptOnly = false;   ///< reinit mode + inner loop: trials see the raw design, only accepted iterates
+                                            ///< are redistanced (one extra evaluation per outer iteration)
+        bool mDebugInnerTrials   = false;   ///< log each trial's approximation vs true criteria and the criteria at the
+                                            ///< other design (raw psi vs R(psi)), by one extra diagnostic evaluation
+        int  mNumLocked    = 0;      ///< variables whose asymptote spread is at the floor, from the last asymp()
                                                   ///< (kept separate so xmma stays the raw subproblem
                                                   ///< solution for raaupdate/conservatism); committed to xval
 
@@ -100,8 +106,37 @@ namespace moris::opt
                                                          ///< proven regimes needlessly perturbs the trajectory
         static constexpr real sObjGradTarget = 1.0e8;    ///< decade-quantized scale brings max into (1e7, 1e8]
 
+        /** true if the objective and all constraints are finite */
+        bool all_finite( real aF0, const std::vector< double >& aF ) const;
+
         /** true if the current trial criteria (f0valnew, fvalnew) are all finite */
         bool criteria_finite() const;
+
+        /** true if the approximations f0app, fapp bound the trial criteria from above (GCMMA conservatism) */
+        bool is_conservative() const;
+
+        /** outcome of the NaN-guard backtrack on a trial design */
+        enum class Trial_Status
+        {
+            finite,     ///< the trial criteria are finite (possibly after shrinking the move limit)
+            restart,    ///< the workflow requested an optimization restart during an evaluation
+            failed      ///< still non-finite after the maximum number of backtracks
+        };
+
+        /**
+         * NaN guard for the trial point xmma: while its criteria are non-finite, halve the move limit, re-solve
+         * the subproblem and re-evaluate. Used for the first trial AND every conservatism inner trial, so a failed
+         * evaluation is never tested for conservatism, committed, or differentiated (MB-023).
+         */
+        Trial_Status backtrack_non_finite( int aIter, int& aNumFunc );
+
+        /**
+         * Re-evaluate the accepted design xval after a rejected iteration. Every failed trial evaluation has
+         * overwritten the shared Problem (ADVs, geometry, analysis, criteria) that the Manager reads; this restores
+         * a state consistent with the design the optimizer holds (MB-024). Returns false if the restore evaluation
+         * requested a restart; a non-finite restore is a MORIS_ERROR (the evaluation is not reproducible).
+         */
+        bool restore_accepted_state( int aIter, int& aNumFunc );
 
         // ================= helpers (ports of the reference functions) =================
 
@@ -115,6 +150,18 @@ namespace moris::opt
          * redistanced design persists in the optimizer state (no GCMMA restart needed).
          */
         void func( double* aX, real& aF0, std::vector< double >& aF );
+
+        /** true if inner trials are evaluated at the raw design (reinit_in_place + reinit_on_accept_only + inner loop) */
+        bool accept_only_redistance() const;
+
+        /**
+         * Evaluate the trial point xmma into f0valnew/fvalnew (redistanced unless accept_only_redistance()). With
+         * debug_inner_trials, first evaluates the other design (R(psi) or psi) for the diagnostic log line.
+         */
+        void trial_func( int aIter, int aInner, int& aNumFunc );
+
+        /** debug_inner_trials: one log line comparing the approximation with the true trial criteria */
+        void log_trial( int aIter, int aInner, real aAltF0, const std::vector< double >& aAltF, real aDeltaR, bool aHaveAlt ) const;
 
         /** evaluate gradients at x via inherited criteria-gradient call (port of grad_wrap) */
         void grad( const double* aX );
@@ -157,6 +204,26 @@ namespace moris::opt
 
         /** Run the GCMMA outer loop on proc 0 (port of solve.cpp) */
         int mma_solve();
+
+        /**
+         * Number of design variables whose asymptote spread (upp - low) / range was below 0.05 in the
+         * last asymp() call ("locked": their move limit is choked to ~1% of the range). Diagnostic.
+         */
+        int
+        get_num_locked_asymptotes() const
+        {
+            return mNumLocked;
+        }
+
+        /**
+         * Reinit mode only: whether to shift the history and asymptotes by the redistance (default true, the
+         * warm restart). false reproduces the pre-2026-10-10 behaviour; used as the unit test's negative control.
+         */
+        void
+        set_shift_history( bool aShift )
+        {
+            mShiftHistory = aShift;
+        }
     };
 }    // namespace moris::opt
 

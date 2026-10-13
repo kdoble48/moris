@@ -56,6 +56,7 @@ set(HEADERS
     CORE/cl_FEM_Model.hpp
     CORE/fn_FEM_Check.hpp
     CORE/fn_FEM_FD_Scheme.hpp
+    CORE/fn_FEM_Remap_Nonconformal_Ray.hpp
 
     ELEM/cl_FEM_Cluster.hpp
     ELEM/cl_FEM_Element_Factory.hpp
@@ -238,6 +239,7 @@ set(HEADERS
     IQI/cl_FEM_IQI_Volume.hpp
     IQI/cl_FEM_IQI_Strain_Energy.hpp
     IQI/cl_FEM_IQI_Stress.hpp
+    IQI/cl_FEM_IQI_Cylindrical_Stress.hpp
     IQI/cl_FEM_IQI_Gap.hpp
     IQI/cl_FEM_IQI_Dof.hpp
     IQI/cl_FEM_IQI_Eigen_Vector.hpp
@@ -297,6 +299,7 @@ set(LIB_SOURCES
     CORE/cl_FEM_Model_Initializer_Phasebased.cpp
     CORE/cl_FEM_Model.cpp
     CORE/cl_FEM_Field.cpp
+    CORE/fn_FEM_Remap_Nonconformal_Ray.cpp
 
     ELEM/cl_FEM_Cluster.cpp
     ELEM/cl_FEM_Element_Factory.cpp
@@ -492,6 +495,7 @@ set(LIB_SOURCES
     IQI/cl_FEM_IQI_Volume.cpp
     IQI/cl_FEM_IQI_Strain_Energy.cpp
     IQI/cl_FEM_IQI_Stress.cpp
+    IQI/cl_FEM_IQI_Cylindrical_Stress.cpp
     IQI/cl_FEM_IQI_Gap.cpp
     IQI/cl_FEM_IQI_Dof.cpp
     IQI/cl_FEM_IQI_Eigen_Vector.cpp

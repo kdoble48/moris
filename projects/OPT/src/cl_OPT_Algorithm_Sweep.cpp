@@ -41,6 +41,11 @@ namespace moris::opt
         mFiniteDifferenceEpsilons = string_to_matrix< DDRMat >( aParameterList.get< std::string >( "finite_difference_epsilons" ) );
         mFiniteDifferenceADVs     = string_to_matrix< DDUMat >( aParameterList.get< std::string >( "finite_difference_adv_indices" ) );
 
+        MORIS_ERROR( mFiniteDifferenceType == "none" or mFiniteDifferenceType == "all" or mFiniteDifferenceType == "forward"
+                             or mFiniteDifferenceType == "backward" or mFiniteDifferenceType == "central",
+                "Algorithm_Sweep - unknown finite_difference_type '%s'; use none, forward, backward, central, or all.",
+                mFiniteDifferenceType.c_str() );
+
         // define output options
         mSave  = aParameterList.get< bool >( "save" );
         mPrint = aParameterList.get< bool >( "print" );
@@ -269,7 +274,8 @@ namespace moris::opt
             // Compute gradients of design criteria at current evaluation point
             if ( mEvaluateObjectiveGradients or mEvaluateConstraintGradients )
             {
-                // Get analytical gradients if requested
+                // Get analytical gradients if requested; a single finite difference mode is FD-only, so it can check
+                // decks whose analytic sensitivities are unavailable or expensive
                 if ( mFiniteDifferenceType == "none" or mFiniteDifferenceType == "all" )
                 {
                     this->set_sensitivity_analysis_type( SA_Type::analytical );
@@ -279,21 +285,19 @@ namespace moris::opt
                 }
 
                 // Perform finite difference sensitivity analysis for different perturbation sizes
-                for ( uint tEpsilonIndex = 0; tEpsilonIndex < tTotalEpsilons; tEpsilonIndex++ )
+                for ( uint tEpsilonIndex = 0; tEpsilonIndex < tTotalEpsilons and mFiniteDifferenceType != "none"; tEpsilonIndex++ )
                 {
                     // Reset evaluation name with epsilon data
-                    tEvaluationName = " eval_" + std::to_string( tEvaluationIndex + 1 ) + "-" + std::to_string( tTotalEvaluations );
-                    if ( mFiniteDifferenceType != "none" )
-                    {
-                        tEvaluationName += " epsilon_" + std::to_string( tEpsilonIndex + 1 ) + "-" + std::to_string( tTotalEpsilons );
-                    }
+                    tEvaluationName = " eval_" + std::to_string( tEvaluationIndex + 1 ) + "-" + std::to_string( tTotalEvaluations )
+                                    + " epsilon_" + std::to_string( tEpsilonIndex + 1 ) + "-" + std::to_string( tTotalEpsilons );
 
-                    // Compute and/or save gradients based on finite differencing requested
+                    // set perturbation size index
+                    this->set_finite_difference_perturbation_size_index( tEpsilonIndex );
+
+                    // Compute and save the requested scheme(s); each single scheme used to fall through
+                    // without perturbing anything (MB-025)
                     if ( mFiniteDifferenceType == "all" )
                     {
-                        // set perturbation size index
-                        this->set_finite_difference_perturbation_size_index( tEpsilonIndex );
-
                         // Forward
                         this->set_sensitivity_analysis_type( SA_Type::forward );
                         this->compute_design_criteria_gradients( tEvaluationPoint );
@@ -309,10 +313,33 @@ namespace moris::opt
                         Matrix< DDRMat > tBackwardConstraintGradient = this->evaluate_constraint_gradients( tEvaluationName + " fd_backward" );
 
                         // Central
-                        this->output_variables( ( tForwardObjectiveGradient + tBackwardObjectiveGradient ) / 2,
-                                "objective_gradients" + tEvaluationName + " fd_central" );
-                        this->output_variables( ( tForwardConstraintGradient + tBackwardConstraintGradient ) / 2,
-                                "constraint_gradients" + tEvaluationName + " fd_central" );
+                        if ( mEvaluateObjectiveGradients )
+                        {
+                            this->output_variables( ( tForwardObjectiveGradient + tBackwardObjectiveGradient ) / 2,
+                                    "objective_gradients" + tEvaluationName + " fd_central" );
+                        }
+                        if ( mEvaluateConstraintGradients )
+                        {
+                            this->output_variables( ( tForwardConstraintGradient + tBackwardConstraintGradient ) / 2,
+                                    "constraint_gradients" + tEvaluationName + " fd_central" );
+                        }
+                    }
+                    else
+                    {
+                        SA_Type tType = SA_Type::central;
+                        if ( mFiniteDifferenceType == "forward" )
+                        {
+                            tType = SA_Type::forward;
+                        }
+                        else if ( mFiniteDifferenceType == "backward" )
+                        {
+                            tType = SA_Type::backward;
+                        }
+
+                        this->set_sensitivity_analysis_type( tType );
+                        this->compute_design_criteria_gradients( tEvaluationPoint );
+                        this->evaluate_objective_gradients( tEvaluationName + " fd_" + mFiniteDifferenceType );
+                        this->evaluate_constraint_gradients( tEvaluationName + " fd_" + mFiniteDifferenceType );
                     }
                 }
             }

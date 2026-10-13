@@ -44,6 +44,17 @@ namespace moris::gen
       real get_field_value( uint aNodeIndex ) override;
 
       /**
+       * A stored field is built without a mesh pair (Field_Discrete_Integration's mMeshPair( nullptr, nullptr )), so it
+       * exports no MTK field. Static stored geometries need no remapping: GEN rebuilds them from the parameters.
+       * MB-018: the base version dereferenced the null mesh (segfault in mtk::Field) when the SDF reinitialization or the
+       * remeshing restart path asked GEN for its MTK fields.
+       */
+      std::shared_ptr< mtk::Field > get_mtk_field() override
+      {
+          return nullptr;
+      }
+
+      /**
        * Given a node index or coordinates, returns a vector of the field derivatives with respect to its ADVs.
        *
        * @param aNodeIndex Node index

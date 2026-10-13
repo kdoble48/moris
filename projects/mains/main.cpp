@@ -15,6 +15,7 @@
 #include "cl_Communication_Manager.hpp"      // COM/src
 #include "cl_Logger.hpp"                     // MRS/IOS/src
 #include "cl_Performance_Reporter.hpp"       // MRS/IOS/src
+#include "cl_Git_info.hpp"                   // MRS/IOS/src
 #include "banner.hpp"                        // COR/src
 #include <Kokkos_Core.hpp>
 
@@ -68,6 +69,15 @@ void moris_pause( int& argc, char* argv[] )
 
 int main( int argc, char* argv[] )
 {
+    // Check for --version flag before any initialization
+    if ( argc == 2 && ( std::string( argv[1] ) == "--version" || std::string( argv[1] ) == "-v" ) )
+    {
+        moris::git_info tGitInfo;
+        std::cout << "MORIS " << tGitInfo.get_git_hash() << std::endl;
+        std::cout << "Branch: " << tGitInfo.get_git_branch() << std::endl;
+        return 0;
+    }
+    
     // initialize MORIS global communication manager
     gMorisComm = moris::Comm_Manager( &argc, &argv );
 

@@ -572,6 +572,30 @@ namespace moris::prm
 
         tLinAlgorithmParameterList.insert( "AddZeroToDiag", false );
 
+        // --- Amesos_Superludist (SuperLU_DIST) tuning ----------------------------
+        // Only consumed when Solver_Type == "Amesos_Superludist" (see
+        // Linear_Solver_Amesos::set_solver_internal_parameters). Exposes the
+        // fill-reducing ordering and static-pivoting controls that otherwise fell
+        // back to library defaults and were unreachable from a deck.
+        //   ColPerm  : fill-reducing column ordering. "PARMETIS" runs nested
+        //              dissection *distributed* (no rank-0 ordering spike), which
+        //              matters for large 3D / high-order immersed factorizations.
+        //              Other values: "MMD_AT_PLUS_A", "MMD_ATA", "NATURAL".
+        //   RowPerm  : "LargeDiag" = MC64 static pivoting (permute large entries to
+        //              the diagonal) — improves numeric stability on ill-conditioned
+        //              cut systems; "NOROWPERM" disables it.
+        //   ReplaceTinyPivot : replace near-zero pivots to avoid a hard breakdown.
+        //   ReuseSymbolic    : reuse the symbolic factorization on subsequent
+        //              NumericFactorization calls (only effective if the solver
+        //              instance persists across solves; default false, off).
+        tLinAlgorithmParameterList.insert( "Superludist_ColPerm", "PARMETIS" );
+
+        tLinAlgorithmParameterList.insert( "Superludist_RowPerm", "LargeDiag" );
+
+        tLinAlgorithmParameterList.insert( "Superludist_ReplaceTinyPivot", true );
+
+        tLinAlgorithmParameterList.insert( "Superludist_ReuseSymbolic", false );
+
         tLinAlgorithmParameterList.insert( "RcondThreshold", -1.0 );
 
         tLinAlgorithmParameterList.insert( "OutputLevel", INT_MAX );
