@@ -81,6 +81,10 @@ namespace moris::opt
         bool mReinitHook = false;   ///< if true, call Problem reinit on xval each outer iteration
         std::vector< double > mLastRedistanced;   ///< redistanced ADVs from the most recent func() eval
         bool mShiftHistory = true;   ///< reinit mode: shift xold1/xold2/low/upp by the redistance (warm restart)
+        bool mReinitOnAcceptOnly = false;   ///< reinit mode + inner loop: trials see the raw design, only accepted iterates
+                                            ///< are redistanced (one extra evaluation per outer iteration)
+        bool mDebugInnerTrials   = false;   ///< log each trial's approximation vs true criteria and the criteria at the
+                                            ///< other design (raw psi vs R(psi)), by one extra diagnostic evaluation
         int  mNumLocked    = 0;      ///< variables whose asymptote spread is at the floor, from the last asymp()
                                                   ///< (kept separate so xmma stays the raw subproblem
                                                   ///< solution for raaupdate/conservatism); committed to xval
@@ -146,6 +150,18 @@ namespace moris::opt
          * redistanced design persists in the optimizer state (no GCMMA restart needed).
          */
         void func( double* aX, real& aF0, std::vector< double >& aF );
+
+        /** true if inner trials are evaluated at the raw design (reinit_in_place + reinit_on_accept_only + inner loop) */
+        bool accept_only_redistance() const;
+
+        /**
+         * Evaluate the trial point xmma into f0valnew/fvalnew (redistanced unless accept_only_redistance()). With
+         * debug_inner_trials, first evaluates the other design (R(psi) or psi) for the diagnostic log line.
+         */
+        void trial_func( int aIter, int aInner, int& aNumFunc );
+
+        /** debug_inner_trials: one log line comparing the approximation with the true trial criteria */
+        void log_trial( int aIter, int aInner, real aAltF0, const std::vector< double >& aAltF, real aDeltaR, bool aHaveAlt ) const;
 
         /** evaluate gradients at x via inherited criteria-gradient call (port of grad_wrap) */
         void grad( const double* aX );
