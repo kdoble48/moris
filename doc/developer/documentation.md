@@ -138,6 +138,15 @@ example's page shows, attach a view in one or both of these places:
 
 Both apply to the still image, the interactive scene and every animation frame alike.
 
+#### ParaView bundles
+
+Each exported scene also comes as `<Example>-paraview.zip`: the output file the scene is rendered
+from (the last iteration only), the ParaView state of the view and an `open.py` that loads it
+(`pvpython open.py`, or `File > Load State` in ParaView, pointed at the unpacked folder). The
+zips are uploaded as release assets next to the gallery archive, not packed into it, so the site
+stays small; the example page links the bundle with its size. Examples whose output file exceeds
+12 MB (`PARAVIEW_MAX_BYTES` in `export_scenes.py`) get a note instead of a bundle.
+
 `build_gallery.py` runs Windows ParaView 6 through WSL when it is installed, otherwise the `pvpython`
 on the `PATH` (`--pvpython` overrides). To preview without uploading, unzip the archive into
 `doc/_static/gallery/` and build the site; CI downloads the release instead

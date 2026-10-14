@@ -649,6 +649,7 @@ def export_example(example, out):
                    "run": "showcase" if example.get("showcase") else "regression"},
         "reproduce": example.get("reproduce", []),
     }
+    meta["paraview"] = write_paraview_bundle(view, choice, out, base)
     se.hide_overlays(view)
     pv.SaveScreenshot(os.path.join(out, meta["thumb_raw"]), view, ImageResolution=SIZE)
     # the animation runs after the scene and images are written: its fixed color range changes the LUT
@@ -660,6 +661,58 @@ def export_example(example, out):
     for proxy in list(pv.GetSources().values()):
         pv.Delete(proxy)
     return meta, None
+
+
+PARAVIEW_MAX_BYTES = 12_000_000    # larger data stays out of the per-example ParaView bundles
+
+OPEN_PY = '''"""Open this example's scene in ParaView: pvpython open.py (or File > Load State > state.pvsm and
+point ParaView at this folder when it asks for the data)."""
+import os
+
+from paraview.simple import LoadState, Render
+
+here = os.path.dirname(os.path.abspath(__file__))
+LoadState(os.path.join(here, "state.pvsm"), data_directory=here, restrict_to_data_directory=True)
+Render()
+'''
+
+README = """{title}
+{underline}
+
+The scene shown on the documentation page, for ParaView {version}:
+
+  {data}      the MORIS output the scene is rendered from ({what})
+  state.pvsm  the ParaView state (pipeline, coloring, camera)
+  open.py     loads the state with the data from this folder
+
+Open it with   pvpython open.py   (or paraview --script=open.py), or in the ParaView GUI with
+File > Load State > state.pvsm, choosing "Search files under specified directory" and this folder.
+"""
+
+
+def write_paraview_bundle(view, choice, out, base):
+    """``<base>-paraview/``: the chosen output file, the view's state and an open.py; or a note why not."""
+    import shutil
+
+    size = os.path.getsize(choice.path)
+    if size > PARAVIEW_MAX_BYTES:
+        return {"skipped": f"the output file is {size / 1e6:.0f} MB"}
+    folder = os.path.join(out, f"{base}-paraview")
+    if os.path.isdir(folder):
+        shutil.rmtree(folder)
+    os.makedirs(folder)
+    data = os.path.basename(choice.path.replace("\\", "/"))
+    shutil.copyfile(choice.path, os.path.join(folder, data))
+    pv.SaveState(os.path.join(folder, "state.pvsm"))
+    with open(os.path.join(folder, "open.py"), "w", encoding="utf-8") as f:
+        f.write(OPEN_PY)
+    what = {"result": "VIS output", "gen": "GEN output", "xtk": "XTK integration mesh", "mesh": "mesh"}[choice.kind]
+    title = f"{base} - ParaView scene"
+    with open(os.path.join(folder, "README.txt"), "w", encoding="utf-8") as f:
+        f.write(README.format(title=title, underline="=" * len(title), version=pv.GetParaViewVersion(),
+                              data=data.ljust(10), what=what))
+    total = sum(os.path.getsize(os.path.join(folder, n)) for n in os.listdir(folder))
+    return {"folder": os.path.basename(folder), "bytes": total, "data": data}
 
 
 def main(argv=None):
