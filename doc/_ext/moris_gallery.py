@@ -109,6 +109,7 @@ def scene_markdown(meta, docname, version="", build="") -> str:
                      f'<img class="moris-static" src="{prefix}{ASSETS}/{anim["file"]}{_tag(version)}" '
                      f'alt="Animation over the {what}: {html.escape(meta["title"])}">\n\n'
                      f'{anim_legend}{sampled}, one color range across all frames.\n````\n')
+    paraview = paraview_markdown(meta, _STATE.get("manifest") or {})
     note = ""
     if meta.get("kind") == "xtk":
         note = ("```{note}\nThis is the XTK **integration mesh**, not the background (HMR) mesh: each cell the "
@@ -121,7 +122,21 @@ def scene_markdown(meta, docname, version="", build="") -> str:
             f'`````\n\n'
             + note
             + (f'```{{raw}} html\n<div class="moris-side">{side}</div>\n```\n\n' if side else "")
-            + f'{provenance}\n')
+            + f'{provenance}{paraview}\n')
+
+
+def paraview_markdown(meta, manifest) -> str:
+    """The "Open in ParaView" sentence: a link to the example's bundle (a release asset), or why there is none."""
+    bundle = meta.get("paraview") or {}
+    base = manifest.get("paraview_url", "")
+    if bundle.get("file") and base:
+        size = _size(bundle.get("bytes", 0))
+        return (f' **[Open in ParaView]({base}{bundle["file"]})** ({size}): the output file, the ParaView state and '
+                f'an `open.py`; run `pvpython open.py` in the unpacked folder, or load `state.pvsm` in ParaView and '
+                f'point it at the folder.')
+    if bundle.get("skipped"):
+        return f' No ParaView bundle for this example: {bundle["skipped"]}.'
+    return ""
 
 
 def gallery_markdown(manifest) -> str:
