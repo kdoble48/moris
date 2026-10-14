@@ -12,7 +12,7 @@ Two renderings, both from :func:`graph_data`:
   nearest neighbours as an ego graph (``<div class="exa-graph">``, drawn by
   ``_static/exa_graph.js`` with D3) and as a plain list with the shared tags, for readers
   without JavaScript and for the search index;
-- ``{exa-graph}`` — the whole graph on one page (``examples/graph.md``), colored by category,
+- ``{exa-graph}`` — the whole graph at the top of the example gallery (``examples/example-gallery.md``), colored by category,
   filterable by tag.
 
 Pure functions (``similarity``, ``neighbours``, ``graph_data``) import nothing from Sphinx:
@@ -214,7 +214,7 @@ def related_markdown(app, example, examples, docname):
         return ""
     urls = _page_urls(app, examples, docname)
     data = graph_data(examples, urls, _thumb_urls(examples, docname), centre=example["leaf"])
-    map_url = posixpath.relpath("examples/graph.html", posixpath.dirname(docname) or ".")
+    map_url = posixpath.relpath("examples/example-gallery.html", posixpath.dirname(docname) or ".") + "#example-map"
     # a sphinx-design dropdown (open), not a heading: the block must not enter the page's own outline
     lines = [":::{dropdown} Related examples", ":open:", ":icon: git-branch", "",
              "Nearest examples by the features detected in the decks; an edge is wider the more "
