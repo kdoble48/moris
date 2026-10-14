@@ -529,4 +529,4 @@ def setup(app):
     exa_graph.setup(app)
     # env_version: bump when the generated page content changes shape, so an incremental build
     # re-reads every example page (their .md sources are unchanged by an extension edit)
-    return {"env_version": 5, "parallel_read_safe": True, "parallel_write_safe": True}
+    return {"env_version": 6, "parallel_read_safe": True, "parallel_write_safe": True}
