@@ -5,8 +5,8 @@ name: Documentation deploy
 #
 # Requires (repository settings):
 #   - Pages enabled with source "GitHub Actions";
-#   - the Actions allow-list to include actions/upload-pages-artifact@v3,
-#     actions/upload-artifact@v4 (used inside it), and actions/deploy-pages@v4.
+#   - the Actions allow-list to include actions/upload-pages-artifact@v5,
+#     actions/upload-artifact@v4 (used inside it), and actions/deploy-pages@v5.
 # Kept separate from docs.yml so the PR build check runs under the
 # checkout-only allow-list.
 
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build site
         env:
@@ -35,7 +35,7 @@ jobs:
         run: bash doc/ci_build.sh
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: doc/_build/html
 
@@ -52,4 +52,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
