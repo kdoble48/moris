@@ -54,7 +54,8 @@
       zoom = d3.zoom().scaleExtent([0.3, 4]).on("zoom", (ev) => layer.attr("transform", ev.transform));
       svg.call(zoom);
       const bar = d3.select(container).append("div").attr("class", "exa-graph-bar");
-      const tags = Array.from(new Set(data.nodes.flatMap((n) => n.tags))).sort();
+      const notFeatures = new Set(["Deck API v2"]);    // a deck style, not something the deck does
+      const tags = Array.from(new Set(data.nodes.flatMap((n) => n.tags))).filter((t) => !notFeatures.has(t)).sort();
       const select = bar.append("select");
       select.append("option").attr("value", "").text("highlight a feature…");
       tags.forEach((t) => select.append("option").attr("value", t).text(t));
