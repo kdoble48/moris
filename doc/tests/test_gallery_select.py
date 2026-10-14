@@ -92,3 +92,47 @@ def test_block_phase_labels():
     assert gs.block_phase("hmr_dummy_c_p2") == (2, "phase 2 (cut)")
     assert gs.block_phase("HMR_dummy_n_p10") == (10, "phase 10 (uncut)")
     assert gs.block_phase("block_main") == (None, "block_main")
+
+
+ZZ_LIKE_DECK = """
+    std::string tBulkSets  = "HMR_dummy_n_p9,HMR_dummy_c_p9";
+    std::string tVoidSets  = "HMR_dummy_n_p8,HMR_dummy_c_p8";
+    std::string tFrameSets = "HMR_dummy_n_p11,HMR_dummy_c_p11";
+    std::string tTotalDomain = tBulkSets + "," + tVoidSets;
+    std::string tDofStrg = tIs3D ? "UX,UY,UZ" : "UX,UY";
+        aParameterLists.set( "IWG_name", "IWGDiffusionThetaBulk" );
+        aParameterLists.set( "IWG_type", fem::IWG_Type::SPATIALDIFF_BULK );
+        aParameterLists.set( "dof_residual", "THETA" );
+        aParameterLists.set( "mesh_set_names", tTotalDomain );
+        aParameterLists.set( "IWG_name", "IWGBulkU" );
+        aParameterLists.set( "IWG_type", fem::IWG_Type::STRUC_LINEAR_BULK );
+        aParameterLists.set( "dof_residual", tDofStrg );
+        aParameterLists.set( "mesh_set_names", tBulkSets );
+        aParameterLists.set( "IWG_name", std::string( "IWGBulkUFrame" ) );
+        aParameterLists.set( "IWG_type", fem::IWG_Type::STRUC_LINEAR_BULK );
+        aParameterLists.set( "dof_residual", std::string( "UX,UY" ) );
+        aParameterLists.set( "mesh_set_names", tFrameSets );
+        aParameterLists.set( "IWG_name", "IWGTraction" );
+        aParameterLists.set( "IWG_type", fem::IWG_Type::STRUC_LINEAR_NEUMANN );
+        aParameterLists.set( "dof_residual", "UX,UY" );
+        aParameterLists.set( "mesh_set_names", "iside_b0_11_b1_15" );
+"""
+
+
+def test_bulk_phases_from_deck():
+    # the void phase p8 only carries an auxiliary (THETA) bulk IWG: not shown for |U|
+    assert gs.bulk_phases([ZZ_LIKE_DECK], "U", True) == {9, 11}
+    # for the auxiliary field itself, the void counts
+    assert gs.bulk_phases([ZZ_LIKE_DECK], "THETA", False) == {8, 9}
+    # nothing to go on: None (every phase is shown)
+    assert gs.bulk_phases([ZZ_LIKE_DECK], "TEMP", False) is None
+    assert gs.bulk_phases(["tFem.set( \"dof_residual\", deck::Dofs::Displacement2D );"], "U", True) is None
+    assert gs.bulk_phases([ZZ_LIKE_DECK], None, False) is None
+
+
+def test_series_paths_in_iteration_order():
+    files = [BIN + "D.exo.e-s.0010", BIN + "D.exo.e-s.0002", BIN + "xtk_temp.exo", BIN + "D.exo.e-s.0001",
+             "/other/bin/D.exo.e-s.0003"]
+    assert gs.series_paths(BIN + "D.exo.e-s.0010", files) == [BIN + "D.exo.e-s.0001", BIN + "D.exo.e-s.0002",
+                                                               BIN + "D.exo.e-s.0010"]
+    assert gs.series_paths(BIN + "xtk_temp.exo", files) == [BIN + "xtk_temp.exo"]
