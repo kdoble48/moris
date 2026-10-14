@@ -195,6 +195,23 @@ def set_camera(view, three_d, face_cut=False):
     cam.Zoom(1.08)
 
 
+def background_edges(source, view):
+    """The edges of the quad/hex cells of ``source`` as a gray wireframe over the colored surface."""
+    # the quad/hex family in every order: MORIS writes 9-node quads / 27-node hexes for quadratic meshes
+    wanted = {"Quad", "Pixel", "Quadratic Quadrilateral", "Bi-Quadratic Quadrilateral", "Lagrange Quadrilateral",
+              "Hexahedron", "Voxel", "Quadratic Hexahedron", "Tri-Quadratic Hexahedron",
+              "Bi-Quadratic Quadratic Hexahedron", "Lagrange Hexahedron"}
+    quads = pv.ExtractCellsByType(Input=source)
+    quads.CellTypes = [t for t in quads.GetProperty("CellTypes").Available if t in wanted]
+    rep = pv.Show(quads, view)
+    rep.SetRepresentationType("Wireframe")
+    rep.ColorArrayName = ["POINTS", ""]
+    rep.DiffuseColor = [0.55, 0.55, 0.55]
+    rep.AmbientColor = [0.55, 0.55, 0.55]
+    rep.LineWidth = 1.0
+    return rep
+
+
 def color_blocks(rep, reader, view):
     """Categorical coloring by element block, one color per phase, block names as labels."""
     blocks = list(getattr(reader, "ElementBlocks", []) or [])
@@ -269,10 +286,16 @@ def render(example, choice, out):
     rep = pv.Show(source, view)
     cells = source.GetDataInformation().GetNumberOfCells()
     # override "edges": true draws the cells whatever their number (adaptive refinement is the point there)
+    edge_rep = None
     if example.get("override", {}).get("edges") or \
             cells <= (XTK_EDGE_CELL_LIMIT if choice.kind == "xtk" else EDGE_CELL_LIMIT):
-        rep.SetRepresentationType("Surface With Edges")
-        rep.EdgeColor = [0.55, 0.55, 0.55]
+        if choice.kind in ("result", "gen"):
+            # background cells only: the cut cells' triangles/tets would draw as a dense dark band along
+            # every interface, which the black outline already marks
+            edge_rep = background_edges(source, view)
+        else:
+            rep.SetRepresentationType("Surface With Edges")
+            rep.EdgeColor = [0.55, 0.55, 0.55]
     if by_block:
         color_blocks(rep, reader, view)
     if choice.kind == "xtk":
@@ -303,6 +326,7 @@ def render(example, choice, out):
     set_camera(view, three_d, face_cut=cutaway is not None)
     # the attached view: declarative keys in overrides.json, then the example's view script
     scene = Scene(example, choice, view, reader, source, rep, bounds, three_d, times, readers, phases, volume)
+    scene.edge_rep = edge_rep
     apply_view_overrides(scene, override)
     script = example.get("view_script")
     if script:
@@ -426,9 +450,18 @@ class Scene:
         return lut
 
     def edges(self, on=True, color=(0.55, 0.55, 0.55)):
-        self.rep.SetRepresentationType("Surface With Edges" if on else "Surface")
+        """Background-cell edges (quads/hexes) on or off; the cut cells stay smooth."""
+        if self.choice.kind not in ("result", "gen"):
+            self.rep.SetRepresentationType("Surface With Edges" if on else "Surface")
+            if on:
+                self.rep.EdgeColor = list(color)
+            return
+        if getattr(self, "edge_rep", None) is not None:
+            pv.Hide(self.edge_rep.Input, self.view)
+            self.edge_rep = None
         if on:
-            self.rep.EdgeColor = list(color)
+            self.edge_rep = background_edges(self.source, self.view)
+            self.edge_rep.DiffuseColor = self.edge_rep.AmbientColor = list(color)
 
     def camera(self, azimuth=0.0, elevation=0.0, zoom=1.0, position=None, focal=None, up=None, parallel=None):
         """Adjust the camera from the default: rotate (degrees), zoom (> 1 closer), or set it outright."""
