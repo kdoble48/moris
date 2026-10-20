@@ -161,6 +161,21 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Field::has_exact_derived_node_values() const
+    {
+        return false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Field::get_field_value_at_point( const Matrix< DDRMat >& aCoordinates )
+    {
+        MORIS_ERROR( false, "Field::get_field_value_at_point() - field %s interpolates derived nodes and cannot be evaluated at an arbitrary point.", mName.c_str() );
+        return 0.0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Vector< sint > Field::get_determining_adv_ids(
             uint                    aNodeIndex,
             const Matrix< DDRMat >& aCoordinates )

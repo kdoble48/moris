@@ -56,6 +56,21 @@ namespace moris::gen
                 const Node_Manager& aNodeManager ) override;
 
         /**
+         * Exact derived-node values if every combined field has them.
+         *
+         * @return If derived-node values are exact point evaluations
+         */
+        bool has_exact_derived_node_values() const override;
+
+        /**
+         * Minimum (or maximum) of the combined fields at a point.
+         *
+         * @param aCoordinates Point coordinates
+         * @return Field value
+         */
+        real get_field_value_at_point( const Matrix< DDRMat >& aCoordinates ) override;
+
+        /**
          * Given a node index or coordinate, returns a vector of the field derivatives with respect to its ADVs.
          *
          * @param aNodeIndex Node index

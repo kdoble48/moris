@@ -203,3 +203,26 @@ TEST_CASE( "WRK L2 test", "[WRK_L2_test]" )
         tInterpolationMeshNew = nullptr;
     }
 }
+
+TEST_CASE( "WRK minimum refinement level schedule", "[WRK],[MB-034]" )
+{
+    // pattern 0: level 1 until iteration 30, then level 2 until iteration 100
+    moris::Vector< moris::uint > tTwoPairs = { 0, 1, 30, 2, 100 };
+
+    CHECK( moris::wrk::minimum_refinement_level_at( tTwoPairs, 0 ) == 1 );
+    CHECK( moris::wrk::minimum_refinement_level_at( tTwoPairs, 29 ) == 1 );
+    CHECK( moris::wrk::minimum_refinement_level_at( tTwoPairs, 30 ) == 2 );    // read as 0 before MB-034
+    CHECK( moris::wrk::minimum_refinement_level_at( tTwoPairs, 99 ) == 2 );
+    CHECK( moris::wrk::minimum_refinement_level_at( tTwoPairs, 100 ) == 0 );    // past the last pair
+
+    // three pairs (the ZZ example's regression schedule): 0 until 30, 10 until 100, 0 until 500
+    moris::Vector< moris::uint > tThreePairs = { 0, 0, 30, 10, 100, 0, 500 };
+
+    CHECK( moris::wrk::minimum_refinement_level_at( tThreePairs, 5 ) == 0 );
+    CHECK( moris::wrk::minimum_refinement_level_at( tThreePairs, 40 ) == 10 );
+    CHECK( moris::wrk::minimum_refinement_level_at( tThreePairs, 120 ) == 0 );
+
+    // a single level with no until-iteration and a bare pattern index give level 0
+    moris::Vector< moris::uint > tBare = { 2 };
+    CHECK( moris::wrk::minimum_refinement_level_at( tBare, 0 ) == 0 );
+}

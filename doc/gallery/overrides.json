@@ -2,6 +2,20 @@
   "LevelSet_Boxbeam_Adaptive_Refinement": {
     "file": "Levelset_Boxbeam_Adaptive_Refinement.exo",
     "showcase_accept_error": true,
-    "_why": "the example's tag runs the linear and the quadratic deck; the linear deck's showcase run completes (100 iterations), the quadratic one stops at a singular KLU factorization (D-149)"
+    "edges": true,
+    "_why": "the tag runs the linear and the quadratic deck: the linear deck's showcase run completes (100 iterations), the quadratic one stops at a singular KLU factorization (D-149). Edges show the adaptively refined mesh."
+  },
+  "LevelSet_Boxbeam_Adaptive_Refinement_Restart": {
+    "edges": true,
+    "_why": "edges show the adaptively refined mesh carried through the restart"
+  },
+  "Mach_Leading_Edge": {
+    "array": "TEMP",
+    "_why": "the phase-change leading edge is a thermal problem: color by temperature"
+  },
+  "Zienkiewicz_Zhu_Adaptive_Refinement": {
+    "edges": true,
+    "camera": {"zoom": 1.12},
+    "_why": "edges show the stress-driven (ZZ) refinement; the bracket fills the frame better zoomed in a little"
   }
 }

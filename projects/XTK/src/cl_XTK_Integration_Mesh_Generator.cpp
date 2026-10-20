@@ -8,6 +8,7 @@
  *
  */
 
+#include <algorithm>
 #include <unordered_map>
 #include "cl_XTK_Integration_Mesh_Generator.hpp"
 #include "cl_XTK_Decomposition_Algorithm_Factory.hpp"
@@ -17,6 +18,7 @@
 #include "fn_XTK_find_most_frequent_int_in_cell.hpp"
 #include "fn_XTK_Multiset_Operations.hpp"
 #include "fn_stringify_matrix.hpp"
+#include "cl_XTK_Regular_Subdivision_Interface.hpp"
 
 using namespace moris;
 namespace moris::xtk
@@ -403,6 +405,120 @@ namespace moris::xtk
 
     // ----------------------------------------------------------------------------------
 
+    Vector< Matrix< DDRMat > >
+    Integration_Mesh_Generator::get_regular_subdivision_vertex_parametric_coordinates()
+    {
+        bool tHasOctree    = false;
+        bool tHasRegSubQ4  = false;
+        bool tHasRegSubHX8 = false;
+        for ( const Subdivision_Method& iMethod : mSubdivisionMethods )
+        {
+            tHasOctree    = tHasOctree or iMethod == Subdivision_Method::NC_OCTREE;
+            tHasRegSubQ4  = tHasRegSubQ4 or iMethod == Subdivision_Method::NC_REGULAR_SUBDIVISION_QUAD4;
+            tHasRegSubHX8 = tHasRegSubHX8 or iMethod == Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8;
+        }
+
+        // with an octree the subdivision vertices are only known after the refinement: not handled here
+        if ( tHasOctree )
+        {
+            return {};
+        }
+        if ( tHasRegSubQ4 )
+        {
+            return Regular_Subdivision_4_TRIS().get_new_vertex_parametric_coordinates_wrt_parent();
+        }
+        if ( tHasRegSubHX8 )
+        {
+            return Regular_Subdivision_24_TETS().get_new_vertex_parametric_coordinates_wrt_parent();
+        }
+        return {};
+    }
+
+    // ----------------------------------------------------------------------------------
+
+    void
+    Integration_Mesh_Generator::compute_interior_sample_points(
+            const moris::mtk::Cell&           aBackgroundCell,
+            const Vector< Matrix< DDRMat > >& aParametricCoordinates,
+            Vector< Matrix< DDRMat > >&       aInteriorPoints )
+    {
+        // same evaluation as the regular subdivision uses for its new vertices (N(xi) * X)
+        moris::mtk::Cell_Info const * tCellInfo     = aBackgroundCell.get_cell_info();
+        Matrix< DDRMat >              tVertexCoords = aBackgroundCell.get_vertex_coords();
+        Matrix< DDRMat >              tNXi;
+
+        aInteriorPoints.resize( aParametricCoordinates.size() );
+        for ( uint iPoint = 0; iPoint < aParametricCoordinates.size(); iPoint++ )
+        {
+            tCellInfo->eval_N( aParametricCoordinates( iPoint ), tNXi );
+            aInteriorPoints( iPoint ) = tNXi * tVertexCoords;
+        }
+    }
+
+    // ----------------------------------------------------------------------------------
+
+    void
+    Integration_Mesh_Generator::add_background_cells_intersected_at_child_vertices(
+            Integration_Mesh_Generation_Data* aMeshGenerationData,
+            Cut_Integration_Mesh*             aCutIntegrationMesh,
+            uint                              aGeometryIndex )
+    {
+        // fields interpolated from the corners cannot change region inside a cell with uniform corners
+        if ( not this->get_geom_engine()->can_change_region_inside_cell( aGeometryIndex ) )
+        {
+            return;
+        }
+
+        Tracer tTracer( "XTK", "Integration_Mesh_Generator", "Add cells intersected at child vertices", mXTKModel->mVerboseLevel, 1 );
+
+        Vector< moris_index >& tIntersectedCells = aMeshGenerationData->mIntersectedBackgroundCellIndex( aGeometryIndex );
+
+        // mark the cells already selected for this geometry
+        std::unordered_map< moris_index, bool > tIsSelected;
+        for ( const moris_index& iCell : tIntersectedCells )
+        {
+            tIsSelected[ iCell ] = true;
+        }
+
+        Vector< std::shared_ptr< Matrix< DDRMat > > >* tVertexCoordinates = aCutIntegrationMesh->get_all_vertex_coordinates_loc_inds();
+
+        uint tNumAdded = 0;
+        for ( const moris_index& iCell : aMeshGenerationData->mAllIntersectedBgCellInds )
+        {
+            if ( tIsSelected.find( iCell ) != tIsSelected.end() )
+            {
+                continue;
+            }
+
+            // all vertices currently in this cell's child mesh
+            std::shared_ptr< IG_Vertex_Group > tVertexGroup = aCutIntegrationMesh->get_vertex_group( iCell );
+            uint                               tNumVerts    = tVertexGroup->size();
+            if ( tNumVerts == 0 )
+            {
+                continue;
+            }
+            Matrix< IndexMat > tVertexIndices( 1, tNumVerts );
+            for ( uint iVert = 0; iVert < tNumVerts; iVert++ )
+            {
+                tVertexIndices( iVert ) = tVertexGroup->get_vertex( iVert )->get_index();
+            }
+
+            if ( this->get_geom_engine()->is_intersected( aGeometryIndex, tVertexIndices, tVertexCoordinates ) )
+            {
+                tIntersectedCells.push_back( iCell );
+                tNumAdded++;
+            }
+        }
+
+        if ( tNumAdded > 0 )
+        {
+            std::sort( tIntersectedCells.begin(), tIntersectedCells.end() );
+            MORIS_LOG_INFO( "XTK - Geometry %u: %u decomposed cells intersected only at child vertices (MB-016)", aGeometryIndex, tNumAdded );
+        }
+    }
+
+    // ----------------------------------------------------------------------------------
+
     void
     Integration_Mesh_Generator::check_intersected_background_cell_levels(
             Integration_Mesh_Generation_Data& aMeshGenerationData,
@@ -463,6 +579,23 @@ namespace moris::xtk
             aMeshGenerationData.mIntersectedBackgroundCellIndex( iGeom ).reserve( tNumCells / tNumGeometries );
         }
 
+        // MB-031: a geometry evaluated exactly at derived vertices (analytic level set) can change sign inside a cell
+        // whose corners share one sign. Also test the vertices the regular subdivision will create in the cell, so the
+        // cell selection agrees with the field the decomposition sees.
+        Vector< Matrix< DDRMat > > tSubdivisionVertexParamCoords = this->get_regular_subdivision_vertex_parametric_coordinates();
+        Vector< bool >             tTestInteriorPoints( tNumGeometries, false );
+        bool                       tAnyInteriorTest = false;
+        if ( tSubdivisionVertexParamCoords.size() > 0 )
+        {
+            for ( moris::size_t iGeom = 0; iGeom < tNumGeometries; iGeom++ )
+            {
+                tTestInteriorPoints( iGeom ) = mXTKModel->get_geom_engine()->can_change_region_inside_cell( iGeom );
+                tAnyInteriorTest             = tAnyInteriorTest or tTestInteriorPoints( iGeom );
+            }
+        }
+        Vector< Matrix< DDRMat > > tInteriorPoints;
+        uint                       tNumInteriorOnly = 0;
+
         // iterate through all cells
         for ( uint iCell = 0; iCell < tNumCells; iCell++ )
         {
@@ -470,10 +603,24 @@ namespace moris::xtk
             tGeometricQuery.set_parent_cell( &aBackgroundMesh->get_mtk_cell( (moris_index)iCell ) );
             tGeometricQuery.set_query_cell( &aBackgroundMesh->get_mtk_cell( (moris_index)iCell ) );
 
+            // global coordinates of the regular-subdivision vertices of this cell
+            if ( tAnyInteriorTest )
+            {
+                this->compute_interior_sample_points( aBackgroundMesh->get_mtk_cell( (moris_index)iCell ), tSubdivisionVertexParamCoords, tInteriorPoints );
+            }
+
             // iterate through all geometries for current cell
             for ( moris::size_t iGeom = 0; iGeom < tNumGeometries; iGeom++ )
             {
-                if ( mXTKModel->get_geom_engine()->is_intersected( iGeom, tGeometricQuery.get_query_entity_to_vertex_connectivity(), tGeometricQuery.get_query_indexed_coordinates() ) )
+                bool tIsIntersected = mXTKModel->get_geom_engine()->is_intersected( iGeom, tGeometricQuery.get_query_entity_to_vertex_connectivity(), tGeometricQuery.get_query_indexed_coordinates() );
+
+                if ( not tIsIntersected and tTestInteriorPoints( iGeom ) )
+                {
+                    tIsIntersected = mXTKModel->get_geom_engine()->is_intersected( iGeom, tGeometricQuery.get_query_entity_to_vertex_connectivity(), tGeometricQuery.get_query_indexed_coordinates(), tInteriorPoints );
+                    tNumInteriorOnly += tIsIntersected;
+                }
+
+                if ( tIsIntersected )
                 {
                     // add background cell to the list for iGEOM
                     aMeshGenerationData.mIntersectedBackgroundCellIndex( iGeom ).push_back( iCell );
@@ -494,6 +641,11 @@ namespace moris::xtk
         shrink_to_fit_all( aMeshGenerationData.mIntersectedBackgroundCellIndex );
 
         unique( aMeshGenerationData.mAllIntersectedBgCellInds );
+
+        if ( tNumInteriorOnly > 0 )
+        {
+            MORIS_LOG_INFO( "XTK - Cells intersected only inside (subdivision vertices, MB-031): %u", tNumInteriorOnly );
+        }
 
         return true;
     }
@@ -523,6 +675,10 @@ namespace moris::xtk
 
         tGeometricQuery.set_query_entity_rank( mtk::EntityRank::ELEMENT );
 
+        // same interior-point test as in determine_intersected_background_cells() (MB-031)
+        Vector< Matrix< DDRMat > > tSubdivisionVertexParamCoords = this->get_regular_subdivision_vertex_parametric_coordinates();
+        Vector< Matrix< DDRMat > > tInteriorPoints;
+
         // iterate through all cells
         for ( uint iCell = 0; iCell < tNumCells; iCell++ )
         {
@@ -533,11 +689,16 @@ namespace moris::xtk
             tGeometricQuery.set_parent_cell( &aBackgroundMesh->get_mtk_cell( (moris_index)iCell ) );
             tGeometricQuery.set_query_cell( &aBackgroundMesh->get_mtk_cell( (moris_index)iCell ) );
 
+            if ( tSubdivisionVertexParamCoords.size() > 0 )
+            {
+                this->compute_interior_sample_points( aBackgroundMesh->get_mtk_cell( (moris_index)iCell ), tSubdivisionVertexParamCoords, tInteriorPoints );
+            }
+
             // iterate through all geometries for current cell and check if it gets cut by any of the geometries
             for ( moris::size_t iGeom = 0; iGeom < tNumGeometries; iGeom++ )
             {
-                // set to true if cell is cut by current or any previous geometry
-                tCellIsCut = tCellIsCut || mXTKModel->get_geom_engine()->is_intersected( iGeom, tGeometricQuery.get_query_entity_to_vertex_connectivity(), tGeometricQuery.get_query_indexed_coordinates() );
+                // set to true if cell is cut by current or any previous geometry (interior points are only evaluated for exact fields)
+                tCellIsCut = tCellIsCut || mXTKModel->get_geom_engine()->is_intersected( iGeom, tGeometricQuery.get_query_entity_to_vertex_connectivity(), tGeometricQuery.get_query_indexed_coordinates(), tInteriorPoints );
             }
 
             // if the cell is not cut by any geometry, store the cell's index

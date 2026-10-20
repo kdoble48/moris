@@ -14,6 +14,7 @@
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Cluster.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 
 #include "fn_norm.hpp"
 #include "fn_min.hpp"
@@ -1968,6 +1969,12 @@ namespace moris::fem
         // get number of requested dv types
         uint tNumPdvType = tRequestedPdvTypes.size();
 
+        // skip remainder if no dv types active on element (as IWG::select_dRdp_FD_material)
+        if ( tNumPdvType == 0 )
+        {
+            return;
+        }
+
         // reset the QI
         mSet->get_QI()( tIQIAssemblyIndex ).fill( 0.0 );
 
@@ -2229,6 +2236,148 @@ namespace moris::fem
         }
 
         return tDeltaH;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI::compute_dQIdp_geometry(
+            moris::real                   aWStar,
+            moris::real                   aPerturbation,
+            fem::FDScheme_Type            aFDSchemeType,
+            Matrix< DDSMat >&             aGeoLocalAssembly,
+            Vector< Matrix< IndexMat > >& aVertexIndices )
+    {
+        if ( this->has_analytical_dQIdp_geometry() )
+        {
+            this->compute_dQIdp_geometry_analytical(
+                    aWStar,
+                    aPerturbation,
+                    aFDSchemeType,
+                    aGeoLocalAssembly );
+        }
+        else
+        {
+            this->compute_dQIdp_FD_geometry(
+                    aWStar,
+                    aPerturbation,
+                    aFDSchemeType,
+                    aGeoLocalAssembly,
+                    aVertexIndices );
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    IQI::has_analytical_dQIdp_geometry()
+    {
+        // analytical geometric sensitivities are implemented for bulk and (single) side sets
+        const fem::Element_Type tElementType = mSet->get_element_type();
+
+        if ( tElementType != fem::Element_Type::BULK && tElementType != fem::Element_Type::SIDESET )
+        {
+            return false;
+        }
+
+        return this->supports_analytical_dQIdp_geometry();
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI::compute_dQIdp_geometry_analytical(
+            moris::real        aWStar,
+            moris::real        aPerturbation,
+            fem::FDScheme_Type aFDSchemeType,
+            Matrix< DDSMat >&  aGeoLocalAssembly )
+    {
+        // get the IQI index
+        uint tIQIAssemblyIndex = mSet->get_QI_assembly_index( mName );
+
+        // vertex contributions, only if an IG vertex of this cell carries an active geometry pdv
+        if ( has_active_geometry_pdv( aGeoLocalAssembly ) )
+        {
+            // is the IG cell a side
+            const bool tIsSide = mSet->get_element_type() == fem::Element_Type::SIDESET;
+
+            // get the IG geometry interpolator
+            Geometry_Interpolator* tIGGI =
+                    mSet->get_field_interpolator_manager()->get_IG_geometry_interpolator();
+
+            // evaluate the QI contribution of this IQI at the evaluation point, keep the set QI
+            Matrix< DDRMat > tQIStore = mSet->get_QI()( tIQIAssemblyIndex );
+            mSet->get_QI()( tIQIAssemblyIndex ).fill( 0.0 );
+            this->compute_QI( aWStar );
+            const real tQI                      = mSet->get_QI()( tIQIAssemblyIndex )( 0 );
+            mSet->get_QI()( tIQIAssemblyIndex ) = tQIStore;
+
+            // derivatives of the QI contribution wrt the evaluation point location and the normal
+            Matrix< DDRMat > tdQIdx;
+            Matrix< DDRMat > tdQIdn;
+            this->compute_dQIdx_geometry_integrand( aWStar, tdQIdx, tdQIdn );
+
+            // relative derivative of the integration measure wrt the IG vertex coordinates
+            Matrix< DDRMat > tdMeasure;
+            eval_ig_measure_derivatives( tIGGI, tIsSide, tdMeasure );
+
+            // derivative of the normal wrt the IG vertex coordinates
+            Vector< Matrix< DDRMat > > tdNormal;
+            const bool                 tUseNormal = tIsSide && tdQIdn.numel() > 0;
+            if ( tUseNormal )
+            {
+                eval_ig_normal_derivatives( tIGGI, mNormal, tdNormal );
+            }
+
+            // IG shape functions at the evaluation point
+            const Matrix< DDRMat >& tNIG = tIGGI->NXi();
+
+            // number of IG vertices and space dimensions
+            const uint tNumVertices = aGeoLocalAssembly.n_rows();
+            const uint tNumSpaceDim = aGeoLocalAssembly.n_cols();
+
+            for ( uint iDir = 0; iDir < tNumSpaceDim; iDir++ )
+            {
+                for ( uint iVertex = 0; iVertex < tNumVertices; iVertex++ )
+                {
+                    // get the geometry pdv assembly index
+                    sint tPdvAssemblyIndex = aGeoLocalAssembly( iVertex, iDir );
+
+                    // skip inactive pdvs
+                    if ( tPdvAssemblyIndex == -1 )
+                    {
+                        continue;
+                    }
+
+                    // measure and evaluation point contributions
+                    real tdQIdp = tdMeasure( iVertex, iDir ) * tQI + tNIG( iVertex ) * tdQIdx( iDir );
+
+                    // normal contribution
+                    if ( tUseNormal )
+                    {
+                        for ( uint iNormal = 0; iNormal < tdQIdn.numel(); iNormal++ )
+                        {
+                            tdQIdp += tdNormal( iDir )( iNormal, iVertex ) * tdQIdn( iNormal );
+                        }
+                    }
+
+                    mSet->get_dqidpgeo()( tIQIAssemblyIndex )( tPdvAssemblyIndex ) += tdQIdp;
+                }
+            }
+        }
+
+        // if active cluster measure on IQI (as in the FD path)
+        if ( mActiveCMEAFlag )
+        {
+            this->add_cluster_measure_dQIdp_FD_geometry(
+                    aWStar,
+                    aPerturbation,
+                    aFDSchemeType );
+        }
+
+        // check for nan, infinity
+        MORIS_ASSERT( isfinite( mSet->get_dqidpgeo()( tIQIAssemblyIndex ) ),
+                "IQI::compute_dQIdp_geometry_analytical - dQIdp contains NAN or INF, exiting!" );
     }
 
     //------------------------------------------------------------------------------

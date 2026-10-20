@@ -72,6 +72,11 @@ namespace moris
             /// Flag to permanently disable SDF reinit once it has weaned off (design converged)
             bool mSDFWeanedOff = false;
 
+            /// Whether the MDL fields (e.g. an error indicator) were computed on the current mesh: set by a forward
+            /// solve, cleared by a remesh. A remesh requested before any solve on the new mesh (XTK failed) must not
+            /// refine on them (MB-033).
+            bool mMDLFieldsOnCurrentMesh = false;
+
             /// Design variables (ADVs) captured at the previous scheduled reinit, used to measure
             /// the design-variable change between reinits for the wean-off decision
             Vector< real > mPrevReinitADVs;

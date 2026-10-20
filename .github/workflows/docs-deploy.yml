@@ -1,24 +1,18 @@
 name: Documentation deploy
 
-# Publishes the Sphinx site (doc/) to GitHub Pages on pushes to develop.
+# Publishes the Sphinx site (doc/) to GitHub Pages weekly and on manual
+# dispatch. Not on every push: the site need not track each commit.
 #
 # Requires (repository settings):
 #   - Pages enabled with source "GitHub Actions";
-#   - the Actions allow-list to include actions/upload-pages-artifact@v3,
-#     actions/upload-artifact@v4 (used inside it), and actions/deploy-pages@v4.
+#   - the Actions allow-list to include actions/upload-pages-artifact@v5,
+#     actions/upload-artifact@v4 (used inside it), and actions/deploy-pages@v5.
 # Kept separate from docs.yml so the PR build check runs under the
 # checkout-only allow-list.
 
 on:
-  push:
-    branches:
-      - develop
-    paths:
-      - "doc/**"
-      - "projects/**/*.hpp"
-      - "projects/EXA/**"
-      - "CMakeLists.txt"
-      - ".github/workflows/docs-deploy.yml"
+  schedule:
+    - cron: "0 6 * * 0"    # Sundays 06:00 UTC, from develop
   workflow_dispatch:
 
 permissions:
@@ -33,7 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build site
         env:
@@ -41,7 +35,7 @@ jobs:
         run: bash doc/ci_build.sh
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: doc/_build/html
 
@@ -58,4 +52,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

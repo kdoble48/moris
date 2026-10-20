@@ -84,6 +84,25 @@ namespace moris::gen
                 const Matrix< DDRMat >& aNodeCoordinates ) = 0;
 
         /**
+         * Whether this geometry can change geometric region strictly inside a background cell while every corner node
+         * lies in one region, i.e. whether its derived nodes are evaluated exactly rather than interpolated from the
+         * cell's nodes (MB-031). Cut-cell detection then has to sample the points where the decomposition creates
+         * vertices. Default: false.
+         *
+         * @return If the region can change inside a cell with uniform corner regions
+         */
+        virtual bool can_change_region_inside_cell() const;
+
+        /**
+         * Gets the geometric region at an arbitrary point, as a derived node at this point would be classified.
+         * Only valid if can_change_region_inside_cell() is true.
+         *
+         * @param aCoordinates Point coordinates
+         * @return Geometric region enum
+         */
+        virtual Geometric_Region get_geometric_region_at_point( const Matrix< DDRMat >& aCoordinates );
+
+        /**
          * Creates an intersection node based on the given information. The intersection node may or may not represent an intersection;
          * that is, its position may lie outside of the edge definition based on the given nodal coordinates. This information can be
          * requested from the created intersection node.

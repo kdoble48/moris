@@ -109,3 +109,69 @@ article table.docutils {
     display: block;
     overflow-x: auto;
 }
+
+/* Relational graph of the examples (exa_graph.js): ego graph on each page, full map on examples/graph */
+.exa-graph {
+    position: relative;
+    width: 100%;
+    margin: 0.5em 0 1em;
+    border: 1px solid var(--color-background-border);
+    border-radius: 0.4em;
+    background: var(--color-background-secondary);
+    overflow: hidden;
+}
+.exa-graph svg { display: block; }
+.exa-graph-link { stroke: var(--color-foreground-border); stroke-opacity: 0.6; }
+.exa-graph-node circle { stroke: var(--color-background-primary); stroke-width: 2px; }
+.exa-graph-centre circle { stroke: var(--color-foreground-primary); stroke-width: 3px; }
+.exa-graph-label {
+    font-size: 12px;
+    fill: var(--color-foreground-primary);
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: var(--color-background-secondary);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+.exa-graph-label-small { font-size: 10px; }
+.exa-graph-dim { opacity: 0.15; }
+.exa-graph-tip {
+    position: absolute;
+    z-index: 2;
+    max-width: 18em;
+    padding: 0.4em 0.6em;
+    font-size: 0.8em;
+    background: var(--color-background-primary);
+    border: 1px solid var(--color-background-border);
+    border-radius: 0.3em;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    pointer-events: none;
+}
+.exa-graph-tip img { display: block; max-width: 100%; margin-bottom: 0.3em; border-radius: 0.2em; }
+.exa-graph-shared { margin: 0.3em 0 0; padding-left: 1.1em; color: var(--color-foreground-secondary); }
+.exa-graph-shared li { margin: 0; }
+.exa-graph-score { margin-top: 0.2em; font-size: 0.9em; color: var(--color-foreground-muted); }
+.exa-graph-link-hit { stroke: transparent; stroke-width: 12px; cursor: help; }
+.exa-graph-family { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
+.exa-graph-family.exa-graph-off { opacity: 0.4; text-decoration: line-through; }
+.exa-graph-bar {
+    position: absolute;
+    top: 0.5em;
+    left: 0.5em;
+    right: 0.5em;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em 1em;
+    align-items: center;
+    font-size: 0.8em;
+}
+.exa-graph-bar select { font-size: inherit; }
+.exa-graph-legend .exa-graph-family { margin-right: 0.8em; white-space: nowrap; }
+.exa-graph-legend i {
+    display: inline-block;
+    width: 0.8em;
+    height: 0.8em;
+    margin-right: 0.3em;
+    border-radius: 50%;
+    vertical-align: -0.05em;
+}

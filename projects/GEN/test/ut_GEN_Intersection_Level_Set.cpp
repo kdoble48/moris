@@ -9,6 +9,7 @@
  */
 
 #include "catch.hpp"
+#include <algorithm>
 #include <cmath>
 #include "fn_eye.hpp"
 
@@ -1088,6 +1089,339 @@ namespace moris::gen
 
             // Clean up
             delete tMesh;
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Builds a geometry engine with ADV-driven lines on a single [-1, 1]^2 quad and queues a chain of (nested)
+     * intersections, then returns the coordinates, local coordinates and dense coordinate sensitivities of every
+     * derived node. Each line is phi = n_x ( x - c_x ) + n_y ( y - c_y ) with all four parameters as ADVs, so the ADV
+     * vector is { c_x, c_y, n_x, n_y } for line 0, then line 1, and so on.
+     *
+     * @param aMesh Single-element [-1, 1]^2 interpolation mesh
+     * @param aLineParameters Line parameters, 4 per line; these are the ADVs
+     * @param aEdges Queue sequence { first parent, second parent, cutting line }, in increasing line order. A parent
+     * below 4 is a corner of the background element (0: (-1, -1), 1: (1, -1), 2: (1, 1), 3: (-1, 1)); a parent of 4 or
+     * more is the derived node with that index (edge i creates node 4 + i).
+     * @param aCoordinates Global coordinates of each derived node
+     * @param aLocalCoordinates Local coordinate of each derived node on its parent edge
+     * @param aSensitivities Dense dX/dADV ( 2 x number of ADVs ) of each derived node
+     */
+    static void
+    build_nested_line_intersections(
+            mtk::Interpolation_Mesh*        aMesh,
+            const Vector< real >&           aLineParameters,
+            const Vector< Vector< uint > >& aEdges,
+            Vector< Matrix< DDRMat > >&     aCoordinates,
+            Vector< real >&                 aLocalCoordinates,
+            Vector< Matrix< DDRMat > >&     aSensitivities )
+    {
+        // Lines, every parameter an ADV (lower bound = value = upper bound)
+        uint                      tNumLines = aLineParameters.size() / 4;
+        Submodule_Parameter_Lists tFieldParameterLists( "FIELDS" );
+        for ( uint iLine = 0; iLine < tNumLines; iLine++ )
+        {
+            real tCenterX = aLineParameters( 4 * iLine );
+            real tCenterY = aLineParameters( 4 * iLine + 1 );
+            real tNormalX = aLineParameters( 4 * iLine + 2 );
+            real tNormalY = aLineParameters( 4 * iLine + 3 );
+            tFieldParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::LINE ) );
+            tFieldParameterLists.set( "center_x", tCenterX, tCenterX, tCenterX );
+            tFieldParameterLists.set( "center_y", tCenterY, tCenterY, tCenterY );
+            tFieldParameterLists.set( "normal_x", tNormalX, tNormalX, tNormalX );
+            tFieldParameterLists.set( "normal_y", tNormalY, tNormalY, tNormalY );
+        }
+
+        // Create geometry engine
+        Geometry_Engine_Parameters tGeometryEngineParameters;
+        ADV_Manager                tADVManager;
+        Design_Factory             tDesignFactory( tFieldParameterLists, tADVManager );
+        tGeometryEngineParameters.mADVManager = tADVManager;
+        tGeometryEngineParameters.mGeometries = tDesignFactory.get_geometries();
+        Geometry_Engine_Test tGeometryEngine( aMesh, tGeometryEngineParameters );
+
+        // The ADV vector is ordered line by line as { c_x, c_y, n_x, n_y }
+        Vector< real >& tADVs = tGeometryEngine.get_advs();
+        REQUIRE( tADVs.size() == aLineParameters.size() );
+        for ( uint iADV = 0; iADV < tADVs.size(); iADV++ )
+        {
+            REQUIRE( tADVs( iADV ) == aLineParameters( iADV ) );
+        }
+
+        // Background element; parametric and global coordinates coincide on the single [-1, 1]^2 element
+        Matrix< IndexMat > tSignedNodeIndices = aMesh->get_nodes_connected_to_element_loc_inds( 0 );
+        Matrix< DDUMat >   tElementNodes( 4, 1 );
+        for ( uint iNode = 0; iNode < 4; iNode++ )
+        {
+            tElementNodes( iNode )            = tSignedNodeIndices( iNode );
+            Matrix< DDRMat > tNodeCoordinates = aMesh->get_node_coordinate( tElementNodes( iNode ) );
+            REQUIRE( tNodeCoordinates( 0 ) == Approx( tQuadParametricCoordinates( iNode )( 0 ) ) );
+            REQUIRE( tNodeCoordinates( 1 ) == Approx( tQuadParametricCoordinates( iNode )( 1 ) ) );
+        }
+        Node_Manager& tNodeManager = tGeometryEngine.get_node_manager();
+        REQUIRE( tNodeManager.get_total_number_of_nodes() == 4 );
+
+        uint tActiveLine = 0;
+        aLocalCoordinates.resize( aEdges.size() );
+        for ( uint iEdge = 0; iEdge < aEdges.size(); iEdge++ )
+        {
+            // Advance to the line that cuts this edge
+            REQUIRE( aEdges( iEdge )( 2 ) >= tActiveLine );
+            REQUIRE( aEdges( iEdge )( 2 ) < tNumLines );
+            while ( tActiveLine < aEdges( iEdge )( 2 ) )
+            {
+                tGeometryEngine.advance_geometry_index();
+                tActiveLine++;
+            }
+
+            // Parent node indices: element corners or derived nodes
+            uint tFirstNodeIndex  = aEdges( iEdge )( 0 ) < 4 ? tElementNodes( aEdges( iEdge )( 0 ) ) : aEdges( iEdge )( 0 );
+            uint tSecondNodeIndex = aEdges( iEdge )( 1 ) < 4 ? tElementNodes( aEdges( iEdge )( 1 ) ) : aEdges( iEdge )( 1 );
+
+            // Parametric coordinates of the edge nodes (equal to the global coordinates on this element)
+            const Matrix< DDRMat >& tFirstCoordinates  = tNodeManager.get_node( tFirstNodeIndex ).get_global_coordinates();
+            const Matrix< DDRMat >& tSecondCoordinates = tNodeManager.get_node( tSecondNodeIndex ).get_global_coordinates();
+            Matrix< DDRMat >        tFirstParametric   = { { tFirstCoordinates( 0 ), tFirstCoordinates( 1 ) } };
+            Matrix< DDRMat >        tSecondParametric  = { { tSecondCoordinates( 0 ), tSecondCoordinates( 1 ) } };
+
+            // Fixed branch: every edge is cut in its interior, never at a parent
+            bool tIntersectionQueued = tGeometryEngine.queue_intersection(
+                    tFirstNodeIndex,
+                    tSecondNodeIndex,
+                    tFirstParametric,
+                    tSecondParametric,
+                    tElementNodes,
+                    mtk::Geometry_Type::QUAD,
+                    mtk::Interpolation_Order::LINEAR );
+            REQUIRE( tIntersectionQueued );
+            REQUIRE( not tGeometryEngine.queued_intersection_first_parent_on_interface() );
+            REQUIRE( not tGeometryEngine.queued_intersection_second_parent_on_interface() );
+            aLocalCoordinates( iEdge ) = tGeometryEngine.get_queued_intersection_local_coordinate();
+            REQUIRE( std::abs( aLocalCoordinates( iEdge ) ) < 0.9 );
+
+            // Admit; the new node takes the next index
+            tGeometryEngine.admit_queued_intersection();
+            REQUIRE( tNodeManager.get_total_number_of_nodes() == 5 + iEdge );
+        }
+
+        // Coordinates and dense dX/dADV of every derived node
+        aCoordinates.resize( aEdges.size() );
+        aSensitivities.resize( aEdges.size() );
+        for ( uint iEdge = 0; iEdge < aEdges.size(); iEdge++ )
+        {
+            uint tNodeIndex       = 4 + iEdge;
+            aCoordinates( iEdge ) = tNodeManager.get_node( tNodeIndex ).get_global_coordinates();
+
+            Matrix< DDRMat > tI;
+            eye( 2, 2, tI );
+            Matrix< DDRMat > tSensitivities;
+            tNodeManager.append_dcoordinate_dadv_from_derived_node( tNodeIndex, tSensitivities, tI );
+            Vector< sint > tADVIDs = tNodeManager.get_coordinate_determining_adv_ids_from_derived_node( tNodeIndex );
+            REQUIRE( tSensitivities.n_rows() == 2 );
+            REQUIRE( tSensitivities.n_cols() == tADVIDs.size() );
+
+            // Accumulate repeated ADV IDs into a dense matrix
+            aSensitivities( iEdge ).set_size( 2, aLineParameters.size(), 0.0 );
+            for ( uint iColumn = 0; iColumn < tADVIDs.size(); iColumn++ )
+            {
+                REQUIRE( tADVIDs( iColumn ) >= 0 );
+                REQUIRE( tADVIDs( iColumn ) < static_cast< sint >( aLineParameters.size() ) );
+                for ( uint iDimension = 0; iDimension < 2; iDimension++ )
+                {
+                    aSensitivities( iEdge )( iDimension, tADVIDs( iColumn ) ) += tSensitivities( iDimension, iColumn );
+                }
+            }
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Checks the analytic coordinate sensitivities of every derived node of a nested line-intersection chain against
+     * central finite differences of the intersection coordinates. Every perturbed state rebuilds the whole chain in a
+     * fresh geometry engine and must stay on the nominal branch (same parent edges, nearby local coordinates).
+     *
+     * @param aLineParameters Line parameters, 4 per line; these are the ADVs
+     * @param aEdges Queue sequence, see build_nested_line_intersections()
+     * @param aDependsOnLine Per derived node and line, 1 if the node coordinates must depend on that line's ADVs
+     * @return Maximum relative error per derived node
+     */
+    static Vector< real >
+    check_nested_line_intersections_against_finite_differences(
+            const Vector< real >&           aLineParameters,
+            const Vector< Vector< uint > >& aEdges,
+            const Vector< Vector< uint > >& aDependsOnLine )
+    {
+        // Single [-1, 1]^2 element
+        mtk::Interpolation_Mesh* tMesh = create_simple_mesh( 1, 1 );
+
+        uint tNumADVs  = aLineParameters.size();
+        uint tNumLines = tNumADVs / 4;
+        uint tNumNodes = aEdges.size();
+
+        // Analytic sensitivities at the nominal design
+        Vector< Matrix< DDRMat > > tCoordinates;
+        Vector< real >             tLocalCoordinates;
+        Vector< Matrix< DDRMat > > tAnalytic;
+        build_nested_line_intersections( tMesh, aLineParameters, aEdges, tCoordinates, tLocalCoordinates, tAnalytic );
+
+        // Central finite differences of the intersection coordinates
+        real                       tStep = 1.0e-6;
+        Vector< Matrix< DDRMat > > tFiniteDifference( tNumNodes );
+        for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+        {
+            tFiniteDifference( iNode ).set_size( 2, tNumADVs, 0.0 );
+        }
+        for ( uint iADV = 0; iADV < tNumADVs; iADV++ )
+        {
+            Vector< real > tPlusADVs  = aLineParameters;
+            Vector< real > tMinusADVs = aLineParameters;
+            tPlusADVs( iADV ) += tStep;
+            tMinusADVs( iADV ) -= tStep;
+
+            Vector< Matrix< DDRMat > > tPlusCoordinates;
+            Vector< Matrix< DDRMat > > tMinusCoordinates;
+            Vector< real >             tPlusLocalCoordinates;
+            Vector< real >             tMinusLocalCoordinates;
+            Vector< Matrix< DDRMat > > tUnusedSensitivities;
+            build_nested_line_intersections( tMesh, tPlusADVs, aEdges, tPlusCoordinates, tPlusLocalCoordinates, tUnusedSensitivities );
+            build_nested_line_intersections( tMesh, tMinusADVs, aEdges, tMinusCoordinates, tMinusLocalCoordinates, tUnusedSensitivities );
+
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                // Same branch: the perturbed intersections stay next to the nominal ones on the same edges
+                REQUIRE( std::abs( tPlusLocalCoordinates( iNode ) - tLocalCoordinates( iNode ) ) < 1.0e-4 );
+                REQUIRE( std::abs( tMinusLocalCoordinates( iNode ) - tLocalCoordinates( iNode ) ) < 1.0e-4 );
+
+                for ( uint iDimension = 0; iDimension < 2; iDimension++ )
+                {
+                    tFiniteDifference( iNode )( iDimension, iADV ) =
+                            ( tPlusCoordinates( iNode )( iDimension ) - tMinusCoordinates( iNode )( iDimension ) ) / ( 2.0 * tStep );
+                }
+            }
+        }
+
+        // Compare analytic to finite difference, entry by entry
+        real           tTolerance = 1.0e-6;
+        Vector< real > tMaxErrors( tNumNodes, 0.0 );
+        for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+        {
+            for ( uint iADV = 0; iADV < tNumADVs; iADV++ )
+            {
+                for ( uint iDimension = 0; iDimension < 2; iDimension++ )
+                {
+                    real tAnalyticValue = tAnalytic( iNode )( iDimension, iADV );
+                    real tFDValue       = tFiniteDifference( iNode )( iDimension, iADV );
+                    real tError         = std::abs( tAnalyticValue - tFDValue ) / std::max( 1.0, std::abs( tFDValue ) );
+                    tMaxErrors( iNode ) = std::max( tMaxErrors( iNode ), tError );
+
+                    INFO( "node " << 4 + iNode << ", dimension " << iDimension << ", ADV " << iADV
+                                  << ": analytic " << tAnalyticValue << ", finite difference " << tFDValue );
+                    CHECK( tError < tTolerance );
+                }
+            }
+
+            // The chain is non-trivial: each node feels the ADVs of exactly the lines of itself and its ancestors
+            for ( uint iLine = 0; iLine < tNumLines; iLine++ )
+            {
+                real tLineSum = 0.0;
+                for ( uint iParameter = 0; iParameter < 4; iParameter++ )
+                {
+                    for ( uint iDimension = 0; iDimension < 2; iDimension++ )
+                    {
+                        tLineSum += std::abs( tFiniteDifference( iNode )( iDimension, 4 * iLine + iParameter ) );
+                    }
+                }
+                INFO( "node " << 4 + iNode << ", line " << iLine << ": sum |dX/dADV| = " << tLineSum );
+                CHECK( ( tLineSum > 1.0e-3 ) == ( aDependsOnLine( iNode )( iLine ) == 1 ) );
+            }
+
+            INFO( "node " << 4 + iNode << ": max relative error " << tMaxErrors( iNode ) );
+            CHECK( tMaxErrors( iNode ) < tTolerance );
+        }
+
+        // Clean up
+        delete tMesh;
+
+        return tMaxErrors;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Nested Linear Intersections Finite Difference", "[gen], [pdv], [intersection], [linear intersection], [MB-022]" )
+    {
+        if ( par_size() == 1 )
+        {
+            // Three levels of moving intersections, all on lines whose four parameters are ADVs:
+            //   node 4 (P1): line 0 on corner 0 -> corner 1      level 1
+            //   node 5 (P2): line 0 on corner 2 -> corner 3      level 1
+            //   node 6 (Q):  line 1 on P1 -> P2                  level 2, both parents moving
+            //   node 7 (R):  line 2 on Q -> corner 2             level 3, moving first parent
+            // R reaches the ADVs of line 0 only through Q's parents, so those columns are a product of three chain
+            // factors; dropping the incoming factor in the parent recursion (MB-022) breaks them.
+            // Q lies on line 0 and moves sideways with it. Line 2's normal is parallel to Q's parent edge P1 -> P2
+            // (both are (-0.2, 1)), so the edge-projected field gradient used for d(xi)/d(parent coordinates) is the
+            // full gradient and MB-030 does not enter this check (see the [MB-030] case below for that defect).
+            // Line parameters { c_x, c_y, n_x, n_y } per line (the ADVs):
+            //   line 0: nearly vertical, cuts the bottom and top edges
+            //   line 1: nearly horizontal, cuts P1 -> P2
+            //   line 2: normal along P1 -> P2, cuts Q -> (1, 1)
+            Vector< real >           tLineParameters = { 0.1, 0.0, 1.0, 0.2, 0.0, 0.05, 0.15, 1.0, 0.5, 0.5, -0.2, 1.0 };
+            Vector< Vector< uint > > tEdges          = {
+                { 0, 1, 0 },
+                { 2, 3, 0 },
+                { 4, 5, 1 },
+                { 6, 2, 2 }
+            };
+            Vector< Vector< uint > > tDependsOnLine = {
+                { 1, 0, 0 },
+                { 1, 0, 0 },
+                { 1, 1, 0 },
+                { 1, 1, 1 }
+            };
+            check_nested_line_intersections_against_finite_differences( tLineParameters, tEdges, tDependsOnLine );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // Hidden (known failure, MB-030): the field gradient used for d(xi)/d(parent coordinates) of an intersection-node
+    // parent is the projection of grad(phi) onto that parent's own edge (Level_Set_Geometry::get_dfield_dcoordinates),
+    // which is exact only while the parent moves along its edge. Here Q's parent edge P1 -> P2 lies on line 0 and moves
+    // sideways with line 0, so R (level 3) is wrong in the line-0 columns and T (level 4) in the line-0 and line-1
+    // columns. Run with GEN-test.exe "[MB-030]"; remove the [.] tag once MB-030 is fixed.
+    TEST_CASE( "Nested Linear Intersections Finite Difference Off-Edge Parent", "[.], [gen], [pdv], [intersection], [MB-030]" )
+    {
+        if ( par_size() == 1 )
+        {
+            //   node 4 (P1): line 0 on corner 0 -> corner 1     level 1
+            //   node 5 (P2): line 0 on corner 2 -> corner 3     level 1
+            //   node 6 (Q):  line 1 on P1 -> P2                 level 2 (Q lies on line 0)
+            //   node 7 (R):  line 2 on Q -> corner 2            level 3
+            //   node 8 (T):  line 3 on P1 -> R                  level 4
+            // Line parameters { c_x, c_y, n_x, n_y } per line (the ADVs):
+            //   line 0: nearly vertical
+            //   line 1: nearly horizontal
+            //   line 2: cuts Q -> (1, 1)
+            //   line 3: cuts P1 -> R
+            Vector< real >           tLineParameters = { 0.1, 0.0, 1.0, 0.2, 0.0, 0.05, 0.15, 1.0, 0.6, 0.5, 1.0, 0.3, 0.5, -0.2, 1.0, -0.4 };
+            Vector< Vector< uint > > tEdges          = {
+                { 0, 1, 0 },
+                { 2, 3, 0 },
+                { 4, 5, 1 },
+                { 6, 2, 2 },
+                { 4, 7, 3 }
+            };
+            Vector< Vector< uint > > tDependsOnLine = {
+                { 1, 0, 0, 0 },
+                { 1, 0, 0, 0 },
+                { 1, 1, 0, 0 },
+                { 1, 1, 1, 0 },
+                { 1, 1, 1, 1 }
+            };
+            check_nested_line_intersections_against_finite_differences( tLineParameters, tEdges, tDependsOnLine );
         }
     }
 

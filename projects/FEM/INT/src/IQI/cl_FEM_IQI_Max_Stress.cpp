@@ -11,6 +11,8 @@
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_IQI_Max_Stress.hpp"
+#include "cl_FEM_CM_Struc_Linear.hpp"
+#include "fn_dot.hpp"
 
 namespace moris::fem
 {
@@ -303,35 +305,41 @@ namespace moris::fem
     Matrix< DDRMat >
     IQI_Max_Stress::get_stress_vector()
     {
+        // get stress vector from Constitutive model and pull apart stress vector into components
+        return standardize_stress_vector(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux() );
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat >
+    IQI_Max_Stress::standardize_stress_vector( const Matrix< DDRMat >& aCMStress )
+    {
         // create stress vector
         Matrix< DDRMat > tStressVector( 6, 1, 0.0 );
 
-        // get stress vector from Constitutive model
-        Matrix< DDRMat > tCMStress =
-                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux();
-
         // pull apart stress vector into components
-        uint tNumStressComponents = tCMStress.length();
+        uint tNumStressComponents = aCMStress.length();
         switch ( tNumStressComponents )
         {
             // 2D plane stress
             case 3:
-                tStressVector( 0 ) = tCMStress( 0 );
-                tStressVector( 1 ) = tCMStress( 1 );
-                tStressVector( 5 ) = tCMStress( 2 );
+                tStressVector( 0 ) = aCMStress( 0 );
+                tStressVector( 1 ) = aCMStress( 1 );
+                tStressVector( 5 ) = aCMStress( 2 );
                 break;
 
                 // 2D plane strain
             case 4:
-                tStressVector( 0 ) = tCMStress( 0 );
-                tStressVector( 1 ) = tCMStress( 1 );
-                tStressVector( 2 ) = tCMStress( 2 );
-                tStressVector( 5 ) = tCMStress( 3 );
+                tStressVector( 0 ) = aCMStress( 0 );
+                tStressVector( 1 ) = aCMStress( 1 );
+                tStressVector( 2 ) = aCMStress( 2 );
+                tStressVector( 5 ) = aCMStress( 3 );
                 break;
 
                 // 3D
             case 6:
-                tStressVector = tCMStress;
+                tStressVector = aCMStress;
                 break;
 
                 // Unknown size - error
@@ -342,6 +350,89 @@ namespace moris::fem
 
         // return filled stress vector
         return tStressVector;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    IQI_Max_Stress::supports_analytical_dQIdp_geometry()
+    {
+        // only the von Mises stress is differentiated
+        if ( mStressType != Stress_Type::VON_MISES_STRESS )
+        {
+            return false;
+        }
+
+        // the spatial derivatives are implemented for the linear structural CMs
+        const CM_Struc_Linear* tCMStrucLinear = dynamic_cast< const CM_Struc_Linear* >(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) ).get() );
+
+        return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    IQI_Max_Stress::compute_dQIdx_geometry_integrand(
+            real              aWStar,
+            Matrix< DDRMat >& adQIdx,
+            Matrix< DDRMat >& adQIdn )
+    {
+        // get the elasticity CM
+        CM_Struc_Linear* tCMElasticity = dynamic_cast< CM_Struc_Linear* >(
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) ).get() );
+
+        MORIS_ASSERT( tCMElasticity != nullptr,
+                "IQI_Max_Stress::compute_dQIdx_geometry_integrand - elasticity CM is not a CM_Struc_Linear" );
+
+        // number of space dimensions
+        const uint tSpaceDim = mLeaderFIManager->get_IP_geometry_interpolator()->get_number_of_space_dimensions();
+
+        adQIdx.set_size( tSpaceDim, 1, 0.0 );
+        adQIdn.set_size( 0, 0 );
+
+        // get property values (held fixed in space)
+        real tRefValue = mLeaderProp( static_cast< uint >( IQI_Property_Type::REFERENCE_VALUE ) )->val()( 0 );
+        real tExponent = mLeaderProp( static_cast< uint >( IQI_Property_Type::EXPONENT ) )->val()( 0 );
+        real tShift    = 1.0;
+        if ( mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) ) != nullptr )
+        {
+            tShift = mLeaderProp( static_cast< uint >( IQI_Property_Type::SHIFT ) )->val()( 0 );
+        }
+
+        // von Mises stress and standardized stress vector
+        Matrix< DDRMat > tStressVector = this->get_stress_vector();
+        real             tVonMises     = this->eval_Von_Mises_stress();
+
+        // derivative of the von Mises stress wrt the standardized stress vector (zero at zero stress)
+        if ( tVonMises < MORIS_REAL_EPS )
+        {
+            return;
+        }
+
+        Matrix< DDRMat > tdVMdS( 6, 1, 0.0 );
+        tdVMdS( 0 ) = ( 2.0 * tStressVector( 0 ) - tStressVector( 1 ) - tStressVector( 2 ) ) / ( 2.0 * tVonMises );
+        tdVMdS( 1 ) = ( 2.0 * tStressVector( 1 ) - tStressVector( 2 ) - tStressVector( 0 ) ) / ( 2.0 * tVonMises );
+        tdVMdS( 2 ) = ( 2.0 * tStressVector( 2 ) - tStressVector( 0 ) - tStressVector( 1 ) ) / ( 2.0 * tVonMises );
+        tdVMdS( 3 ) = 3.0 * tStressVector( 3 ) / tVonMises;
+        tdVMdS( 4 ) = 3.0 * tStressVector( 4 ) / tVonMises;
+        tdVMdS( 5 ) = 3.0 * tStressVector( 5 ) / tVonMises;
+
+        // derivative of the integrand ( sigma_vm / ref - shift )^p wrt sigma_vm
+        const real tdQIdVM = tExponent * std::pow( tVonMises / tRefValue - tShift, tExponent - 1.0 ) / tRefValue;
+
+        // constitutive matrix
+        const Matrix< DDRMat >& tConst = tCMElasticity->constitutive();
+
+        Matrix< DDRMat > tdStraindx;
+        for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+        {
+            // derivative of the flux wrt x_k, standardized
+            tCMElasticity->eval_dStraindx( iDir, tdStraindx );
+            Matrix< DDRMat > tdStressdx = standardize_stress_vector( tConst * tdStraindx );
+
+            adQIdx( iDir ) = aWStar * tdQIdVM * dot( tdVMdS, tdStressdx );
+        }
     }
 
     //------------------------------------------------------------------------------

@@ -75,6 +75,10 @@ namespace moris::xtk
             *aDecompositionData           = Decomposition_Data();
             aDecompositionData->mDecompId = 10000 * iGeom + this->get_signature();
 
+            // MB-016: an exactly evaluated geometry can change sign at vertices already in a child mesh (e.g. a cut
+            // vertex of an earlier geometry on an edge shared with a cell flagged by its corners). Select those cells too.
+            aMeshGenerator->add_background_cells_intersected_at_child_vertices( aMeshGenerationData, aCutIntegrationMesh, iGeom );
+
             // cell groups relevant to this geometry pick them out (i.e. the ones intersected by the current geometry)
             Vector< std::shared_ptr< IG_Cell_Group > > tIgCellGroups;
             this->select_ig_cell_groups( tIgCellGroups );

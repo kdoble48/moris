@@ -13,7 +13,9 @@ hand-maintained, so the catalog cannot drift from the code:
   optimizer, geometry fields, ghost stabilization, spatial dimension, deck style).
 """
 
+import math
 import re
+import warnings
 from pathlib import Path
 
 from sphinx.util import logging
@@ -129,11 +131,200 @@ def _deck_tags(deck_text):
         tags.append("STK mesh")
     if "MORIS_DECK" in deck_text:
         tags.append("Deck API v2")
+    # design representation and optimization-specific machinery
+    if re.search(r'"discretization_mesh_index"\s*,\s*[0-9]', deck_text):
+        tags.append("level-set design")
+    if re.search(r"\bSIMP\b", deck_text) and "density" in deck_text:
+        tags.append("density (SIMP)")
+    if re.search(r"HEAT_METHOD|HeatMethod", deck_text):
+        tags.append("heat method")
+    if '"remeshing_field_names"' in deck_text:
+        tags.append("adaptive refinement")
+    if "VON_MISES" in deck_text:
+        tags.append("von Mises stress")
+    if re.search(r"\bEIGEN\b|eigen_vectors", deck_text):
+        tags.append("eigenvalue")
+    if "Bedding" in deck_text:
+        tags.append("bedding")    # a light spring on the bulk: keeps detached material regular
+    if "PressureSpring" in deck_text:
+        tags.append("pressure spring")
 
     dimension = _dimension(deck_text)
     if dimension:
         tags.insert(0, dimension)
     return tags
+
+
+DECL = re.compile(r"(?:std::string|moris::uint|moris::sint|moris::real|uint|sint|int|real|size_t|double"
+                  r"|(?:moris::)?(?:Vector|Matrix)\s*<[^>]*>)\s+(\w+)\s*=\s*([^;]+);")
+NUMBER = re.compile(r"^[\d.eE+\-*/()\s,]+$")
+FUNCTIONS = {"ceil": math.ceil, "floor": math.floor, "sqrt": math.sqrt, "round": round, "max": max, "min": min,
+             "pow": pow}
+ARG = re.compile(r'"(\w+)"\s*,\s*((?:[^()]|\([^()]*\))*?)\s*\)\s*;')
+
+
+def _variables(deck_text):
+    """Values of the deck's own constants: ``std::string tX = "45,15";``, ``uint tN = 2 * 20;``,
+    ``c ? a : b`` (both branches, comma-joined); unresolvable expressions are left out."""
+    values = {}
+    for name, expr in DECL.findall(deck_text):
+        value = _value(expr.strip(), values)
+        if value is not None:
+            values[name] = value
+    return values
+
+
+def _value(expr, values):
+    ternary = re.fullmatch(r'[^?"]*\?\s*(.+?)\s*:\s*([^:]+)', expr)
+    if ternary:
+        a, b = _value(ternary.group(1).strip(), values), _value(ternary.group(2).strip(), values)
+        return None if a is None or b is None else f"{a},{b}"
+    expr = re.sub(r"std::to_string\s*\(\s*(\w+)\s*\)", r"\1", expr)
+    braces = re.fullmatch(r"\{(.*)\}", expr, re.DOTALL)    # Vector< uint > tN = { 36, 18 };
+    if braces:
+        items = [_value(item.strip(), values) for item in braces.group(1).split(",") if item.strip()]
+        return None if not items or any(i is None for i in items) else ",".join(str(i) for i in items)
+    if '"' in expr:
+        parts, out = re.split(r"\+", expr), ""
+        for part in (p.strip() for p in parts):
+            literal = re.fullmatch(r'(?:std::string\s*\(\s*)?"([^"]*)"\s*\)?', part)
+            if literal:
+                out += literal.group(1)
+            elif part in values:
+                out += str(values[part])
+            else:
+                return None
+        return out
+    for name in sorted(values, key=len, reverse=True):
+        expr = re.sub(rf"\b{re.escape(name)}\b", str(values[name]), expr)
+    expr = re.sub(r"\bstd::pow\s*\(([^,]+),([^)]+)\)", r"(\1)**(\2)", expr)
+    expr = re.sub(r"\(\s*(?:real|uint|sint|int|double|moris::real)\s*\)", "", expr)
+    expr = re.sub(r"std::(ceil|floor|sqrt|round|max|min|pow)\b", r"\1", expr)
+    bare = re.sub(r"\b(ceil|floor|sqrt|round|max|min|pow)\b", "", expr)
+    if NUMBER.match(bare) and not re.search(r"[eE][^+\-\d]", bare):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)    # e.g. a resolved name followed by "(" in C++
+                value = eval(expr, {"__builtins__": {}}, dict(FUNCTIONS))  # noqa: S307 - digits, operators, math
+        except Exception:  # division by zero, malformed
+            return None
+        if isinstance(value, tuple):    # "36,18": a comma-separated list such as elements per dimension
+            return ",".join(str(_value(str(v), {})) for v in value)
+        return int(value) if float(value).is_integer() else round(value, 6)
+    return None
+
+
+def _argument(deck_text, key, values):
+    """The first literal value a deck gives ``"key"`` (variables resolved), as a string, or None."""
+    for found_key, expr in ARG.findall(deck_text):
+        if found_key != key:
+            continue
+        parts = [p.strip() for p in re.split(r",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", expr)]
+        resolved = []
+        for part in parts:
+            value = _value(part, values)
+            if value is None:
+                return None
+            resolved.append(str(value))
+        return ",".join(resolved)
+    return None
+
+
+def _numbers(text):
+    return [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", text or "")]
+
+
+def deck_anatomy(deck_text):
+    """What the deck is made of: block counts per FEM kind and geometries, the mesh, the DOFs, the
+    solver stack, the run length. Literal-or-resolvable values only; anything else is omitted."""
+    values = _variables(deck_text)
+    blocks = {
+        "properties": len(re.findall(r'"property_name"', deck_text)),
+        "constitutive models": len(re.findall(r'"constitutive_name"', deck_text)),
+        "stabilization parameters": len(re.findall(r'"stabilization_name"', deck_text)),
+        "IWGs": len(re.findall(r'"IWG_name"', deck_text)),
+        "IQIs": len(re.findall(r'"IQI_name"', deck_text)),
+        "geometries": max(len(re.findall(r"(?:Field_Type|Geometry_Type)::\w+", deck_text)),
+                          len(re.findall(r"create_\w*geometry\w*_parameter_list\s*\(", deck_text))),
+    }
+    mesh = {}
+    elements = _numbers(_argument(deck_text, "number_of_elements_per_dimension", values))
+    if elements and all(e > 0 for e in elements):
+        mesh["elements"] = [int(e) for e in elements]
+    domain = _numbers(_argument(deck_text, "domain_dimensions", values))
+    if domain:
+        mesh["domain"] = domain
+    for key, name in (("lagrange_orders", "lagrange_order"), ("bspline_orders", "bspline_order")):
+        order = _numbers(_argument(deck_text, key, values))
+        if order:
+            mesh[name] = int(max(order))
+    refinement = _numbers(_argument(deck_text, "pattern_initial_refinement", values))
+    mesh["refinement"] = int(max(refinement)) if refinement else 0
+    if "elements" in mesh:
+        cells = 1
+        for e in mesh["elements"]:
+            cells *= e
+        mesh["cells"] = int(cells * 2 ** (len(mesh["elements"]) * mesh["refinement"]))
+    dofs = []
+    for found_key, expr in ARG.findall(deck_text):
+        if found_key == "dof_residual":
+            value = _value(expr.strip(), values)
+            for dof in re.split(r"[,;]", value or ""):
+                dof = dof.strip()
+                if dof and dof not in dofs and re.fullmatch(r"[A-Z_0-9]+", dof):
+                    dofs.append(dof)
+    solvers = {
+        "linear": sorted({s for s in re.findall(r"\bSolverType::(\w+)", deck_text)}),
+        "nonlinear": sorted({s.replace("_SOLVER", "") for s in re.findall(r"NonlinearSolverType::(\w+)", deck_text)}),
+    }
+    steps = _numbers(_argument(deck_text, "TSA_Num_Time_Steps", values))
+    run = {}
+    if steps:
+        run["time_steps"] = int(steps[0])
+    iterations = _numbers(_argument(deck_text, "max_its", values))
+    if iterations:
+        run["optimization_iterations"] = int(iterations[0])
+    return {"blocks": blocks, "mesh": mesh, "dofs": dofs, "solvers": solvers, "run": run}
+
+
+def anatomy_rows(anatomy):
+    """(label, text) rows for the facts table."""
+    rows = []
+    blocks = ", ".join(f"{n} {kind}" for kind, n in anatomy["blocks"].items() if n)
+    if blocks:
+        rows.append(("Blocks", blocks))
+    mesh = anatomy["mesh"]
+    parts = []
+    if mesh.get("elements"):
+        parts.append(" × ".join(str(e) for e in mesh["elements"]) + " elements")
+        if mesh.get("domain"):
+            parts[-1] += " on " + " × ".join(f"{d:g}" for d in mesh["domain"])
+    if mesh.get("lagrange_order"):
+        parts.append(f"Lagrange order {mesh['lagrange_order']}")
+    if mesh.get("bspline_order"):
+        parts.append(f"B-spline order {mesh['bspline_order']}")
+    if mesh.get("refinement"):
+        parts.append(f"{mesh['refinement']} initial refinement level{'s' if mesh['refinement'] > 1 else ''}")
+    if mesh.get("cells"):
+        parts.append(f"about {mesh['cells']:,} background cells")
+    if parts:
+        rows.append(("Mesh", "; ".join(parts)))
+    if anatomy["dofs"]:
+        rows.append(("DOFs", ", ".join(anatomy["dofs"])))
+    solvers = [", ".join(anatomy["solvers"]["linear"]), ", ".join(anatomy["solvers"]["nonlinear"])]
+    solvers = [s for s in solvers if s]
+    if solvers:
+        rows.append(("Solvers", " / ".join(solvers)))
+    run = anatomy["run"]
+    parts = []
+    if run.get("time_steps"):
+        parts.append(f"{run['time_steps']} time step{'s' if run['time_steps'] > 1 else ''}")
+    if run.get("optimization_iterations"):
+        n = run["optimization_iterations"]
+        parts.append(f"{n} optimization iteration{'s' if n > 1 else ''}")
+    if parts:
+        rows.append(("Run", ", ".join(parts)))
+    return rows
 
 
 def _dimension(deck_text):
@@ -203,6 +394,7 @@ def collect_examples(source_dir):
                 "cases": call.get("CASES", []),
                 "features": features,
                 "tags": _deck_tags(deck_text),
+                "anatomy": deck_anatomy(deck_text),
             })
     return examples
 
@@ -239,7 +431,7 @@ def summary_markdown(app, example):
         ("Decks", decks or "—"),
         ("ctest", tests or "—"),
         ("Detected features", tags or "—"),
-    ]
+    ] + anatomy_rows(example["anatomy"])
     lines = ["| | |", "|---|---|"] + [f"| **{key}** | {value} |" for key, value in rows]
     return "\n".join(lines)
 
@@ -320,11 +512,21 @@ class ExaSummaryDirective(SphinxDirective):
         # a new gallery build (manifest.json) must re-render every example page, not only edited ones
         self.env.note_dependency(str(Path(self.env.srcdir) / moris_gallery.ASSETS / "manifest.json"))
         scene = moris_gallery.scene_for(directory, self.env.docname)
-        return self.parse_text_to_nodes(scene + "\n" + summary_markdown(self.env.app, matches[0]))
+        import exa_graph  # the "Related examples" block: nearest examples by shared tags
+
+        related = exa_graph.related_markdown(self.env.app, matches[0], collect_examples(source_dir),
+                                             self.env.docname)
+        return self.parse_text_to_nodes(scene + "\n" + summary_markdown(self.env.app, matches[0])
+                                        + "\n\n" + related)
 
 
 def setup(app):
+    import exa_graph
+
     app.add_config_value("moris_source_dir", "", "env")
     app.connect("builder-inited", write_catalog)
     app.add_directive("exa-summary", ExaSummaryDirective)
-    return {"parallel_read_safe": True, "parallel_write_safe": True}
+    exa_graph.setup(app)
+    # env_version: bump when the generated page content changes shape, so an incremental build
+    # re-reads every example page (their .md sources are unchanged by an extension edit)
+    return {"env_version": 6, "parallel_read_safe": True, "parallel_write_safe": True}
