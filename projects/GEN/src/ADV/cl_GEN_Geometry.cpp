@@ -31,4 +31,19 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Geometry::can_change_region_inside_cell() const
+    {
+        return false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Geometric_Region Geometry::get_geometric_region_at_point( const Matrix< DDRMat >& aCoordinates )
+    {
+        MORIS_ERROR( false, "Geometry::get_geometric_region_at_point() - not supported by this geometry." );
+        return Geometric_Region::INTERFACE;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
 }

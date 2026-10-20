@@ -86,6 +86,23 @@ namespace moris::gen
                 const Matrix< DDRMat >& aNodeCoordinates ) override;
 
         /**
+         * A level set can change region inside a background cell if its field is evaluated exactly at derived nodes
+         * (an analytic field without multilinear interpolation). B-spline, stored and multilinear fields are
+         * interpolated from the cell's nodes and are bounded by the corner values.
+         *
+         * @return If the region can change inside a cell with uniform corner regions
+         */
+        bool can_change_region_inside_cell() const override;
+
+        /**
+         * Gets the geometric region at an arbitrary point from the exact field value.
+         *
+         * @param aCoordinates Point coordinates
+         * @return Geometric region enum
+         */
+        Geometric_Region get_geometric_region_at_point( const Matrix< DDRMat >& aCoordinates ) override;
+
+        /**
          * Creates an intersection node based on the given information. The intersection node may or may not represent an intersection;
          * that is, its position may lie outside of the edge definition based on the given nodal coordinates. This information can be
          * requested from the created intersection node.
