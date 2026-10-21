@@ -649,8 +649,30 @@ namespace moris::xtk
 
         //------------------------------------------------------------------------------
 
-        /*
-         * Using the parameter list, figure out the cell of subdivision methods
+        /**
+         * @brief Build the ordered list of decomposition algorithms that turn the cut background
+         * cells into the integration mesh, from the parameters "decomposition_type" and
+         * "octree_refinement_level". Each entry is turned into an algorithm by
+         * create_decomposition_algorithm() and run in list order by Integration_Mesh_Generator::perform().
+         *
+         * Resulting sequences (by background cell topology):
+         *  - decomposition_type = "octree_only":   { NC_OCTREE } (all other settings ignored)
+         *  - QUAD4, "conformal":    { NC_REGULAR_SUBDIVISION_QUAD4, C_TRI3 }
+         *  - QUAD4, "nonconformal": { NC_REGULAR_SUBDIVISION_QUAD4 }
+         *  - HEX8,  "conformal":    { NC_REGULAR_SUBDIVISION_HEX8, C_HIERARCHY_TET4 }
+         *  - HEX8,  "nonconformal": { NC_REGULAR_SUBDIVISION_HEX8 }
+         *  - octree_refinement_level > -1 prepends NC_OCTREE to any of the above.
+         *
+         * NC_REGULAR_SUBDIVISION_* (Regular_Subdivision_Interface) splits each cut cell into simplices
+         * independent of the geometry (QUAD4 -> 4 TRI3, HEX8 -> 24 TET4); C_TRI3 / C_HIERARCHY_TET4
+         * (Node_Hierarchy_Interface) then cuts those simplices along the geometry, which is what makes
+         * the integration mesh conform to the interface.
+         *
+         * @note decomposition_type is case-sensitive ("conformal" / "nonconformal"); any other value
+         * is an error. Other background topologies (e.g. TRI3, TET4) produce no regular subdivision
+         * or cut method.
+         *
+         * @return ordered decomposition methods to perform
          */
         Vector< enum Subdivision_Method >
         get_subdivision_methods();
