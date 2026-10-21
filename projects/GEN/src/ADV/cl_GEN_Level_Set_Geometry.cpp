@@ -96,18 +96,41 @@ namespace moris::gen
                 // Get locators
                 const Vector< Basis_Node >& tLocators = tDerivedNode.get_locator_nodes();
 
-                // If we only have 2 locators, can use special logic if at least one node is on the interface
-                if ( tLocators.size() == 2 )
+                // With 2 locators the region can follow from the locators' regions (MB-040). The node hierarchy cuts
+                // edges by the field values, so the region must agree with the value where this geometry is still to be
+                // cut, and with the locators where this geometry's cut is already final:
+                // - interpolated field: the value is the linear interpolation of the locators, so both agree;
+                // - exact (analytic) or multilinear field: the value can have the other sign. Use the locators only if
+                //   this geometry was decomposed before the geometry whose intersection created the node (its cells
+                //   are final and lie on one side of this interface); otherwise use the value.
+                bool tValueInterpolatesLocators = not this->use_multilinear_interpolation() and not mField->has_exact_derived_node_values();
+
+                bool                     tDecomposedBeforeNode = false;
+                const Intersection_Node* tIntersectionNode     = dynamic_cast< const Intersection_Node* >( &tDerivedNode );
+                if ( tIntersectionNode != nullptr )
                 {
-                    if ( this->get_geometric_region( tLocators( 0 ).get_index(), tLocators( 0 ).get_global_coordinates() ) == Geometric_Region::INTERFACE )
+                    tDecomposedBeforeNode = this->get_decomposition_index() < tIntersectionNode->get_interface_decomposition_index();
+                }
+
+                if ( tLocators.size() == 2 and ( tValueInterpolatesLocators or tDecomposedBeforeNode ) )
+                {
+                    Geometric_Region tFirstRegion  = this->get_geometric_region( tLocators( 0 ).get_index(), tLocators( 0 ).get_global_coordinates() );
+                    Geometric_Region tSecondRegion = this->get_geometric_region( tLocators( 1 ).get_index(), tLocators( 1 ).get_global_coordinates() );
+
+                    if ( tFirstRegion == Geometric_Region::INTERFACE )
                     {
                         // Take geometric region of second node
-                        return this->get_geometric_region( tLocators( 1 ).get_index(), tLocators( 1 ).get_global_coordinates() );
+                        return tSecondRegion;
                     }
-                    else if ( this->get_geometric_region( tLocators( 1 ).get_index(), tLocators( 1 ).get_global_coordinates() ) == Geometric_Region::INTERFACE )
+                    else if ( tSecondRegion == Geometric_Region::INTERFACE )
                     {
                         // Take geometric region of first node
-                        return this->get_geometric_region( tLocators( 0 ).get_index(), tLocators( 0 ).get_global_coordinates() );
+                        return tFirstRegion;
+                    }
+                    else if ( tDecomposedBeforeNode and tFirstRegion == tSecondRegion )
+                    {
+                        // Both locators on the same side of a final cut: the node is on that side as well
+                        return tFirstRegion;
                     }
                     else
                     {

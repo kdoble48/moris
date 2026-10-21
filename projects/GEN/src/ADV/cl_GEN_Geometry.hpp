@@ -186,5 +186,31 @@ namespace moris::gen
                 sol::Dist_Vector*             aOwnedADVs,
                 const Vector< sint >&       aSharedADVIds,
                 uint                          aADVOffsetID ) = 0;
+
+        /**
+         * Sets the position of this geometry in the geometry engine. The node hierarchy decomposes the geometries in
+         * this order, so a geometry with a lower index is decomposed before the intersection nodes of a higher one.
+         *
+         * @param aIndex Index of this geometry in the geometry engine
+         */
+        void
+        set_decomposition_index( uint aIndex )
+        {
+            mDecompositionIndex = aIndex;
+        }
+
+        /**
+         * Gets the position of this geometry in the geometry engine (MORIS_UINT_MAX if it was not set).
+         *
+         * @return Index of this geometry in the geometry engine
+         */
+        uint
+        get_decomposition_index() const
+        {
+            return mDecompositionIndex;
+        }
+
+      private:
+        uint mDecompositionIndex = MORIS_UINT_MAX;
     };
 }    // namespace moris::gen
