@@ -69,6 +69,9 @@
 #include "cl_HMR_Mesh_Interpolation.hpp"
 #include "cl_HMR_Parameters.hpp"
 #include "cl_MTK_Mesh_Manager.hpp"
+#include "cl_HMR_Database.hpp"
+#include "cl_HMR_Background_Mesh_Base.hpp"
+#include "cl_HMR_Background_Element_Base.hpp"
 #include "fn_PRM_HMR_Parameters.hpp"
 #include "cl_GEN_Geometry_Engine.hpp"
 #include "cl_GEN_Level_Set_Geometry.hpp"
@@ -1306,7 +1309,8 @@ namespace moris::xtk
             std::shared_ptr< mtk::Mesh_Manager > mMeshManager;
             mtk::Interpolation_Mesh*             mMesh = nullptr;
 
-            Box_Mesh()
+            // aRefineAboveX: background cells whose centre lies at x > aRefineAboveX are refined one level
+            explicit Box_Mesh( real aRefineAboveX = MORIS_REAL_MAX )
             {
                 Module_Parameter_Lists tParameters( Module_Type::HMR );
                 tParameters( 0 ).add_parameter_list( prm::create_hmr_parameter_list() );
@@ -1326,6 +1330,27 @@ namespace moris::xtk
                 mMeshManager = std::make_shared< mtk::Mesh_Manager >();
                 mHMR->set_performer( mMeshManager );
                 mHMR->perform_initial_refinement();
+                if ( aRefineAboveX < MORIS_REAL_MAX )
+                {
+                    hmr::Background_Mesh_Base* tBackgroundMesh = mHMR->get_database()->get_background_mesh();
+                    luint                      tNumElements    = tBackgroundMesh->get_number_of_active_elements_on_proc();
+                    Matrix< DDRMat >           tCentre( 3, 1 );
+                    // mark the elements as Database::flag_element does, but without HMR::flag_element: that sets the
+                    // rank-local mHaveRefinedAtLeastOneElement, and Database::perform_refinement then skips a collective
+                    // call on the flagging ranks only (tFlag || perform_refinement short-circuits) and deadlocks (MB-043)
+                    uint tWorkingPattern = mHMR->get_database()->get_parameters()->get_working_pattern();
+                    for ( luint iElement = 0; iElement < tNumElements; iElement++ )
+                    {
+                        hmr::Background_Element_Base* tElement = tBackgroundMesh->get_element( iElement );
+                        tBackgroundMesh->calc_center_of_element( tElement, tCentre );
+                        if ( tCentre( 0 ) > aRefineAboveX )
+                        {
+                            tElement->put_on_refinement_queue();
+                            tElement->set_refined_flag( tWorkingPattern );
+                        }
+                    }
+                    mHMR->perform_refinement_based_on_working_pattern( 0 );
+                }
                 mHMR->perform();
                 mMesh = mMeshManager->get_interpolation_mesh( 0 );
             }
@@ -2477,6 +2502,101 @@ namespace moris::xtk
             CHECK( tNumThrew == 0 );
             CHECK( tNumCopyMismatch == 0 );
             CHECK( tNumDuplicateIds == 0 );
+        }
+    }
+
+    TEST_CASE( "XTK pathology: intersected cells on different refinement levels on different ranks", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_LEVELS]" )
+    {
+        // finding 6: check_intersected_background_cell_levels compares each rank's intersected cells with that rank's
+        // first one and combines with all_land, so ranks that are each uniform at different levels pass. The box is
+        // refined one level for x > 1.5; the processor face is x = 1 on 2 ranks, and each rank's aura reaches 0.5 past it.
+        Box_Mesh                 tBox( 1.5 );
+        mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
+
+        struct Level_Case
+        {
+            std::string     mName;
+            Vector< Plane > mPlanes;
+        };
+        const Point          tXAxis = { 1.0, 0.0, 0.0 };
+        Vector< Level_Case > tCases = {
+            { "x=1.8 only (fine cells)", { plane_through( tXAxis, { 1.8, 0.5, 0.5 }, 0.0 ) } },
+            { "x=0.3 only (coarse cells)", { plane_through( tXAxis, { 0.3, 0.5, 0.5 }, 0.0 ) } },
+            { "x=0.3 and x=1.8", { plane_through( tXAxis, { 0.3, 0.5, 0.5 }, 0.0 ), plane_through( tXAxis, { 1.8, 0.5, 0.5 }, 0.0 ) } },
+            { "slanted across x=1.5", { plane_through( { 1.0, 0.3, 0.2 }, { 1.5, 0.5, 0.5 }, 0.0 ) } }
+        };
+
+        uint tNumInconsistent = 0;
+        for ( const Level_Case& iCase : tCases )
+        {
+            // levels of the cells each plane cuts on this rank (corner signs), owned and aura
+            std::set< uint > tLevels;
+            for ( uint iCell = 0; iCell < tMesh->get_num_elems(); iCell++ )
+            {
+                mtk::Cell& tCell = tMesh->get_mtk_cell( iCell );
+                for ( const Plane& iPlane : iCase.mPlanes )
+                {
+                    bool tNegative = false, tPositive = false;
+                    for ( mtk::Vertex* iVertex : tCell.get_vertex_pointers() )
+                    {
+                        Matrix< DDRMat > tX   = iVertex->get_coords();
+                        real             tPhi = iPlane[ 0 ] * tX( 0 ) + iPlane[ 1 ] * tX( 1 ) + iPlane[ 2 ] * tX( 2 ) + iPlane[ 3 ];
+                        tNegative             = tNegative or tPhi < 0.0;
+                        tPositive             = tPositive or tPhi > 0.0;
+                    }
+                    if ( tNegative and tPositive )
+                    {
+                        tLevels.insert( tCell.get_level() );
+                    }
+                }
+            }
+
+            // decompose: true if the level check passed on all ranks
+            bool tDecomposed = false;
+            try
+            {
+                Vector< std::shared_ptr< gen::Geometry > > tGeometries;
+                for ( uint iPlane = 0; iPlane < iCase.mPlanes.size(); iPlane++ )
+                {
+                    gPlanes[ iPlane ] = iCase.mPlanes( iPlane );
+                    tGeometries.push_back( create_geometry( gPlaneFields[ iPlane ], Regime::STORED ) );
+                }
+                gen::Geometry_Engine_Parameters tParameters;
+                tParameters.mGeometries = tGeometries;
+                gen::Geometry_Engine tGeometryEngine( tMesh, tParameters );
+                Model                tModel( 3, tMesh, &tGeometryEngine );
+                tModel.mVerbose = false;
+                tDecomposed     = tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8, Subdivision_Method::C_HIERARCHY_TET4 } );
+            }
+            catch ( const std::exception& aException )
+            {
+                std::cout << "rank " << par_rank() << " " << iCase.mName << " THREW: " << std::string( aException.what() ).substr( 0, 160 ) << "\n";
+            }
+
+            // the levels every rank sees, and whether the whole problem has mixed levels
+            uint tMinLevel = min_all( tLevels.empty() ? (uint)99 : *tLevels.begin() );
+            uint tMaxLevel = max_all( tLevels.empty() ? (uint)0 : *tLevels.rbegin() );
+            bool tMixed    = tMinLevel < tMaxLevel;
+
+            std::ostringstream tLine;
+            tLine << "rank " << par_rank() << " of " << par_size() << "  " << std::setw( 26 ) << iCase.mName << "  cut levels on this rank {";
+            for ( uint iLevel : tLevels )
+            {
+                tLine << " " << iLevel;
+            }
+            tLine << " }  globally " << ( tMixed ? "MIXED" : "uniform" ) << "  decomposed " << tDecomposed << "\n";
+            std::cout << tLine.str() << std::flush;
+
+            // the level check must refuse every mixed-level problem, on any number of ranks
+            if ( par_rank() == 0 and tMixed == tDecomposed )
+            {
+                tNumInconsistent++;
+                std::cout << "  ^ " << ( tDecomposed ? "decomposed although the cut cells are on different levels" : "refused although every cut cell is on one level" ) << "\n";
+            }
+        }
+        if ( par_rank() == 0 )
+        {
+            CHECK( tNumInconsistent == 0 );
         }
     }
 
