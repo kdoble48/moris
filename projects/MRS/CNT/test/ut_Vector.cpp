@@ -10,6 +10,8 @@
 
 #include <catch.hpp>
 #include <iostream>
+#include <type_traits>
+#include <utility>
 
 // MORIS project header files.
 #include "core.hpp"
@@ -92,5 +94,79 @@ TEST_CASE( "moris::Vector" )
         print_as_row_vector( myCell1 );
         print_as_row_vector( myCell2 );
         print_as_row_vector( myCell3 );
+    }
+
+    SECTION( "Vector move semantics" )
+    {
+        // move constructor transfers contents and buffer, leaves source empty
+        Vector< moris::uint > tSource = { 10, 2, 3 };
+        moris::uint const *   tBuffer = tSource.memptr();
+
+        Vector< moris::uint > tMoved( std::move( tSource ) );
+
+        REQUIRE( tMoved.size() == 3 );
+        REQUIRE( tMoved( 0 ) == 10 );
+        REQUIRE( tMoved( 1 ) == 2 );
+        REQUIRE( tMoved( 2 ) == 3 );
+        REQUIRE( tMoved.memptr() == tBuffer );
+        REQUIRE( tSource.empty() );
+
+        // move assignment transfers contents and buffer, leaves source empty
+        Vector< moris::uint > tAssigned = { 7 };
+        tAssigned                       = std::move( tMoved );
+
+        REQUIRE( tAssigned.size() == 3 );
+        REQUIRE( tAssigned( 0 ) == 10 );
+        REQUIRE( tAssigned( 2 ) == 3 );
+        REQUIRE( tAssigned.memptr() == tBuffer );
+        REQUIRE( tMoved.empty() );
+
+        // noexcept, so that std::vector reallocation moves instead of copying
+        REQUIRE( std::is_nothrow_move_constructible< Vector< moris::uint > >::value );
+        REQUIRE( std::is_nothrow_move_assignable< Vector< moris::uint > >::value );
+
+        // outer reallocation keeps the inner buffers
+        Vector< Vector< moris::uint > > tOuter = { { 1, 2, 3 }, { 4, 5 }, { 6 } };
+
+        Vector< moris::uint const * > tInnerBuffers( tOuter.size() );
+        for ( moris::uint iI = 0; iI < tOuter.size(); iI++ )
+        {
+            tInnerBuffers( iI ) = tOuter( iI ).memptr();
+        }
+
+        Vector< moris::uint > const * tOuterBuffer = tOuter.memptr();
+        tOuter.reserve( 4 * tOuter.capacity() );
+        REQUIRE( tOuter.memptr() != tOuterBuffer );    // outer storage was reallocated
+
+        for ( moris::uint iI = 0; iI < tOuter.size(); iI++ )
+        {
+            REQUIRE( tOuter( iI ).memptr() == tInnerBuffers( iI ) );
+        }
+
+        tOuter.shrink_to_fit();
+        REQUIRE( tOuter.capacity() == 3 );
+
+        for ( moris::uint iI = 0; iI < tOuter.size(); iI++ )
+        {
+            REQUIRE( tOuter( iI ).memptr() == tInnerBuffers( iI ) );
+        }
+        REQUIRE( tOuter( 0 )( 0 ) == 1 );
+        REQUIRE( tOuter( 0 )( 2 ) == 3 );
+        REQUIRE( tOuter( 1 )( 1 ) == 5 );
+        REQUIRE( tOuter( 2 )( 0 ) == 6 );
+
+        // copy is still deep
+        Vector< moris::uint > tOriginal = { 1, 2, 3 };
+        Vector< moris::uint > tCopy( tOriginal );
+        tCopy( 0 ) = 99;
+
+        Vector< moris::uint > tCopyAssigned;
+        tCopyAssigned      = tOriginal;
+        tCopyAssigned( 1 ) = 98;
+
+        REQUIRE( tCopy.memptr() != tOriginal.memptr() );
+        REQUIRE( tOriginal( 0 ) == 1 );
+        REQUIRE( tOriginal( 1 ) == 2 );
+        REQUIRE( tOriginal( 2 ) == 3 );
     }
 }
