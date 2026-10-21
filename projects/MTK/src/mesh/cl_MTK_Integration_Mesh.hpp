@@ -26,7 +26,10 @@
 
 namespace moris::mtk
 {
-    class Integration_Mesh : public virtual Mesh
+    // alignas: Mesh is 16-byte aligned (armadillo Matrix members), but as a virtual base it does not
+    // align this class's non-virtual part; GCC 13 nevertheless emits 16-byte aligned stores in the
+    // base-object constructor, which faults when the class sits at an 8-mod-16 offset in a derived class.
+    class alignas( alignof( Mesh ) ) Integration_Mesh : public virtual Mesh
     {
         // class Cluster_Group;
 
