@@ -954,11 +954,17 @@ namespace moris::fem
         // reset cluster measures
         // this->reset_cluster_measure();
 
+        // Visualized per-element and per-node fields are evaluated on every IG element, including the small elements
+        // that determine_elements_for_residual_and_iqi_computation() drops from the residual and the IQIs. The solution
+        // is defined there too (its basis lives on the background mesh); skipping them left their output at the
+        // initial 0, which reads as a zero stress. Global values keep the drop rule, consistent with the residual.
+        bool tEvaluateDroppedElements = aFieldType != vis::Field_Type::GLOBAL;
+
         // loop over the IG elements
         for ( uint iElem = 0; iElem < mElements.size(); iElem++ )
         {
             // check whether to compute QI
-            if ( mComputeResidualAndIQI( iElem ) )
+            if ( mComputeResidualAndIQI( iElem ) or tEvaluateDroppedElements )
             {
                 // compute the quantity of interest for the IG element
                 mElements( iElem )->compute_quantity_of_interest( aFemMeshIndex, aFieldType );
