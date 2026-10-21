@@ -28,6 +28,13 @@
  * the integration cells are quadrature domains only: cell count, smallest cell and subphase volume, collapsed cells,
  * and the number and smallest area of interface facets.
  *
+ * A multi-rank sweep ([XTK_PATHOLOGY_MPI]) decomposes a 4 x 2 x 2 box [0,2] x [0,1] x [0,1] with planes on, near
+ * and across the processor boundary (x = 1 on 2 ranks). Besides the global invariants (total volume, negative volume
+ * against the exact value, the same result on every number of ranks) it gathers every integration vertex on rank 0
+ * and checks that the ranks agree on it: one id per location, and per id the same coordinates, owner and geometric
+ * region. Run it on 1, 2 and 4 ranks, e.g. mpirun -n 2 XTK-test.exe "[XTK_PATHOLOGY_MPI]", and compare the CSV files
+ * (MORIS_XTK_PATHOLOGY_MPI_CSV=<file>).
+ *
  * The sweeps are hidden ([.]) because they characterize current behaviour rather than gate it. Run one with
  *   XTK-test.exe "[XTK_PATHOLOGY_HEX_SIGNS]"
  * Set MORIS_XTK_PATHOLOGY_CSV=<file> to write one row per decomposed case.
@@ -44,8 +51,12 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
+
+#include "cl_Communication_Tools.hpp"
 
 #include "cl_XTK_Model.hpp"
 #include "cl_XTK_Cut_Integration_Mesh.hpp"
@@ -55,6 +66,8 @@
 #include "cl_HMR.hpp"
 #include "cl_HMR_Mesh_Interpolation.hpp"
 #include "cl_HMR_Parameters.hpp"
+#include "cl_MTK_Mesh_Manager.hpp"
+#include "fn_PRM_HMR_Parameters.hpp"
 #include "cl_GEN_Geometry_Engine.hpp"
 #include "cl_GEN_Level_Set_Geometry.hpp"
 #include "cl_GEN_User_Defined_Field.hpp"
@@ -1263,6 +1276,585 @@ namespace moris::xtk
             }
             print_summary( "crossing planes: invariants", tSummary );
             check_invariants( tSummary, false, false );
+        }
+    }
+
+    namespace
+    {
+        // ----------------------------------------------------------------------------------
+        // multi-rank sweep: planes on, near and across the processor boundary of a 4 x 2 x 2 box [0,2] x [0,1] x [0,1]
+
+        const real gBoxCellSize = 0.5;
+        const real gBoxVolume   = 2.0;
+
+        // integration vertices closer than this count as one location
+        const real gLocationTolerance = 1.0e-12;
+
+        // built like the multi-rank [XTK_HMR] test (parameter list, initial refinement, mesh manager): the Unit_Hex
+        // construction (setters + finalize + create_interpolation_mesh) segfaults in the subphase neighbourhood on > 1 rank
+        // even without a cut
+        struct Box_Mesh
+        {
+            std::shared_ptr< hmr::HMR >          mHMR;
+            std::shared_ptr< mtk::Mesh_Manager > mMeshManager;
+            mtk::Interpolation_Mesh*             mMesh = nullptr;
+
+            Box_Mesh()
+            {
+                Module_Parameter_Lists tParameters( Module_Type::HMR );
+                tParameters( 0 ).add_parameter_list( prm::create_hmr_parameter_list() );
+                tParameters( 0 )( 0 ).set( "number_of_elements_per_dimension", 4, 2, 2 );
+                tParameters( 0 )( 0 ).set( "domain_dimensions", 2.0, 1.0, 1.0 );
+                tParameters( 0 )( 0 ).set( "domain_offset", 0.0, 0.0, 0.0 );
+                tParameters( 0 )( 0 ).set( "lagrange_output_meshes", "0" );
+                tParameters( 0 )( 0 ).set( "lagrange_orders", "1" );
+                tParameters( 0 )( 0 ).set( "lagrange_pattern", std::string( "0" ) );
+                tParameters( 0 )( 0 ).set( "bspline_orders", "1" );
+                tParameters( 0 )( 0 ).set( "bspline_pattern", std::string( "0" ) );
+                tParameters( 0 )( 0 ).set( "lagrange_to_bspline", "0" );
+                tParameters( 0 )( 0 ).set( "refinement_buffer", 1 );
+                tParameters( 0 )( 0 ).set( "staircase_buffer", 1 );
+
+                mHMR         = std::make_shared< hmr::HMR >( tParameters );
+                mMeshManager = std::make_shared< mtk::Mesh_Manager >();
+                mHMR->set_performer( mMeshManager );
+                mHMR->perform_initial_refinement();
+                mHMR->perform();
+                mMesh = mMeshManager->get_interpolation_mesh( 0 );
+            }
+        };
+
+        // exact negative volume of a plane in the box: the 24-tet reference is exact for a linear field, per background cell
+        real
+        box_reference_negative_volume( const Plane& aPlane )
+        {
+            real tVolume = 0.0;
+            for ( uint iX = 0; iX < 4; iX++ )
+            {
+                for ( uint iY = 0; iY < 2; iY++ )
+                {
+                    for ( uint iZ = 0; iZ < 2; iZ++ )
+                    {
+                        // the plane in the unit coordinates of the cell
+                        Plane tLocal = { aPlane[ 0 ] * gBoxCellSize,
+                            aPlane[ 1 ] * gBoxCellSize,
+                            aPlane[ 2 ] * gBoxCellSize,
+                            aPlane[ 0 ] * iX * gBoxCellSize + aPlane[ 1 ] * iY * gBoxCellSize + aPlane[ 2 ] * iZ * gBoxCellSize + aPlane[ 3 ] };
+                        tVolume += reference_negative_volume( plane_corner_values( tLocal ) ) * gBoxCellSize * gBoxCellSize * gBoxCellSize;
+                    }
+                }
+            }
+            return tVolume;
+        }
+
+        // the owned part of the background mesh, as the boxes of the owned background cells; a point on a face shared by
+        // two cells belongs to the cell above it, so every point of the domain belongs to exactly one rank
+        struct Owned_Region
+        {
+            Vector< std::array< real, 6 > > mBoxes;
+
+            explicit Owned_Region( mtk::Interpolation_Mesh* aMesh )
+            {
+                for ( uint iCell = 0; iCell < aMesh->get_num_elems(); iCell++ )
+                {
+                    mtk::Cell& tCell = aMesh->get_mtk_cell( iCell );
+                    if ( tCell.get_owner() != (moris_id)par_rank() )
+                    {
+                        continue;
+                    }
+                    std::array< real, 6 > tBox = { MORIS_REAL_MAX, MORIS_REAL_MAX, MORIS_REAL_MAX, -MORIS_REAL_MAX, -MORIS_REAL_MAX, -MORIS_REAL_MAX };
+                    for ( mtk::Vertex* iVertex : tCell.get_vertex_pointers() )
+                    {
+                        Matrix< DDRMat > tCoords = iVertex->get_coords();
+                        for ( uint iDim = 0; iDim < 3; iDim++ )
+                        {
+                            tBox[ iDim ]     = std::min( tBox[ iDim ], tCoords( iDim ) );
+                            tBox[ 3 + iDim ] = std::max( tBox[ 3 + iDim ], tCoords( iDim ) );
+                        }
+                    }
+                    mBoxes.push_back( tBox );
+                }
+            }
+
+            bool
+            contains( const Point& aPoint ) const
+            {
+                const Point tDomainMax = { 2.0, 1.0, 1.0 };
+                for ( const std::array< real, 6 >& iBox : mBoxes )
+                {
+                    bool tInside = true;
+                    for ( uint iDim = 0; iDim < 3; iDim++ )
+                    {
+                        bool tBelowTop = aPoint[ iDim ] < iBox[ 3 + iDim ] or ( iBox[ 3 + iDim ] == tDomainMax[ iDim ] and aPoint[ iDim ] <= iBox[ 3 + iDim ] );
+                        tInside        = tInside and aPoint[ iDim ] >= iBox[ iDim ] and tBelowTop;
+                    }
+                    if ( tInside )
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        };
+
+        Point
+        centroid( const Vector< mtk::Vertex* >& aVertices )
+        {
+            Point tCentroid = { 0.0, 0.0, 0.0 };
+            for ( mtk::Vertex* iVertex : aVertices )
+            {
+                Matrix< DDRMat > tCoords = iVertex->get_coords();
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    tCentroid[ iDim ] += tCoords( iDim ) / aVertices.size();
+                }
+            }
+            return tCentroid;
+        }
+
+        struct Parallel_Result
+        {
+            bool        mThrew   = false;    // on any rank
+            std::string mMessage = "";       // first message on this rank
+
+            // global quantities over the owned subphases and owned interface facets
+            uint mNumCells           = 0;
+            uint mNumSubphases       = 0;
+            uint mNumNonPositive     = 0;
+            uint mNumNoPhase         = 0;
+            uint mNumMixedSign       = 0;
+            uint mNumInterfaceFacets = 0;
+            real mInterfaceArea      = 0.0;
+            real mTotalVolume        = 0.0;
+            real mMinCellVolume      = MORIS_REAL_MAX;
+            real mMinSubphaseVolume  = MORIS_REAL_MAX;
+
+            Vector< real > mNegativeVolume;
+
+            // agreement of the ranks on the integration vertices (evaluated on rank 0)
+            uint mNumVertexIds          = 0;    // distinct ids
+            uint mNumSharedIds          = 0;    // ids held by more than one rank
+            uint mNumUnassignedIds      = 0;    // vertices without a valid id
+            uint mNumCoordMismatch      = 0;    // ids whose coordinates differ between ranks
+            real mMaxCoordMismatch      = 0.0;
+            uint mNumOwnerMismatch      = 0;    // ids whose owner differs between ranks
+            uint mNumLabelMismatch      = 0;    // ids whose geometric region differs between ranks for some geometry
+            uint mNumDuplicateLocations = 0;    // locations carrying more than one id
+        };
+
+        // agreement of the ranks on the integration vertices; aRows: one matrix per rank, rows ( id, x, y, z, owner, region per geometry )
+        void
+        check_vertex_agreement( const Vector< Matrix< DDRMat > >& aRows, uint aNumGeometries, Parallel_Result& aResult )
+        {
+            std::map< moris_id, Matrix< DDRMat > >                              tFirstRow;
+            std::map< moris_id, std::set< uint > >                              tRanksOfId;
+            std::set< moris_id >                                                tCoordMismatch, tOwnerMismatch, tLabelMismatch;
+            std::map< std::tuple< long long, long long, long long >, std::set< moris_id > > tIdsAtLocation;
+
+            for ( uint iRank = 0; iRank < aRows.size(); iRank++ )
+            {
+                const Matrix< DDRMat >& tRows = aRows( iRank );
+                for ( uint iRow = 0; iRow < tRows.n_rows(); iRow++ )
+                {
+                    moris_id tId = (moris_id)tRows( iRow, 0 );
+                    if ( tId < 0 or tId == MORIS_ID_MAX )
+                    {
+                        aResult.mNumUnassignedIds++;
+                        continue;
+                    }
+                    tRanksOfId[ tId ].insert( iRank );
+                    tIdsAtLocation[ { std::llround( tRows( iRow, 1 ) / gLocationTolerance ),
+                                            std::llround( tRows( iRow, 2 ) / gLocationTolerance ),
+                                            std::llround( tRows( iRow, 3 ) / gLocationTolerance ) } ]
+                            .insert( tId );
+
+                    std::map< moris_id, Matrix< DDRMat > >::iterator tFirst = tFirstRow.find( tId );
+                    if ( tFirst == tFirstRow.end() )
+                    {
+                        tFirstRow[ tId ] = tRows.get_row( iRow );
+                        continue;
+                    }
+                    const Matrix< DDRMat >& tReference = tFirst->second;
+                    for ( uint iDim = 1; iDim <= 3; iDim++ )
+                    {
+                        real tDifference = std::abs( tRows( iRow, iDim ) - tReference( iDim ) );
+                        if ( tDifference > 0.0 )
+                        {
+                            tCoordMismatch.insert( tId );
+                            aResult.mMaxCoordMismatch = std::max( aResult.mMaxCoordMismatch, tDifference );
+                        }
+                    }
+                    if ( tRows( iRow, 4 ) != tReference( 4 ) )
+                    {
+                        tOwnerMismatch.insert( tId );
+                    }
+                    for ( uint iGeom = 0; iGeom < aNumGeometries; iGeom++ )
+                    {
+                        if ( tRows( iRow, 5 + iGeom ) != tReference( 5 + iGeom ) )
+                        {
+                            tLabelMismatch.insert( tId );
+                        }
+                    }
+                }
+            }
+
+            aResult.mNumVertexIds     = tRanksOfId.size();
+            aResult.mNumCoordMismatch = tCoordMismatch.size();
+            aResult.mNumOwnerMismatch = tOwnerMismatch.size();
+            aResult.mNumLabelMismatch = tLabelMismatch.size();
+            for ( const std::pair< const moris_id, std::set< uint > >& iId : tRanksOfId )
+            {
+                aResult.mNumSharedIds += iId.second.size() > 1;
+            }
+            for ( const std::pair< const std::tuple< long long, long long, long long >, std::set< moris_id > >& iLocation : tIdsAtLocation )
+            {
+                aResult.mNumDuplicateLocations += iLocation.second.size() > 1;
+            }
+        }
+
+        // decompose on every rank and reduce; the geometries are planes in the given regime
+        Parallel_Result
+        decompose_parallel_case( mtk::Interpolation_Mesh* aMesh, const Vector< Plane >& aPlanes, Regime aRegime )
+        {
+            MORIS_ERROR( aPlanes.size() <= gMaxPlanes, "decompose_parallel_case() - at most 6 planes" );
+            uint tNumGeometries = aPlanes.size();
+
+            Parallel_Result tResult;
+            tResult.mNegativeVolume.resize( tNumGeometries, 0.0 );
+
+            Owned_Region     tOwned( aMesh );
+            Vector< real >   tNegativeVolume( tNumGeometries, 0.0 );
+            Matrix< DDRMat > tVertexRows( 0, 5 + tNumGeometries );
+            bool             tThrew = false;
+
+            // a rank that throws inside a collective call leaves the others waiting; the sweep then hangs (ctest timeout)
+            try
+            {
+                Vector< std::shared_ptr< gen::Geometry > > tGeometries;
+                for ( uint iPlane = 0; iPlane < tNumGeometries; iPlane++ )
+                {
+                    gPlanes[ iPlane ] = aPlanes( iPlane );
+                    tGeometries.push_back( create_geometry( gPlaneFields[ iPlane ], aRegime ) );
+                }
+
+                gen::Geometry_Engine_Parameters tParameters;
+                tParameters.mGeometries = tGeometries;
+                gen::Geometry_Engine tGeometryEngine( aMesh, tParameters );
+
+                Model tModel( 3, aMesh, &tGeometryEngine );
+                tModel.mVerbose = false;
+                tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8, Subdivision_Method::C_HIERARCHY_TET4 } );
+
+                Cut_Integration_Mesh* tCutMesh   = tModel.get_cut_integration_mesh();
+                moris_index           tNumPhases = (moris_index)tGeometryEngine.get_num_bulk_phase();
+
+                // owned subphases: their background cell is owned by this rank
+                for ( uint iSP = 0; iSP < tCutMesh->get_num_subphases(); iSP++ )
+                {
+                    if ( tCutMesh->get_subphase_parent_cell( iSP )->get_owner() != (moris_id)par_rank() )
+                    {
+                        continue;
+                    }
+                    tResult.mNumSubphases++;
+                    real tSubphaseVolume = 0.0;
+                    for ( mtk::Cell* iCell : tCutMesh->get_subphase_ig_cells( iSP )->mIgCellGroup )
+                    {
+                        real tVolume = iCell->compute_cell_measure();
+                        tSubphaseVolume += tVolume;
+                        tResult.mNumCells++;
+                        tResult.mTotalVolume += tVolume;
+                        tResult.mMinCellVolume = std::min( tResult.mMinCellVolume, tVolume );
+                        tResult.mNumNonPositive += tVolume <= 0.0;
+
+                        moris_index tBulkPhase = tCutMesh->get_cell_bulk_phase( iCell->get_index() );
+                        tResult.mNumNoPhase += tBulkPhase < 0 or tBulkPhase >= tNumPhases;
+
+                        Vector< mtk::Vertex* > tVertices = iCell->get_vertex_pointers();
+                        bool                   tMixed    = false;
+                        for ( uint iGeom = 0; iGeom < tNumGeometries; iGeom++ )
+                        {
+                            bool tHasPositive = false;
+                            bool tHasNegative = false;
+                            for ( mtk::Vertex* iVertex : tVertices )
+                            {
+                                gen::Geometric_Region tRegion = tGeometryEngine.get_geometric_region( iGeom, iVertex->get_index(), iVertex->get_coords() );
+                                tHasPositive = tHasPositive or tRegion == gen::Geometric_Region::POSITIVE;
+                                tHasNegative = tHasNegative or tRegion == gen::Geometric_Region::NEGATIVE;
+                            }
+                            tMixed = tMixed or ( tHasPositive and tHasNegative );
+                            if ( tHasNegative and not tHasPositive )
+                            {
+                                tNegativeVolume( iGeom ) += tVolume;
+                            }
+                        }
+                        tResult.mNumMixedSign += tMixed;
+                    }
+                    tResult.mMinSubphaseVolume = std::min( tResult.mMinSubphaseVolume, tSubphaseVolume );
+                }
+
+                // owned interface facets: their centroid lies in the owned region
+                std::shared_ptr< Facet_Based_Connectivity > tFacets = tCutMesh->get_face_connectivity();
+                if ( tFacets != nullptr )
+                {
+                    for ( uint iFacet = 0; iFacet < tFacets->mFacetToCell.size(); iFacet++ )
+                    {
+                        if ( tFacets->mFacetToCell( iFacet ).size() == 2
+                                and tCutMesh->get_cell_bulk_phase( tFacets->mFacetToCell( iFacet )( 0 )->get_index() )
+                                            != tCutMesh->get_cell_bulk_phase( tFacets->mFacetToCell( iFacet )( 1 )->get_index() )
+                                and tOwned.contains( centroid( tFacets->mFacetVertices( iFacet ) ) ) )
+                        {
+                            tResult.mNumInterfaceFacets++;
+                            tResult.mInterfaceArea += facet_area( tFacets->mFacetVertices( iFacet ) );
+                        }
+                    }
+                }
+
+                // every integration vertex this rank holds, owned or not
+                uint tNumVertices = tCutMesh->get_num_entities( mtk::EntityRank::NODE, 0 );
+                tVertexRows.set_size( tNumVertices, 5 + tNumGeometries );
+                for ( uint iVertex = 0; iVertex < tNumVertices; iVertex++ )
+                {
+                    mtk::Vertex&     tVertex = tCutMesh->get_mtk_vertex( iVertex );
+                    Matrix< DDRMat > tCoords = tVertex.get_coords();
+                    tVertexRows( iVertex, 0 ) = tVertex.get_id();
+                    tVertexRows( iVertex, 1 ) = tCoords( 0 );
+                    tVertexRows( iVertex, 2 ) = tCoords( 1 );
+                    tVertexRows( iVertex, 3 ) = tCoords( 2 );
+                    tVertexRows( iVertex, 4 ) = tVertex.get_owner();
+                    for ( uint iGeom = 0; iGeom < tNumGeometries; iGeom++ )
+                    {
+                        tVertexRows( iVertex, 5 + iGeom ) = (real)tGeometryEngine.get_geometric_region( iGeom, tVertex.get_index(), tCoords );
+                    }
+                }
+            }
+            catch ( const std::exception& aException )
+            {
+                tThrew           = true;
+                tResult.mMessage = aException.what();
+                tVertexRows.set_size( 0, 5 + tNumGeometries );
+            }
+
+            // reduce over the ranks
+            tResult.mThrew              = sum_all( (uint)tThrew ) > 0;
+            tResult.mNumCells           = sum_all( tResult.mNumCells );
+            tResult.mNumSubphases       = sum_all( tResult.mNumSubphases );
+            tResult.mNumNonPositive     = sum_all( tResult.mNumNonPositive );
+            tResult.mNumNoPhase         = sum_all( tResult.mNumNoPhase );
+            tResult.mNumMixedSign       = sum_all( tResult.mNumMixedSign );
+            tResult.mNumInterfaceFacets = sum_all( tResult.mNumInterfaceFacets );
+            tResult.mInterfaceArea      = sum_all( tResult.mInterfaceArea );
+            tResult.mTotalVolume        = sum_all( tResult.mTotalVolume );
+            tResult.mMinCellVolume      = min_all( tResult.mMinCellVolume );
+            tResult.mMinSubphaseVolume  = min_all( tResult.mMinSubphaseVolume );
+            for ( uint iGeom = 0; iGeom < tNumGeometries; iGeom++ )
+            {
+                tResult.mNegativeVolume( iGeom ) = sum_all( tNegativeVolume( iGeom ) );
+            }
+
+            Vector< Matrix< DDRMat > > tGatheredRows;
+            gatherv_mats( tVertexRows, tGatheredRows, 0 );
+            if ( par_rank() == 0 )
+            {
+                check_vertex_agreement( tGatheredRows, tNumGeometries, tResult );
+            }
+            return tResult;
+        }
+
+        struct Parallel_Case
+        {
+            std::string     mName;
+            Vector< Plane > mPlanes;
+        };
+
+        // the processor boundary is x = 1 on 2 ranks; on 4 ranks HMR adds a second one
+        Vector< Parallel_Case >
+        parallel_cases()
+        {
+            const Point tFace     = { 1.0, 0.5, 0.5 };    // a vertex on x = 1 (an edge of four background cells)
+            const Point tXAxis    = { 1.0, 0.0, 0.0 };
+            const Point tSlanted  = { 1.0, 0.3, 0.2 };
+            const Point tDiagonal = { 1.0, 1.0, 0.0 };
+
+            Vector< Parallel_Case > tCases;
+            tCases.push_back( { "x=3 (no cut, control)", { plane_through( tXAxis, { 3.0, 0.5, 0.5 }, 0.0 ) } } );
+            tCases.push_back( { "x=0.3 (away from the face)", { plane_through( tXAxis, { 0.3, 0.5, 0.5 }, 0.0 ) } } );
+            tCases.push_back( { "x=1 (processor face)", { plane_through( tXAxis, tFace, 0.0 ) } } );
+            for ( real tOffset : { 1.0e-11, 1.0e-12, 1.0e-13, -1.0e-11, -1.0e-12 } )
+            {
+                std::ostringstream tName;
+                tName << "x=1" << ( tOffset > 0.0 ? "+" : "" ) << tOffset;
+                tCases.push_back( { tName.str(), { plane_through( tXAxis, tFace, tOffset ) } } );
+            }
+            tCases.push_back( { "x=0.75 (cell centres)", { plane_through( tXAxis, { 0.75, 0.5, 0.5 }, 0.0 ) } } );
+            tCases.push_back( { "x=1.25 (cell centres)", { plane_through( tXAxis, { 1.25, 0.5, 0.5 }, 0.0 ) } } );
+            tCases.push_back( { "slanted across the face", { plane_through( tSlanted, tFace, 0.0 ) } } );
+            tCases.push_back( { "slanted +1e-11", { plane_through( tSlanted, tFace, 1.0e-11 ) } } );
+            tCases.push_back( { "x+y=1.5 (face edge)", { plane_through( tDiagonal, tFace, 0.0 ) } } );
+            tCases.push_back( { "x+y=1.5+1e-12", { plane_through( tDiagonal, tFace, 1.0e-12 ) } } );
+            tCases.push_back( { "y=0.5+1e-12 (face nodes)", { plane_through( { 0.0, 1.0, 0.0 }, tFace, 1.0e-12 ) } } );
+
+            // two parallel planes straddling the processor face
+            for ( real tDelta : { 1.0e-3, 1.0e-6, 1.0e-9, 1.0e-11, 1.0e-12 } )
+            {
+                std::ostringstream tName;
+                tName << "layer at x=1, d=" << tDelta;
+                tCases.push_back( { tName.str(), { plane_through( tXAxis, tFace, -0.5 * tDelta ), plane_through( tXAxis, tFace, 0.5 * tDelta ) } } );
+            }
+            for ( real tDelta : { 1.0e-6, 1.0e-11 } )
+            {
+                std::ostringstream tName;
+                tName << "slanted layer, d=" << tDelta;
+                tCases.push_back( { tName.str(), { plane_through( tSlanted, tFace, -0.5 * tDelta ), plane_through( tSlanted, tFace, 0.5 * tDelta ) } } );
+            }
+
+            // two geometries crossing on the processor face
+            tCases.push_back( { "x=1 and y=0.5", { plane_through( tXAxis, tFace, 0.0 ), plane_through( { 0.0, 1.0, 0.0 }, tFace, 0.0 ) } } );
+            tCases.push_back( { "x=1+1e-11 and slanted", { plane_through( tXAxis, tFace, 1.0e-11 ), plane_through( tSlanted, tFace, 0.0 ) } } );
+            return tCases;
+        }
+
+        // CSV output on rank 0, open only if MORIS_XTK_PATHOLOGY_MPI_CSV is set
+        std::ofstream*
+        parallel_csv_stream()
+        {
+            static std::ofstream sStream;
+            static bool          sOpened = false;
+            if ( not sOpened )
+            {
+                sOpened           = true;
+                const char* tPath = std::getenv( "MORIS_XTK_PATHOLOGY_MPI_CSV" );
+                if ( tPath != nullptr and par_rank() == 0 )
+                {
+                    sStream.open( tPath );
+                    sStream << "num_ranks,regime,case,threw,num_cells,num_subphases,total_volume,neg_volume_a,ref_a,neg_volume_b,ref_b,"
+                               "non_positive,no_phase,mixed_sign,interface_facets,interface_area,min_cell_volume,min_subphase_volume,"
+                               "vertex_ids,shared_ids,unassigned_ids,coord_mismatch,max_coord_mismatch,owner_mismatch,label_mismatch,duplicate_locations\n";
+                }
+            }
+            return sStream.is_open() ? &sStream : nullptr;
+        }
+    }    // namespace
+
+    TEST_CASE( "XTK pathology sweep: planes at the processor boundary of a box, any number of ranks", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI]" )
+    {
+        Box_Mesh                 tBox;
+        mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
+
+        // where the processor boundaries are
+        Owned_Region tOwned( tMesh );
+        real         tOwnedMin[ 3 ] = { MORIS_REAL_MAX, MORIS_REAL_MAX, MORIS_REAL_MAX };
+        real         tOwnedMax[ 3 ] = { -MORIS_REAL_MAX, -MORIS_REAL_MAX, -MORIS_REAL_MAX };
+        for ( const std::array< real, 6 >& iBox : tOwned.mBoxes )
+        {
+            for ( uint iDim = 0; iDim < 3; iDim++ )
+            {
+                tOwnedMin[ iDim ] = std::min( tOwnedMin[ iDim ], iBox[ iDim ] );
+                tOwnedMax[ iDim ] = std::max( tOwnedMax[ iDim ], iBox[ 3 + iDim ] );
+            }
+        }
+        std::cout << "rank " << par_rank() << " of " << par_size() << " owns " << tOwned.mBoxes.size() << " background cells in ["
+                  << tOwnedMin[ 0 ] << "," << tOwnedMax[ 0 ] << "] x [" << tOwnedMin[ 1 ] << "," << tOwnedMax[ 1 ] << "] x ["
+                  << tOwnedMin[ 2 ] << "," << tOwnedMax[ 2 ] << "]\n"
+                  << std::flush;
+
+        uint tNumThrew = 0, tNumBadVolume = 0, tNumReference = 0, tNumCellDefects = 0, tNumDisagreements = 0;
+        if ( par_rank() == 0 )
+        {
+            std::cout << "\n=== planes at the processor boundary, " << par_size() << " rank(s) ===\n"
+                      << std::setw( 12 ) << "regime" << std::setw( 28 ) << "case" << std::setw( 7 ) << "cells" << std::setw( 6 ) << "subph"
+                      << std::setw( 12 ) << "min cell V" << std::setw( 6 ) << "V<=0" << std::setw( 7 ) << "ifacet" << std::setw( 12 ) << "ifacet A"
+                      << std::setw( 12 ) << "total V-2" << std::setw( 12 ) << "neg V err" << std::setw( 7 ) << "ids" << std::setw( 7 ) << "shared"
+                      << std::setw( 7 ) << "coord" << std::setw( 7 ) << "owner" << std::setw( 7 ) << "label" << std::setw( 7 ) << "dupl" << "\n";
+        }
+
+        // MORIS_XTK_PATHOLOGY_MPI_CASE=<n> runs only the n-th case (0-based, in every regime), so a crash can be located
+        const char* tOnlyCase = std::getenv( "MORIS_XTK_PATHOLOGY_MPI_CASE" );
+
+        for ( Regime iRegime : { Regime::STORED, Regime::ANALYTIC, Regime::MULTILINEAR } )
+        {
+            Vector< Parallel_Case > tCases = parallel_cases();
+            for ( uint iCaseIndex = 0; iCaseIndex < tCases.size(); iCaseIndex++ )
+            {
+                const Parallel_Case& iCase = tCases( iCaseIndex );
+                if ( tOnlyCase != nullptr and std::atoi( tOnlyCase ) != (int)iCaseIndex )
+                {
+                    continue;
+                }
+
+                // two analytic/multilinear geometries can hit MB-040 (heap corruption) on develop; STORED only
+                if ( iCase.mPlanes.size() > 1 and iRegime != Regime::STORED )
+                {
+                    continue;
+                }
+
+                Parallel_Result tResult = decompose_parallel_case( tMesh, iCase.mPlanes, iRegime );
+
+                Vector< real > tReference;
+                real           tReferenceError = 0.0;
+                for ( uint iGeom = 0; iGeom < iCase.mPlanes.size(); iGeom++ )
+                {
+                    tReference.push_back( box_reference_negative_volume( iCase.mPlanes( iGeom ) ) );
+                    tReferenceError = std::max( tReferenceError, std::abs( tResult.mNegativeVolume( iGeom ) - tReference( iGeom ) ) );
+                }
+
+                if ( par_rank() != 0 )
+                {
+                    continue;
+                }
+
+                tNumThrew += tResult.mThrew;
+                if ( not tResult.mThrew )
+                {
+                    tNumBadVolume += std::abs( tResult.mTotalVolume - gBoxVolume ) > gVolumeTolerance;
+                    tNumReference += tReferenceError > gVolumeTolerance;
+                    tNumCellDefects += tResult.mNumNonPositive + tResult.mNumNoPhase + tResult.mNumMixedSign > 0;
+                    tNumDisagreements += tResult.mNumUnassignedIds + tResult.mNumCoordMismatch + tResult.mNumOwnerMismatch + tResult.mNumLabelMismatch > 0;
+                }
+
+                std::cout << std::setw( 12 ) << regime_name( iRegime ) << std::setw( 28 ) << iCase.mName;
+                if ( tResult.mThrew )
+                {
+                    std::cout << "  THREW: " << tResult.mMessage.substr( 0, 120 ) << "\n";
+                }
+                else
+                {
+                    std::cout << std::setprecision( 3 ) << std::setw( 7 ) << tResult.mNumCells << std::setw( 6 ) << tResult.mNumSubphases
+                              << std::setw( 12 ) << tResult.mMinCellVolume << std::setw( 6 ) << tResult.mNumNonPositive
+                              << std::setw( 7 ) << tResult.mNumInterfaceFacets << std::setw( 12 ) << tResult.mInterfaceArea
+                              << std::setw( 12 ) << tResult.mTotalVolume - gBoxVolume << std::setw( 12 ) << tReferenceError
+                              << std::setw( 7 ) << tResult.mNumVertexIds << std::setw( 7 ) << tResult.mNumSharedIds
+                              << std::setw( 7 ) << tResult.mNumCoordMismatch << std::setw( 7 ) << tResult.mNumOwnerMismatch
+                              << std::setw( 7 ) << tResult.mNumLabelMismatch << std::setw( 7 ) << tResult.mNumDuplicateLocations
+                              << std::setprecision( 6 ) << "\n";
+                }
+
+                std::ofstream* tStream = parallel_csv_stream();
+                if ( tStream != nullptr )
+                {
+                    std::string tName = iCase.mName;
+                    std::replace( tName.begin(), tName.end(), ',', ' ' );
+                    *tStream << std::setprecision( 17 ) << par_size() << "," << regime_name( iRegime ) << "," << tName << "," << tResult.mThrew << ","
+                             << tResult.mNumCells << "," << tResult.mNumSubphases << "," << tResult.mTotalVolume << ","
+                             << tResult.mNegativeVolume( 0 ) << "," << tReference( 0 ) << ","
+                             << ( tReference.size() > 1 ? tResult.mNegativeVolume( 1 ) : 0.0 ) << "," << ( tReference.size() > 1 ? tReference( 1 ) : 0.0 ) << ","
+                             << tResult.mNumNonPositive << "," << tResult.mNumNoPhase << "," << tResult.mNumMixedSign << ","
+                             << tResult.mNumInterfaceFacets << "," << tResult.mInterfaceArea << "," << tResult.mMinCellVolume << ","
+                             << tResult.mMinSubphaseVolume << "," << tResult.mNumVertexIds << "," << tResult.mNumSharedIds << ","
+                             << tResult.mNumUnassignedIds << "," << tResult.mNumCoordMismatch << "," << tResult.mMaxCoordMismatch << ","
+                             << tResult.mNumOwnerMismatch << "," << tResult.mNumLabelMismatch << "," << tResult.mNumDuplicateLocations << "\n"
+                             << std::flush;
+                }
+            }
+        }
+
+        if ( par_rank() == 0 )
+        {
+            std::cout << "\n  threw " << tNumThrew << " | total volume != 2: " << tNumBadVolume << " | negative volume != exact: " << tNumReference
+                      << " | cases with collapsed/no-phase/mixed-sign cells: " << tNumCellDefects
+                      << " | cases where the ranks disagree on a vertex: " << tNumDisagreements << "\n";
+            CHECK( tNumThrew == 0 );
+            CHECK( tNumBadVolume == 0 );
+            CHECK( tNumDisagreements == 0 );
         }
     }
 
