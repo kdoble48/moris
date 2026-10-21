@@ -583,7 +583,8 @@ namespace moris::xtk
                      << ( aResult.mNegativeVolume.size() > 0 ? aResult.mNegativeVolume( 0 ) : 0.0 ) << "," << aReferenceA << ","
                      << ( aResult.mNegativeVolume.size() > 1 ? aResult.mNegativeVolume( 1 ) : 0.0 ) << "," << aReferenceB << ","
                      << aResult.mNumNoPhase << "," << aResult.mNumMixedSign << "," << aResult.mNumBadFacets << "," << aResult.mNumUndetermined << ","
-                     << aResult.mNumSlivers << "," << aResult.mMinCellVolume << "\n";
+                     << aResult.mNumSlivers << "," << aResult.mMinCellVolume << "\n"
+                     << std::flush;    // flushed per row, so the last row locates a crash
         }
 
         // checks shared by all sweeps; returns false if the case threw
@@ -986,6 +987,56 @@ namespace moris::xtk
                 print_summary( "single hex, geometry A corner values {-1,0,1} x 8 second geometries, both orders, " + regime_name( iRegime ), tSummary );
                 check_invariants( tSummary, iRegime == Regime::STORED, iRegime == Regime::STORED );
             }
+        }
+    }
+
+    // one case of the two-geometry sweep in a fresh process, for triage:
+    //   MORIS_XTK_PATHOLOGY_ONE="<stored|analytic|multilinear>|<second geometry name>|<AB|BA>|c0;c1;...;c7"
+    TEST_CASE( "XTK pathology: one two-geometry case from the environment", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_ONE]" )
+    {
+        if ( par_size() == 1 )
+        {
+            const char* tSpec = std::getenv( "MORIS_XTK_PATHOLOGY_ONE" );
+            REQUIRE( tSpec != nullptr );
+
+            std::stringstream          tStream( tSpec );
+            std::string                tRegimeName, tSecondName, tOrder, tCornerList;
+            std::getline( tStream, tRegimeName, '|' );
+            std::getline( tStream, tSecondName, '|' );
+            std::getline( tStream, tOrder, '|' );
+            std::getline( tStream, tCornerList, '|' );
+
+            Regime tRegime = tRegimeName == "stored" ? Regime::STORED : tRegimeName == "analytic" ? Regime::ANALYTIC : Regime::MULTILINEAR;
+
+            std::stringstream tCornerStream( tCornerList );
+            std::string       tValue;
+            for ( uint iCorner = 0; iCorner < 8; iCorner++ )
+            {
+                REQUIRE( std::getline( tCornerStream, tValue, ';' ) );
+                gCornersA[ iCorner ] = std::stod( tValue );
+            }
+
+            bool tFound = false;
+            for ( const std::pair< std::string, Corner_Values >& iSecond : second_geometries() )
+            {
+                if ( iSecond.first == tSecondName )
+                {
+                    gCornersB = iSecond.second;
+                    tFound    = true;
+                }
+            }
+            REQUIRE( tFound );
+
+            Unit_Hex tHex;
+            Vector< std::shared_ptr< gen::Geometry > > tGeometries =
+                    tOrder == "AB" ? Vector< std::shared_ptr< gen::Geometry > >{ create_geometry( &field_a, tRegime ), create_geometry( &field_b, tRegime ) }
+                                   : Vector< std::shared_ptr< gen::Geometry > >{ create_geometry( &field_b, tRegime ), create_geometry( &field_a, tRegime ) };
+            Case_Result tResult = decompose_case( tHex.mMesh, tGeometries );
+
+            std::cout << "case " << tSpec << ": threw " << tResult.mThrew << " (" << tResult.mMessage.substr( 0, 160 ) << "), cells "
+                      << tResult.mNumCells << ", total volume " << tResult.mTotalVolume << ", volume<=0 " << tResult.mNumNonPositive
+                      << ", mixed " << tResult.mNumMixedSign << ", bad facets " << tResult.mNumBadFacets << "\n";
+            CHECK( not tResult.mThrew );
         }
     }
 
