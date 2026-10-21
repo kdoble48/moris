@@ -194,9 +194,67 @@ namespace moris::xtk
             return tP;
         }
 
-        // volume of { f < 0 } in a tet with a linear f given by its vertex values
+        // integrals of ( 1, x, y, z, x^2 ) over a domain: the quadrature moments checked by the sweeps
+        using Moments = std::array< real, 5 >;
+
+        Moments
+        operator+( const Moments& aA, const Moments& aB )
+        {
+            Moments tSum;
+            for ( uint iM = 0; iM < 5; iM++ )
+            {
+                tSum[ iM ] = aA[ iM ] + aB[ iM ];
+            }
+            return tSum;
+        }
+
+        Moments
+        operator-( const Moments& aA, const Moments& aB )
+        {
+            Moments tDifference;
+            for ( uint iM = 0; iM < 5; iM++ )
+            {
+                tDifference[ iM ] = aA[ iM ] - aB[ iM ];
+            }
+            return tDifference;
+        }
+
         real
-        tet_negative_volume( const std::array< Point, 4 >& aP, const std::array< real, 4 >& aF )
+        max_abs_difference( const Moments& aA, const Moments& aB )
+        {
+            real tMax = 0.0;
+            for ( uint iM = 0; iM < 5; iM++ )
+            {
+                tMax = std::max( tMax, std::abs( aA[ iM ] - aB[ iM ] ) );
+            }
+            return tMax;
+        }
+
+        // exact moments of a tet for a given (signed or absolute) volume: int x = V x_c, int x^2 = V/20 ( sum x_i^2 + (sum x_i)^2 )
+        Moments
+        tet_moments( const Point& aP0, const Point& aP1, const Point& aP2, const Point& aP3, real aVolume )
+        {
+            Moments tMoments;
+            tMoments[ 0 ] = aVolume;
+            for ( uint iDim = 0; iDim < 3; iDim++ )
+            {
+                tMoments[ 1 + iDim ] = aVolume * ( aP0[ iDim ] + aP1[ iDim ] + aP2[ iDim ] + aP3[ iDim ] ) / 4.0;
+            }
+            real tSum        = aP0[ 0 ] + aP1[ 0 ] + aP2[ 0 ] + aP3[ 0 ];
+            real tSumSquares = aP0[ 0 ] * aP0[ 0 ] + aP1[ 0 ] * aP1[ 0 ] + aP2[ 0 ] * aP2[ 0 ] + aP3[ 0 ] * aP3[ 0 ];
+            tMoments[ 4 ]    = aVolume / 20.0 * ( tSumSquares + tSum * tSum );
+            return tMoments;
+        }
+
+        Moments
+        tet_moments( const Point& aP0, const Point& aP1, const Point& aP2, const Point& aP3 )
+        {
+            return tet_moments( aP0, aP1, aP2, aP3, tet_volume( aP0, aP1, aP2, aP3 ) );
+        }
+
+        // moments of { f < 0 } in a tet with a linear f given by its vertex values
+        Moments
+        tet_negative_moments( const std::array< Point, 4 >& aP, const std::array< real, 4 >& aF )
         {
             Vector< uint > tNeg;
             Vector< uint > tNonNeg;
@@ -214,19 +272,19 @@ namespace moris::xtk
                 }
             }
 
-            real tVolume = tet_volume( aP[ 0 ], aP[ 1 ], aP[ 2 ], aP[ 3 ] );
+            Moments tWhole = tet_moments( aP[ 0 ], aP[ 1 ], aP[ 2 ], aP[ 3 ] );
             if ( tNeg.size() == 0 )
             {
-                return 0.0;
+                return Moments{};
             }
             if ( not tHasPositive )
             {
-                return tVolume;
+                return tWhole;
             }
             if ( tNeg.size() == 1 )
             {
                 uint tU = tNeg( 0 );
-                return tet_volume( aP[ tU ],
+                return tet_moments( aP[ tU ],
                         zero_on_edge( aP[ tU ], aF[ tU ], aP[ tNonNeg( 0 ) ], aF[ tNonNeg( 0 ) ] ),
                         zero_on_edge( aP[ tU ], aF[ tU ], aP[ tNonNeg( 1 ) ], aF[ tNonNeg( 1 ) ] ),
                         zero_on_edge( aP[ tU ], aF[ tU ], aP[ tNonNeg( 2 ) ], aF[ tNonNeg( 2 ) ] ) );
@@ -235,8 +293,8 @@ namespace moris::xtk
             {
                 // the single non-negative vertex is positive (otherwise handled above): cut off its corner tet
                 uint tW = tNonNeg( 0 );
-                return tVolume
-                     - tet_volume( aP[ tW ],
+                return tWhole
+                     - tet_moments( aP[ tW ],
                              zero_on_edge( aP[ tNeg( 0 ) ], aF[ tNeg( 0 ) ], aP[ tW ], aF[ tW ] ),
                              zero_on_edge( aP[ tNeg( 1 ) ], aF[ tNeg( 1 ) ], aP[ tW ], aF[ tW ] ),
                              zero_on_edge( aP[ tNeg( 2 ) ], aF[ tNeg( 2 ) ], aP[ tW ], aF[ tW ] ) );
@@ -252,12 +310,12 @@ namespace moris::xtk
             Point tAD  = zero_on_edge( aP[ tA ], aF[ tA ], aP[ tD ], aF[ tD ] );
             Point tBC  = zero_on_edge( aP[ tB ], aF[ tB ], aP[ tC ], aF[ tC ] );
             Point tBD  = zero_on_edge( aP[ tB ], aF[ tB ], aP[ tD ], aF[ tD ] );
-            return tet_volume( aP[ tA ], tAC, tAD, aP[ tB ] ) + tet_volume( tAC, tAD, aP[ tB ], tBC ) + tet_volume( tAD, aP[ tB ], tBC, tBD );
+            return tet_moments( aP[ tA ], tAC, tAD, aP[ tB ] ) + tet_moments( tAC, tAD, aP[ tB ], tBC ) + tet_moments( tAD, aP[ tB ], tBC, tBD );
         }
 
-        // negative volume of the piecewise-linear interpolant on the 24-tet subdivision of [0,1]^3
-        real
-        reference_negative_volume( const Corner_Values& aCorners )
+        // moments of the negative part of the piecewise-linear interpolant on the 24-tet subdivision of [0,1]^3
+        Moments
+        reference_negative_moments( const Corner_Values& aCorners )
         {
             Point tCellCentre = { 0.5, 0.5, 0.5 };
             real  tCellValue  = 0.0;
@@ -266,7 +324,7 @@ namespace moris::xtk
                 tCellValue += iValue / 8.0;
             }
 
-            real tVolume = 0.0;
+            Moments tMoments = {};
             for ( uint iAxis = 0; iAxis < 3; iAxis++ )
             {
                 uint tB = ( iAxis + 1 ) % 3;
@@ -295,13 +353,21 @@ namespace moris::xtk
                     {
                         uint tFirst  = tFaceCorners[ iK ];
                         uint tSecond = tFaceCorners[ ( iK + 1 ) % 4 ];
-                        tVolume += tet_negative_volume(
-                                { corner_point( tFirst ), corner_point( tSecond ), tFaceCentre, tCellCentre },
-                                { aCorners[ tFirst ], aCorners[ tSecond ], tFaceValue, tCellValue } );
+                        tMoments = tMoments
+                                 + tet_negative_moments(
+                                         { corner_point( tFirst ), corner_point( tSecond ), tFaceCentre, tCellCentre },
+                                         { aCorners[ tFirst ], aCorners[ tSecond ], tFaceValue, tCellValue } );
                     }
                 }
             }
-            return tVolume;
+            return tMoments;
+        }
+
+        // negative volume of the piecewise-linear interpolant on the 24-tet subdivision of [0,1]^3
+        real
+        reference_negative_volume( const Corner_Values& aCorners )
+        {
+            return reference_negative_moments( aCorners )[ 0 ];
         }
 
         // ----------------------------------------------------------------------------------
@@ -333,6 +399,11 @@ namespace moris::xtk
             // negative volume per geometry, from the vertex labels of each cell (cells with undetermined sign excluded)
             Vector< real > mNegativeVolume;
 
+            // moments ( 1, x, y, z, x^2 ) of the negative cells per geometry, with each cell's signed volume (the
+            // measure MORIS returns) and with its absolute volume (an integrator using |det J|)
+            Vector< Moments > mNegativeMomentsSigned;
+            Vector< Moments > mNegativeMomentsAbsolute;
+
             // volume per sign combination ( bit g set = positive for geometry g ), from the vertex labels
             Vector< real > mSignVolume;
         };
@@ -358,6 +429,24 @@ namespace moris::xtk
             return false;
         }
 
+        // moments of one integration cell with a given volume: a TET4, or the uncut background HEX8 [0,1]^3
+        Moments
+        cell_moments( const Vector< mtk::Vertex* >& aVertices, real aVolume )
+        {
+            if ( aVertices.size() == 8 )
+            {
+                return { aVolume, 0.5 * aVolume, 0.5 * aVolume, 0.5 * aVolume, aVolume / 3.0 };
+            }
+            MORIS_ERROR( aVertices.size() == 4, "cell_moments() - expected a TET4 or the unit HEX8" );
+            std::array< Point, 4 > tPoints;
+            for ( uint iV = 0; iV < 4; iV++ )
+            {
+                Matrix< DDRMat > tCoords = aVertices( iV )->get_coords();
+                tPoints[ iV ]            = { tCoords( 0 ), tCoords( 1 ), tCoords( 2 ) };
+            }
+            return tet_moments( tPoints[ 0 ], tPoints[ 1 ], tPoints[ 2 ], tPoints[ 3 ], aVolume );
+        }
+
         // area of a planar facet given by its vertices in order (triangle fan)
         real
         facet_area( const Vector< mtk::Vertex* >& aVertices )
@@ -381,6 +470,8 @@ namespace moris::xtk
             Case_Result tResult;
             uint        tNumGeometries = aGeometries.size();
             tResult.mNegativeVolume.resize( tNumGeometries, 0.0 );
+            tResult.mNegativeMomentsSigned.resize( tNumGeometries, Moments{} );
+            tResult.mNegativeMomentsAbsolute.resize( tNumGeometries, Moments{} );
             tResult.mSignVolume.resize( 1u << tNumGeometries, 0.0 );
 
             try
@@ -443,6 +534,8 @@ namespace moris::xtk
                             if ( tHasNegative and not tHasPositive )
                             {
                                 tResult.mNegativeVolume( iGeom ) += tVolume;
+                                tResult.mNegativeMomentsSigned( iGeom )   = tResult.mNegativeMomentsSigned( iGeom ) + cell_moments( tVertices, tVolume );
+                                tResult.mNegativeMomentsAbsolute( iGeom ) = tResult.mNegativeMomentsAbsolute( iGeom ) + cell_moments( tVertices, std::abs( tVolume ) );
                             }
                             if ( tHasPositive )
                             {
@@ -504,6 +597,10 @@ namespace moris::xtk
             uint mNumWithSlivers = 0;
             uint mNumUndetermined = 0;
             uint mNumNonPositive  = 0;    // cases with a cell of volume <= 0
+            uint mNumMoment       = 0;    // negative-phase moments (signed cell volumes) differ from the reference
+            uint mNumMomentAbs    = 0;    // the same with absolute cell volumes
+            real mMaxMomentError    = 0.0;
+            real mMaxMomentErrorAbs = 0.0;
             uint mNumGuard        = 0;    // cases stopped by the MB-001 guard (every vertex on the interface): expected
             real mMaxReferenceError = 0.0;
             real mMaxOrderDifference = 0.0;
@@ -660,6 +757,8 @@ namespace moris::xtk
                       << "  mixed-sign cell               " << aSummary.mNumMixedSign << "\n"
                       << "  bad facet                     " << aSummary.mNumBadFacets << "\n"
                       << "  reference volume mismatch     " << aSummary.mNumReference << "  (max error " << aSummary.mMaxReferenceError << ")\n"
+                      << "  moments, signed volumes       " << aSummary.mNumMoment << "  (max error " << aSummary.mMaxMomentError << ")\n"
+                      << "  moments, absolute volumes     " << aSummary.mNumMomentAbs << "  (max error " << aSummary.mMaxMomentErrorAbs << ")\n"
                       << "  geometry-order dependence     " << aSummary.mNumOrder << "  (max difference " << aSummary.mMaxOrderDifference << ")\n"
                       << "  cases with slivers (<1e-12)   " << aSummary.mNumWithSlivers << "\n"
                       << "  cases with all-interface cell " << aSummary.mNumUndetermined << "\n"
@@ -756,6 +855,23 @@ namespace moris::xtk
                     {
                         tSummary.mNumReference++;
                         tSummary.record_violation( "reference volume", iCorners );
+                    }
+
+                    // quadrature moments of the negative phase, with signed and with absolute cell volumes
+                    Moments tReferenceMoments = reference_negative_moments( iCorners );
+                    real    tMomentError      = max_abs_difference( tResult.mNegativeMomentsSigned( 0 ), tReferenceMoments );
+                    real    tMomentErrorAbs   = max_abs_difference( tResult.mNegativeMomentsAbsolute( 0 ), tReferenceMoments );
+                    tSummary.mMaxMomentError    = std::max( tSummary.mMaxMomentError, tMomentError );
+                    tSummary.mMaxMomentErrorAbs = std::max( tSummary.mMaxMomentErrorAbs, tMomentErrorAbs );
+                    if ( tMomentError > gVolumeTolerance )
+                    {
+                        tSummary.mNumMoment++;
+                        tSummary.record_violation( "moments (signed volumes)", iCorners );
+                    }
+                    if ( tMomentErrorAbs > gVolumeTolerance )
+                    {
+                        tSummary.mNumMomentAbs++;
+                        tSummary.record_violation( "moments (absolute volumes)", iCorners );
                     }
                 }
             }
@@ -871,6 +987,7 @@ namespace moris::xtk
             if ( aCheckReference )
             {
                 CHECK( aSummary.mNumReference == 0 );
+                CHECK( aSummary.mNumMoment == 0 );
             }
             if ( aCheckOrder )
             {
