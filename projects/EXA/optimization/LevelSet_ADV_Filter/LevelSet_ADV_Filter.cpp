@@ -23,8 +23,11 @@
  *   40 x 20 cells (h = 1/20); seed: staggered grid of 13 circular holes of radius 0.12 (924 ADVs, bounds +- 3 h)
  *   load: traction (0, -10) on x = 2, y in [0.45, 0.55]
  *   cut on the quadratic interpolant of the level set (use_cell_order_intersection)
- *   native MMA (GCMMA inner loop), 100 iterations, no level-set reinitialization
+ *   native MMA (GCMMA inner loop), 100 iterations (300 with MORIS_EXA_MODE=showcase), no level-set reinitialization
  *   case 2: no filter; case 3: filter radius 1.5 h
+ *
+ * Output files are named per case (levelset_adv_filter_<case>.*), so a showcase run of cases 2 and 3 in one directory
+ * keeps both designs.
  */
 
 #include <string>
@@ -39,6 +42,7 @@
 #include "cl_TSA_Time_Solver.hpp"
 #include "cl_DLA_Solver_Interface.hpp"
 #include "parameters.hpp"
+#include "EXA_Mode.hpp"    // exa::pick: regression vs showcase (gallery) run length
 
 // case index set by the test (EXA_Globals)
 extern moris::uint gCaseIndex;
@@ -60,6 +64,13 @@ namespace moris
     use_filter()
     {
         return gCaseIndex == 1 or gCaseIndex == 3;
+    }
+
+    // output file stem of this case: levelset_adv_filter_<case>
+    std::string
+    output_name()
+    {
+        return "levelset_adv_filter_" + std::to_string( gCaseIndex );
     }
 
     real
@@ -237,7 +248,7 @@ namespace moris
     GENParameterList( Module_Parameter_Lists& aParameterLists )
     {
         aParameterLists.set( "IQI_types", "IQIBulkStrainEnergy", "IQIBulkVolume" );
-        aParameterLists.set( "output_mesh_file", "gen_levelset_adv_filter.exo" );
+        aParameterLists.set( "output_mesh_file", "gen_" + output_name() + ".exo" );
 
         if ( is_optimization() )
         {
@@ -421,7 +432,7 @@ namespace moris
     void
     VISParameterList( Module_Parameter_Lists& aParameterLists )
     {
-        aParameterLists.set( "File_Name", std::pair< std::string, std::string >( "./", "levelset_adv_filter.exo" ) );
+        aParameterLists.set( "File_Name", std::pair< std::string, std::string >( "./", output_name() + ".exo" ) );
         aParameterLists.set( "Mesh_Type", vis::VIS_Mesh_Type::STANDARD );
         aParameterLists.set( "Set_Names", tMaterialSets );
         aParameterLists.set( "Field_Names", "UX,StrainEnergy,Volume" );
@@ -430,7 +441,7 @@ namespace moris
         aParameterLists.set( "Save_Frequency", 1 );
         if ( is_optimization() )
         {
-            // one file per evaluation (levelset_adv_filter.exo.e-s.NNNN): the design history
+            // one file per evaluation (levelset_adv_filter_<case>.exo.e-s.NNNN): the design history
             aParameterLists.set( "Time_Offset", 10.0 );
         }
     }
@@ -450,7 +461,7 @@ namespace moris
             aParameterLists( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::MMA );
             aParameterLists.set( "step_size", 0.05 );
             aParameterLists.set( "penalty", 5.0 );
-            aParameterLists.set( "max_its", 100 );
+            aParameterLists.set( "max_its", moris::exa::pick( 100, 300 ) );    // showcase: run toward convergence
             aParameterLists.set( "max_inner_its", 5 );
             aParameterLists.set( "norm_drop", 1e-9 );
             return;
@@ -459,7 +470,7 @@ namespace moris
         // sensitivity sweep at the initial design: analytic and finite differences (forward, backward, central) for every ADV
         // ("all": a single finite-difference mode skips the analytic gradients)
         aParameterLists( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::SWEEP );
-        aParameterLists.set( "hdf5_path", "levelset_adv_filter.hdf5" );
+        aParameterLists.set( "hdf5_path", output_name() + ".hdf5" );
         aParameterLists.set( "evaluate_objective_gradients", true );
         aParameterLists.set( "evaluate_constraint_gradients", true );
         aParameterLists.set( "num_evaluations_per_adv", "1" );

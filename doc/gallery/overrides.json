@@ -17,5 +17,10 @@
     "edges": true,
     "camera": {"zoom": 1.12},
     "_why": "edges show the stress-driven (ZZ) refinement; the bracket fills the frame better zoomed in a little"
+  },
+  "LevelSet_ADV_Filter": {
+    "file": "levelset_adv_filter_3.exo",
+    "caption": "Case 3: the cantilever optimized with the filter (radius 1.5 cells).",
+    "_why": "case 3 (filtered) is the scene; the unfiltered case 2 is compared on the page figure"
   }
 }

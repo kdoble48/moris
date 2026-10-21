@@ -7,7 +7,8 @@
  * example_test_case.cpp
  *
  * LevelSet_ADV_Filter: B-spline level-set designs without and with the Kreissl-Maute filter of the B-spline
- * coefficients. Each case is its own TEST_CASE and ctest process (tags [EXA_LevelSet_ADV_Filter_<0..3>]).
+ * coefficients. Each case is its own TEST_CASE and ctest process (tags [EXA_LevelSet_ADV_Filter_<0..3>]); the
+ * optimization cases 2 and 3 also carry [EXA_LevelSet_ADV_Filter], the tag of the gallery's showcase run.
  *
  * Cases 0 (no filter) and 1 (filter): sensitivity sweep of a plate with one hole
  *   - analytic dObjective/dADV and dConstraint/dADV agree with central finite differences for every ADV
@@ -51,6 +52,15 @@ namespace exa_levelset_adv_filter
 
     //---------------------------------------------------------------
 
+    // output file stem of a case (the deck's output_name())
+    static std::string
+    output_name( uint aCaseIndex )
+    {
+        return "levelset_adv_filter_" + std::to_string( aCaseIndex );
+    }
+
+    //---------------------------------------------------------------
+
     static void
     check_results( uint aCaseIndex )
     {
@@ -61,7 +71,7 @@ namespace exa_levelset_adv_filter
         Matrix< DDRMat > tObjectiveFD;
         Matrix< DDRMat > tConstraintFD;
 
-        hid_t  tFileID = open_hdf5_file( "levelset_adv_filter.hdf5" );
+        hid_t  tFileID = open_hdf5_file( output_name( aCaseIndex ) + ".hdf5" );
         herr_t tStatus = 0;
         load_matrix_from_hdf5_file( tFileID, "objectives eval_1-1", tObjective, tStatus );
         load_matrix_from_hdf5_file( tFileID, "constraints eval_1-1", tConstraint, tStatus );
@@ -119,13 +129,15 @@ namespace exa_levelset_adv_filter
 
     //---------------------------------------------------------------
 
-    // VIS writes one file per evaluation: levelset_adv_filter.exo.e-s.0000, .0001, ...
+    // VIS writes one file per evaluation: levelset_adv_filter_<case>.exo.e-s.0000, .0001, ...
     static std::string
-    exodus_step_file( uint aStep )
+    exodus_step_file(
+            uint aCaseIndex,
+            uint aStep )
     {
         char tSuffix[ 16 ];
         std::snprintf( tSuffix, sizeof( tSuffix ), "%04u", aStep );
-        return "levelset_adv_filter.exo.e-s." + std::string( tSuffix );
+        return output_name( aCaseIndex ) + ".exo.e-s." + std::string( tSuffix );
     }
 
     static void
@@ -133,11 +145,11 @@ namespace exa_levelset_adv_filter
     {
         // the last evaluation's file holds the final design (MMA accepts its last trial)
         uint tLastStep = 0;
-        while ( std::ifstream( exodus_step_file( tLastStep + 1 ) ).good() )
+        while ( std::ifstream( exodus_step_file( aCaseIndex, tLastStep + 1 ) ).good() )
         {
             tLastStep++;
         }
-        std::string tLastFile = exodus_step_file( tLastStep );
+        std::string tLastFile = exodus_step_file( aCaseIndex, tLastStep );
         REQUIRE( tLastStep > 100 );
 
         moris::mtk::Exodus_IO_Helper tExoIO( tLastFile.c_str(), 0, true, false );
@@ -169,7 +181,8 @@ namespace exa_levelset_adv_filter
 
         if ( par_rank() == 0 )
         {
-            MORIS_ERROR( std::system( "rm -f levelset_adv_filter.hdf5 levelset_adv_filter.exo* ADV_Alg_0_Iter_*.hdf5" ) == 0,
+            std::string tRemove = "rm -f " + output_name( aCaseIndex ) + ".hdf5 " + output_name( aCaseIndex ) + ".exo* ADV_Alg_0_Iter_*.hdf5";
+            MORIS_ERROR( std::system( tRemove.c_str() ) == 0,
                     "LevelSet_ADV_Filter: removing the output of an earlier run failed" );
         }
 
@@ -205,12 +218,12 @@ namespace exa_levelset_adv_filter
         run_case( 1 );
     }
 
-    TEST_CASE( "LevelSet_ADV_Filter_2", "[moris],[example],[optimization],[EXA_LevelSet_ADV_Filter_2]" )
+    TEST_CASE( "LevelSet_ADV_Filter_2", "[moris],[example],[optimization],[EXA_LevelSet_ADV_Filter_2],[EXA_LevelSet_ADV_Filter]" )
     {
         run_case( 2 );
     }
 
-    TEST_CASE( "LevelSet_ADV_Filter_3", "[moris],[example],[optimization],[EXA_LevelSet_ADV_Filter_3]" )
+    TEST_CASE( "LevelSet_ADV_Filter_3", "[moris],[example],[optimization],[EXA_LevelSet_ADV_Filter_3],[EXA_LevelSet_ADV_Filter]" )
     {
         run_case( 3 );
     }

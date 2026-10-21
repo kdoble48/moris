@@ -5,7 +5,8 @@
 #------------------------------------------------------------------------------------
 #
 # Level-set B-spline coefficients with and without the Kreissl-Maute filter (adv_filter_radius); one deck, four cases,
-# each its own ctest / runner process. Tags: [EXA_LevelSet_ADV_Filter_<0..3>].
+# each its own ctest / runner process. Tags: [EXA_LevelSet_ADV_Filter_<0..3>]; cases 2 and 3 also
+# [EXA_LevelSet_ADV_Filter] (the gallery showcase run).
 #   0, 1: sensitivity sweep of a plate with a hole, without / with the filter (radius 1.5 h)
 #   2, 3: 100 MMA iterations of a cantilever, without / with the filter
 moris_add_example(
