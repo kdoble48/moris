@@ -187,6 +187,9 @@ cases 2 and 3 about 80 s each.
 ## References
 
 - Kreissl, S. and Maute, K. (2012). Levelset based fluid topology optimization using the
-  extended finite element method. *Structural and Multidisciplinary Optimization* 46, 311–326.
+  extended finite element method. *Structural and Multidisciplinary Optimization* 46(3),
+  311–326. [doi:10.1007/s00158-012-0782-8](https://doi.org/10.1007/s00158-012-0782-8)
 - Barrera, J. L., Geiss, M. J. and Maute, K. (2022). Minimum feature size control in level set
-  topology optimization via density fields. *Structural and Multidisciplinary Optimization* 65.
+  topology optimization via density fields. *Structural and Multidisciplinary Optimization*
+  65(3), 94. [doi:10.1007/s00158-021-03096-7](https://doi.org/10.1007/s00158-021-03096-7).
+  The filter is their Eq. (1); they use radius 1.5 h in 2D and 1.8 h in 3D.

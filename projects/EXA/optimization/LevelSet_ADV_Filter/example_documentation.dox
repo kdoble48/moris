@@ -46,9 +46,10 @@ the filter (radius 1.5 h). Documentation with figures: doc/examples/exa/optimiza
 
 # Literature
 - Kreissl, S. and Maute, K. (2012), Levelset based fluid topology optimization using the extended finite element method,
-  Structural and Multidisciplinary Optimization 46, 311-326.
+  Structural and Multidisciplinary Optimization 46(3), 311-326, doi:10.1007/s00158-012-0782-8.
 - Barrera, J. L., Geiss, M. J. and Maute, K. (2022), Minimum feature size control in level set topology optimization via
-  density fields, Structural and Multidisciplinary Optimization 65 (filter radius 1.5 h in 2D, 1.8 h in 3D).
+  density fields, Structural and Multidisciplinary Optimization 65(3), 94, doi:10.1007/s00158-021-03096-7
+  (the filter is their Eq. 1; radius 1.5 h in 2D, 1.8 h in 3D).
 
 # Developer Notes
 - The filter is serial only, and is incompatible with the in-place SDF reinitialization, which writes coefficient space
