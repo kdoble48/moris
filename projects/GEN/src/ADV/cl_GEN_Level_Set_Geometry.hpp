@@ -274,6 +274,13 @@ namespace moris::gen
         real get_adv_filter_radius() override;
 
         /**
+         * Type of the filter of this level set's B-spline coefficients (adv_filter_type)
+         *
+         * @return "linear" or "helmholtz"
+         */
+        std::string get_adv_filter_type() override;
+
+        /**
          * Get the upper bound for a discretized field.
          *
          * @return Upper bound

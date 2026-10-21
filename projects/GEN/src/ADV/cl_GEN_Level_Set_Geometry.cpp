@@ -780,6 +780,15 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // type of the filter of this level set's ADVs ("linear" or "helmholtz")
+    std::string
+    Level_Set_Geometry::get_adv_filter_type()
+    {
+        return mParameters.mADVFilterType;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     real
     Level_Set_Geometry::get_discretization_upper_bound()
     {

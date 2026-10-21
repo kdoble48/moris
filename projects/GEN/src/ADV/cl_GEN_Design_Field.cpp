@@ -27,6 +27,7 @@ namespace moris::gen
             , mUseMultilinearInterpolation( aParameterList.get< bool >( "use_multilinear_interpolation" ) )
             , mUseCellOrderIntersection( aParameterList.exists( "use_cell_order_intersection" ) and aParameterList.get< bool >( "use_cell_order_intersection" ) )
             , mADVFilterRadius( aParameterList.exists( "adv_filter_radius" ) ? aParameterList.get< real >( "adv_filter_radius" ) : 0.0 )
+            , mADVFilterType( aParameterList.exists( "adv_filter_type" ) ? aParameterList.get< std::string >( "adv_filter_type" ) : "linear" )
     {
         // (the keys are read only if present, so that decks compiled against older PRM headers keep working)
 

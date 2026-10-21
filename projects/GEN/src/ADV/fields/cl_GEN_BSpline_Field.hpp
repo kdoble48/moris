@@ -70,6 +70,13 @@ namespace moris::gen
               Vector< sint >&   aADVIds );
 
       /**
+       * Polynomial order of this field's B-spline discretization.
+       *
+       * @return B-spline order
+       */
+      uint get_bspline_order();
+
+      /**
        * Given a node index, returns the field value.
        *
        * @param aNodeIndex Node index

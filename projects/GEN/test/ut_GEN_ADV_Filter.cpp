@@ -226,6 +226,52 @@ namespace moris::gen
                 CHECK( tNumReproduced == tNumInterior );
             }
 
+            SECTION( "Helmholtz r = 0.5 h: F 1 = 1, F^T is the adjoint, a Neumann cosine mode is damped by 1 / ( 1 + r^2 k^2 )" )
+            {
+                // linear level set: its initial coefficients give the Greville abscissae (x = psi + 0.1)
+                real                      tRadius              = 0.5 * tSpacing;
+                Submodule_Parameter_Lists tFieldParameterLists = create_level_set_parameters( true, tRadius );
+                tFieldParameterLists.set( "adv_filter_type", "helmholtz" );
+                Geometry_Engine_Parameters tGeometryEngineParameters;
+                ADV_Manager                tADVManager;
+                Design_Factory             tDesignFactory( tFieldParameterLists, tADVManager );
+                tGeometryEngineParameters.mGeometries = tDesignFactory.get_geometries();
+                Geometry_Engine_Test tGeometryEngine( tMesh, tGeometryEngineParameters );
+                REQUIRE( tGeometryEngine.has_adv_filter() );
+                Vector< real > tGreville = tGeometryEngine.get_advs();
+                uint           tNumADVs  = tGreville.size();
+
+                // F 1 = 1 (K 1 = 0 with the natural boundary condition)
+                Vector< real > tConstant( tNumADVs, 0.37 );
+                Vector< real > tFilteredConstant = tGeometryEngine.apply_adv_filter( tConstant );
+                for ( uint iADV = 0; iADV < tNumADVs; iADV++ )
+                {
+                    CHECK( tFilteredConstant( iADV ) == Approx( 0.37 ).margin( 1e-12 ) );
+                }
+
+                // < F a, b > = < a, F^T b >
+                Vector< real > tA = random_vector( tNumADVs, 4 );
+                Vector< real > tB = random_vector( tNumADVs, 5 );
+                CHECK( dot( tGeometryEngine.apply_adv_filter( tA ), tB ) == Approx( dot( tA, tGeometryEngine.apply_adv_filter_transpose( tB ) ) ).epsilon( 1e-12 ) );
+
+                // the Neumann mode cos( k ( x + 1 ) ), k = pi / 2, of the domain [-1, 1]: the filter scales it by 1 / ( 1 + r^2 k^2 )
+                real           tWaveNumber = 0.5 * M_PI;
+                real           tExpected   = 1.0 / ( 1.0 + tRadius * tRadius * tWaveNumber * tWaveNumber );
+                Vector< real > tMode( tNumADVs );
+                for ( uint iADV = 0; iADV < tNumADVs; iADV++ )
+                {
+                    tMode( iADV ) = std::cos( tWaveNumber * ( tGreville( iADV ) + 0.1 + 1.0 ) );
+                }
+                Vector< real > tFilteredMode = tGeometryEngine.apply_adv_filter( tMode );
+                real           tMaxError     = 0.0;
+                for ( uint iADV = 0; iADV < tNumADVs; iADV++ )
+                {
+                    tMaxError = std::max( tMaxError, std::abs( tFilteredMode( iADV ) - tExpected * tMode( iADV ) ) );
+                }
+                std::printf( "Helmholtz ADV filter: mode damping expected %.6f, max |F psi - expected psi| = %.2e\n", tExpected, tMaxError );
+                CHECK( tMaxError < 5e-3 );
+            }
+
             delete tMesh;
         }
     }

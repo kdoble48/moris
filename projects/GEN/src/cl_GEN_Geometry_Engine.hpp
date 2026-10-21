@@ -595,6 +595,26 @@ namespace moris::gen
                 real                    aRadius,
                 const ADV_Position_Map& aPositionOfId );
 
+        /**
+         * Appends the Helmholtz (PDE) filter rows of one B-spline field to mADVFilterRows: F = ( M + r^2 K )^-1 M with the
+         * Galerkin mass and stiffness matrices of the field's B-spline basis over the domain (natural boundary condition;
+         * Lazarov and Sigmund 2011). The coefficients must form a uniform tensor lattice (uniform, unrefined B-splines);
+         * F is formed densely, so this is meant for moderate numbers of coefficients.
+         *
+         * @param aCoordinates Greville coordinates of the field's coefficients, one row per coefficient
+         * @param aADVIds Global ADV ID of each coefficient
+         * @param aOrder B-spline order of the field
+         * @param aRadius Helmholtz filter radius r in physical units
+         * @param aPositionOfId Position of each global ADV ID in the full ADV vector
+         * @return Number of nonzero filter weights added
+         */
+        uint add_helmholtz_filter_rows(
+                const Matrix< DDRMat >& aCoordinates,
+                const Vector< sint >&   aADVIds,
+                uint                    aOrder,
+                real                    aRadius,
+                const ADV_Position_Map& aPositionOfId );
+
         static void communicate_missing_owned_coefficients(
                 mtk::Mesh_Pair&  aMeshPair,
                 Matrix< IdMat >& aAllCoefIds,

@@ -145,6 +145,18 @@ namespace moris::gen
         }
 
         /**
+         * Type of the filter of this design's B-spline coefficients (parameter adv_filter_type): "linear" (Kreissl-Maute)
+         * or "helmholtz" (PDE filter). Only used when get_adv_filter_radius() > 0.
+         *
+         * @return Filter type
+         */
+        virtual std::string
+        get_adv_filter_type()
+        {
+            return "linear";
+        }
+
+        /**
          * Sets the ADVs and grabs the field variables needed from the ADV vector
          *
          * @param aADVs ADVs

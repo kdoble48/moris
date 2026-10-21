@@ -11,6 +11,7 @@
 // MRS
 #include <unordered_map>
 #include <cmath>
+#include <algorithm>
 
 #include "cl_Module_Parameter_Lists.hpp"
 #include "fn_Parsing_Tools.hpp"
@@ -19,6 +20,7 @@
 
 // GEN
 #include "cl_GEN_Geometry_Engine.hpp"
+#include "fn_linsolve.hpp"
 #include "GEN_Data_Types.hpp"
 #include "cl_GEN_Design_Factory.hpp"
 #include "cl_GEN_BSpline_Field.hpp"
@@ -347,7 +349,14 @@ namespace moris::gen
             tBSplineField->get_coefficient_coordinates( tCoordinates, tADVIds );
 
             // filter rows of this field
-            uint tNumEntries      = this->add_adv_filter_rows( tCoordinates, tADVIds, tRadius, tPositionOfId );
+            std::string tType = iGeometry->get_adv_filter_type();
+            MORIS_ERROR( tType == "linear" or tType == "helmholtz",
+                    "Geometry_Engine: adv_filter_type of %s must be \"linear\" or \"helmholtz\", not \"%s\".",
+                    iGeometry->get_name().c_str(),
+                    tType.c_str() );
+            uint tNumEntries      = tType == "linear"
+                                          ? this->add_adv_filter_rows( tCoordinates, tADVIds, tRadius, tPositionOfId )
+                                          : this->add_helmholtz_filter_rows( tCoordinates, tADVIds, tBSplineField->get_bspline_order(), tRadius, tPositionOfId );
             uint tNumCoefficients = tCoordinates.n_rows();
 
             // a radius below the coefficient spacing leaves every coefficient its own only neighbor
@@ -358,7 +367,8 @@ namespace moris::gen
                         tRadius );
             }
 
-            MORIS_LOG_INFO( "ADV filter on %s: radius %g, %u coefficients, %.2f ADVs per filtered coefficient",
+            MORIS_LOG_INFO( "ADV filter (%s) on %s: radius %g, %u coefficients, %.2f ADVs per filtered coefficient",
+                    tType.c_str(),
                     iGeometry->get_name().c_str(),
                     tRadius,
                     tNumCoefficients,
@@ -461,6 +471,238 @@ namespace moris::gen
             }
             tNumEntries += tRow.mColumns.size();
             mADVFilterRows.push_back( tRow );
+        }
+        return tNumEntries;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // value ( aDerivative = false ) or first derivative of the uniform cardinal B-spline of degree aDegree, support [0, aDegree + 1]
+    static real
+    cardinal_bspline(
+            uint aDegree,
+            real aT,
+            bool aDerivative )
+    {
+        if ( aDerivative )
+        {
+            return aDegree == 0 ? 0.0 : cardinal_bspline( aDegree - 1, aT, false ) - cardinal_bspline( aDegree - 1, aT - 1.0, false );
+        }
+        if ( aDegree == 0 )
+        {
+            return ( aT >= 0.0 and aT < 1.0 ) ? 1.0 : 0.0;
+        }
+        return ( aT * cardinal_bspline( aDegree - 1, aT, false ) + ( aDegree + 1.0 - aT ) * cardinal_bspline( aDegree - 1, aT - 1.0, false ) ) / aDegree;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // 1D Galerkin mass and stiffness matrices of aNumBasis uniform B-splines of degree aDegree and spacing aSpacing whose
+    // Greville points start at aFirstGreville, integrated over the domain they cover (aNumBasis - aDegree cells)
+    static void
+    bspline_mass_stiffness_1d(
+            uint              aNumBasis,
+            uint              aDegree,
+            real              aSpacing,
+            real              aFirstGreville,
+            Matrix< DDRMat >& aMass,
+            Matrix< DDRMat >& aStiffness )
+    {
+        aMass.set_size( aNumBasis, aNumBasis, 0.0 );
+        aStiffness.set_size( aNumBasis, aNumBasis, 0.0 );
+
+        // domain start: the first Greville point lies ( degree - 1 ) / 2 spacings before it
+        real tDomainStart = aFirstGreville + 0.5 * ( aDegree - 1.0 ) * aSpacing;
+        uint tNumCells    = aNumBasis - aDegree;
+
+        // Gauss-Legendre points on [0, 1] (exact for the degree-2p products up to degree 3)
+        const real tPoints[ 4 ]  = { 0.0694318442029737, 0.3300094782075719, 0.6699905217924281, 0.9305681557970263 };
+        const real tWeights[ 4 ] = { 0.1739274225687269, 0.3260725774312731, 0.3260725774312731, 0.1739274225687269 };
+        MORIS_ERROR( aDegree <= 3, "Geometry_Engine: the Helmholtz ADV filter supports B-splines up to order 3." );
+
+        for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+        {
+            for ( uint iPoint = 0; iPoint < 4; iPoint++ )
+            {
+                real tX      = tDomainStart + ( iCell + tPoints[ iPoint ] ) * aSpacing;
+                real tWeight = tWeights[ iPoint ] * aSpacing;
+                for ( uint iBasis = 0; iBasis < aNumBasis; iBasis++ )
+                {
+                    // basis i: support starts ( degree + 1 ) / 2 spacings before its Greville point
+                    real tTi = ( tX - aFirstGreville - iBasis * aSpacing ) / aSpacing + 0.5 * ( aDegree + 1.0 );
+                    real tNi = cardinal_bspline( aDegree, tTi, false );
+                    real tDi = cardinal_bspline( aDegree, tTi, true ) / aSpacing;
+                    if ( tNi == 0.0 and tDi == 0.0 )
+                    {
+                        continue;
+                    }
+                    for ( uint jBasis = 0; jBasis < aNumBasis; jBasis++ )
+                    {
+                        real tTj = ( tX - aFirstGreville - jBasis * aSpacing ) / aSpacing + 0.5 * ( aDegree + 1.0 );
+                        aMass( iBasis, jBasis ) += tWeight * tNi * cardinal_bspline( aDegree, tTj, false );
+                        aStiffness( iBasis, jBasis ) += tWeight * tDi * cardinal_bspline( aDegree, tTj, true ) / aSpacing;
+                    }
+                }
+            }
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // Helmholtz filter rows of one field: F = ( M + r^2 K )^-1 M on the field's uniform B-spline lattice
+    uint
+    Geometry_Engine::add_helmholtz_filter_rows(
+            const Matrix< DDRMat >& aCoordinates,
+            const Vector< sint >&   aADVIds,
+            uint                    aOrder,
+            real                    aRadius,
+            const ADV_Position_Map& aPositionOfId )
+    {
+        uint tNumCoefficients = aCoordinates.n_rows();
+        uint tDimensions      = aCoordinates.n_cols();
+
+        // lattice of the Greville points: first point, spacing and size per dimension
+        real tFirst[ 3 ]   = { 0.0, 0.0, 0.0 };
+        real tSpacing[ 3 ] = { 1.0, 1.0, 1.0 };
+        uint tSize[ 3 ]    = { 1, 1, 1 };
+        for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+        {
+            Vector< real > tValues( tNumCoefficients );
+            for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+            {
+                tValues( iCoefficient ) = aCoordinates( iCoefficient, iDimension );
+            }
+            std::sort( tValues.begin(), tValues.end() );
+            Vector< real > tUnique = { tValues( 0 ) };
+            for ( real iValue : tValues )
+            {
+                if ( iValue - tUnique( tUnique.size() - 1 ) > 1e-9 * ( 1.0 + std::abs( iValue ) ) )
+                {
+                    tUnique.push_back( iValue );
+                }
+            }
+            MORIS_ERROR( tUnique.size() > aOrder, "Geometry_Engine: Helmholtz ADV filter needs more coefficients than the B-spline order per dimension." );
+            tFirst[ iDimension ]   = tUnique( 0 );
+            tSize[ iDimension ]    = tUnique.size();
+            tSpacing[ iDimension ] = ( tUnique( tUnique.size() - 1 ) - tUnique( 0 ) ) / ( tUnique.size() - 1 );
+        }
+        uint tNumLattice = tSize[ 0 ] * tSize[ 1 ] * tSize[ 2 ];
+        MORIS_ERROR( tNumLattice == tNumCoefficients,
+                "Geometry_Engine: Helmholtz ADV filter needs a uniform tensor B-spline lattice (no refinement): %u coefficients on a %u x %u x %u lattice",
+                tNumCoefficients,
+                tSize[ 0 ],
+                tSize[ 1 ],
+                tSize[ 2 ] );
+        MORIS_ERROR( tNumLattice <= 20000, "Geometry_Engine: Helmholtz ADV filter forms F densely; %u coefficients is too many.", tNumLattice );
+
+        // lattice index of every coefficient (uniform spacing checked point by point)
+        Vector< uint > tCoefficientAt( tNumLattice, MORIS_UINT_MAX );
+        Vector< uint > tLatticeIndex( tNumCoefficients );
+        for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+        {
+            uint tIndex = 0;
+            uint tScale = 1;
+            for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+            {
+                real tPosition = ( aCoordinates( iCoefficient, iDimension ) - tFirst[ iDimension ] ) / tSpacing[ iDimension ];
+                real tRounded  = std::round( tPosition );
+                MORIS_ERROR( std::abs( tPosition - tRounded ) < 1e-6, "Geometry_Engine: Helmholtz ADV filter needs uniformly spaced B-spline coefficients." );
+                tIndex += tScale * (uint)tRounded;
+                tScale *= tSize[ iDimension ];
+            }
+            MORIS_ERROR( tCoefficientAt( tIndex ) == MORIS_UINT_MAX, "Geometry_Engine: two B-spline coefficients share a Greville point." );
+            tCoefficientAt( tIndex )      = iCoefficient;
+            tLatticeIndex( iCoefficient ) = tIndex;
+        }
+
+        // 1D mass and stiffness matrices per dimension
+        Vector< Matrix< DDRMat > > tMass( 3 );
+        Vector< Matrix< DDRMat > > tStiffness( 3 );
+        for ( uint iDimension = 0; iDimension < 3; iDimension++ )
+        {
+            if ( iDimension < tDimensions )
+            {
+                bspline_mass_stiffness_1d( tSize[ iDimension ], aOrder, tSpacing[ iDimension ], tFirst[ iDimension ], tMass( iDimension ), tStiffness( iDimension ) );
+            }
+            else
+            {
+                tMass( iDimension ).set_size( 1, 1, 1.0 );
+                tStiffness( iDimension ).set_size( 1, 1, 0.0 );
+            }
+        }
+
+        // tensor-product M and A = M + r^2 K (K = sum over dimensions of K_d times the other masses)
+        Matrix< DDRMat > tSystem( tNumLattice, tNumLattice, 0.0 );
+        Matrix< DDRMat > tRightHandSide( tNumLattice, tNumLattice, 0.0 );
+        real             tRadiusSquared = aRadius * aRadius;
+        for ( uint iRow = 0; iRow < tNumLattice; iRow++ )
+        {
+            uint tRowIndex[ 3 ] = { iRow % tSize[ 0 ], ( iRow / tSize[ 0 ] ) % tSize[ 1 ], iRow / ( tSize[ 0 ] * tSize[ 1 ] ) };
+            for ( uint iColumn = 0; iColumn < tNumLattice; iColumn++ )
+            {
+                uint tColumnIndex[ 3 ] = { iColumn % tSize[ 0 ], ( iColumn / tSize[ 0 ] ) % tSize[ 1 ], iColumn / ( tSize[ 0 ] * tSize[ 1 ] ) };
+                real tMassValue        = 1.0;
+                real tStiffnessValue   = 0.0;
+                for ( uint iDimension = 0; iDimension < 3; iDimension++ )
+                {
+                    real tOtherMasses = 1.0;
+                    for ( uint iOther = 0; iOther < 3; iOther++ )
+                    {
+                        if ( iOther != iDimension )
+                        {
+                            tOtherMasses *= tMass( iOther )( tRowIndex[ iOther ], tColumnIndex[ iOther ] );
+                        }
+                    }
+                    tStiffnessValue += tStiffness( iDimension )( tRowIndex[ iDimension ], tColumnIndex[ iDimension ] ) * tOtherMasses;
+                }
+                for ( uint iDimension = 0; iDimension < 3; iDimension++ )
+                {
+                    tMassValue *= tMass( iDimension )( tRowIndex[ iDimension ], tColumnIndex[ iDimension ] );
+                }
+                tRightHandSide( iRow, iColumn ) = tMassValue;
+                tSystem( iRow, iColumn )        = tMassValue + tRadiusSquared * tStiffnessValue;
+            }
+        }
+
+        // F = A^-1 M (dense)
+        Matrix< DDRMat > tFilter = solve( tSystem, tRightHandSide );
+
+        // rows of the coefficients with ADVs; entries below 1e-12 of the row maximum are dropped, the row renormalized
+        uint tNumEntries = 0;
+        for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+        {
+            ADV_Position_Map::const_iterator tRowPosition = aPositionOfId.find( aADVIds( iCoefficient ) );
+            if ( tRowPosition == aPositionOfId.end() )
+            {
+                continue;
+            }
+            uint tRow    = tLatticeIndex( iCoefficient );
+            real tRowMax = 0.0;
+            for ( uint iColumn = 0; iColumn < tNumLattice; iColumn++ )
+            {
+                tRowMax = std::max( tRowMax, std::abs( tFilter( tRow, iColumn ) ) );
+            }
+
+            ADV_Filter_Row tFilterRow;
+            tFilterRow.mPosition = tRowPosition->second;
+            real tWeightSum      = 0.0;
+            for ( uint iColumn = 0; iColumn < tNumLattice; iColumn++ )
+            {
+                real                             tWeight         = tFilter( tRow, iColumn );
+                ADV_Position_Map::const_iterator tColumnPosition = aPositionOfId.find( aADVIds( tCoefficientAt( iColumn ) ) );
+                if ( std::abs( tWeight ) > 1e-12 * tRowMax and tColumnPosition != aPositionOfId.end() )
+                {
+                    tFilterRow.mColumns.push_back( tColumnPosition->second );
+                    tFilterRow.mWeights.push_back( tWeight );
+                    tWeightSum += tWeight;
+                }
+            }
+            for ( uint iColumn = 0; iColumn < tFilterRow.mWeights.size(); iColumn++ )
+            {
+                tFilterRow.mWeights( iColumn ) /= tWeightSum;
+            }
+            tNumEntries += tFilterRow.mColumns.size();
+            mADVFilterRows.push_back( tFilterRow );
         }
         return tNumEntries;
     }

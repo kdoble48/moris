@@ -120,6 +120,15 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // polynomial order of the B-spline discretization
+    uint
+    BSpline_Field::get_bspline_order()
+    {
+        return mMeshPair.get_interpolation_mesh()->get_discretization_order( mDiscretizationIndex );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     BSpline_Field::~BSpline_Field()
     {
         delete mOwnedNodalValues;

@@ -29,6 +29,7 @@ namespace moris::gen
         bool mUseMultilinearInterpolation;    // Whether to use multilinear interpolation for all derived node field values
         bool mUseCellOrderIntersection;       // Multilinear path, but on the background cell's own-order interpolant (no linear override)
         real mADVFilterRadius;                // Radius of the Kreissl-Maute linear filter of the B-spline coefficients (0 = off)
+        std::string mADVFilterType;                  // "linear" (Kreissl-Maute) or "helmholtz" (PDE filter)
 
         /**
          * Constructor with a given parameter list
