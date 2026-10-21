@@ -966,13 +966,16 @@ namespace moris::xtk
         if ( par_size() == 1 )
         {
             // 1e-13 lies inside the isocontour tolerance (1e-12, values label as INTERFACE), 1e-11 just outside it
-            for ( real tDelta : { 1.0e-13, 1.0e-11 } )
+            for ( Regime iRegime : { Regime::STORED, Regime::ANALYTIC, Regime::MULTILINEAR } )
             {
-                Sweep_Summary tSummary = single_geometry_sweep( "near_zero", { -1.0, -tDelta, tDelta, 1.0 }, Regime::STORED );
-                std::ostringstream tTitle;
-                tTitle << "single hex, corner values {-1,-d,+d,1}, d = " << tDelta << ", stored";
-                print_summary( tTitle.str(), tSummary );
-                check_invariants( tSummary, true, false );
+                for ( real tDelta : { 1.0e-13, 1.0e-11 } )
+                {
+                    Sweep_Summary      tSummary = single_geometry_sweep( "near_zero", { -1.0, -tDelta, tDelta, 1.0 }, iRegime );
+                    std::ostringstream tTitle;
+                    tTitle << "single hex, corner values {-1,-d,+d,1}, d = " << tDelta << ", " << regime_name( iRegime );
+                    print_summary( tTitle.str(), tSummary );
+                    check_invariants( tSummary, iRegime != Regime::MULTILINEAR, false );
+                }
             }
         }
     }
@@ -981,7 +984,7 @@ namespace moris::xtk
     {
         if ( par_size() == 1 )
         {
-            for ( Regime iRegime : { Regime::STORED, Regime::ANALYTIC } )
+            for ( Regime iRegime : { Regime::STORED, Regime::ANALYTIC, Regime::MULTILINEAR } )
             {
                 Sweep_Summary tSummary = two_geometry_sweep( "two_geometries", { -1.0, 0.0, 1.0 }, iRegime );
                 print_summary( "single hex, geometry A corner values {-1,0,1} x 8 second geometries, both orders, " + regime_name( iRegime ), tSummary );
