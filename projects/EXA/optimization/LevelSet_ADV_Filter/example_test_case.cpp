@@ -6,14 +6,15 @@
  *
  * example_test_case.cpp
  *
- * LevelSet_ADV_Filter: sensitivity sweep of a plate with a B-spline level-set hole, without (case 0) and with (case 1)
- * the Kreissl-Maute filter of the B-spline coefficients. Each case is its own TEST_CASE and ctest process
- * (tags [EXA_LevelSet_ADV_Filter_0], [EXA_LevelSet_ADV_Filter_1]).
+ * LevelSet_ADV_Filter: B-spline level-set designs without and with the Kreissl-Maute filter of the B-spline
+ * coefficients. Each case is its own TEST_CASE and ctest process (tags [EXA_LevelSet_ADV_Filter_<0..3>]).
  *
- * Checks per case:
+ * Cases 0 (no filter) and 1 (filter): sensitivity sweep of a plate with one hole
  *   - analytic dObjective/dADV and dConstraint/dADV agree with central finite differences for every ADV
  *     (relative to the largest analytic entry);
  *   - the criteria at the initial design match reference values; case 1 differs from case 0 (the fields use F psi).
+ * Cases 2 (no filter) and 3 (filter): 100 MMA iterations of a cantilever, min strain energy s.t. volume <= 1.0
+ *   - the final design meets the volume limit and its strain energy and volume match reference values.
  */
 
 #include <catch.hpp>
@@ -22,6 +23,9 @@
 #include "cl_Logger.hpp"    // MRS/IOS/src
 #include "HDF5_Tools.hpp"
 #include "fn_norm.hpp"
+#include "cl_MTK_Exodus_IO_Helper.hpp"    // MTK/src
+#include <fstream>
+#include <cstdio>
 
 #include "EXA_Globals.hpp"    // shared deck-visible globals (dlopen ABI; see doc/internal/EXA_RUNNER_RFC.md)
 
@@ -40,6 +44,10 @@ namespace exa_levelset_adv_filter
     // (recorded 2026-10-20, feature/ls-adv-filter; a failing check prints the new value)
     static const real tReferenceObjective[ 2 ]  = { 23.7730481965, 22.7173375688 };
     static const real tReferenceConstraint[ 2 ] = { 1.7243383991, 1.7568370074 };
+
+    // reference final strain energy and volume of the optimization cases 2 (no filter) and 3 (filter)
+    static const real tReferenceFinalSE[ 2 ]     = { 31.913990251, 32.070175458 };
+    static const real tReferenceFinalVolume[ 2 ] = { 0.99999978200, 0.99964353239 };
 
     //---------------------------------------------------------------
 
@@ -111,6 +119,49 @@ namespace exa_levelset_adv_filter
 
     //---------------------------------------------------------------
 
+    // VIS writes one file per evaluation: levelset_adv_filter.exo.e-s.0000, .0001, ...
+    static std::string
+    exodus_step_file( uint aStep )
+    {
+        char tSuffix[ 16 ];
+        std::snprintf( tSuffix, sizeof( tSuffix ), "%04u", aStep );
+        return "levelset_adv_filter.exo.e-s." + std::string( tSuffix );
+    }
+
+    static void
+    check_optimization_results( uint aCaseIndex )
+    {
+        // the last evaluation's file holds the final design (MMA accepts its last trial)
+        uint tLastStep = 0;
+        while ( std::ifstream( exodus_step_file( tLastStep + 1 ) ).good() )
+        {
+            tLastStep++;
+        }
+        std::string tLastFile = exodus_step_file( tLastStep );
+        REQUIRE( tLastStep > 100 );
+
+        moris::mtk::Exodus_IO_Helper tExoIO( tLastFile.c_str(), 0, true, false );
+        real                         tStrainEnergy = 0.0;
+        real                         tVolume       = 0.0;
+        for ( uint iGlobal = 0; iGlobal < 2; iGlobal++ )
+        {
+            std::string tName                                     = tExoIO.get_global_variable_name( iGlobal );
+            ( tName == "StrainEnergy" ? tStrainEnergy : tVolume ) = tExoIO.get_global_variable( iGlobal, 0 );
+        }
+
+        MORIS_LOG_INFO( "LevelSet_ADV_Filter case %u: %u evaluations; final strain energy %.10e, volume %.10e (limit 1.0)",
+                aCaseIndex,
+                tLastStep,
+                tStrainEnergy,
+                tVolume );
+
+        CHECK( tVolume <= 1.0 + 1e-3 );
+        CHECK( tStrainEnergy == Approx( tReferenceFinalSE[ aCaseIndex - 2 ] ).epsilon( 1e-6 ) );
+        CHECK( tVolume == Approx( tReferenceFinalVolume[ aCaseIndex - 2 ] ).epsilon( 1e-6 ) );
+    }
+
+    //---------------------------------------------------------------
+
     static void
     run_case( uint aCaseIndex )
     {
@@ -118,7 +169,8 @@ namespace exa_levelset_adv_filter
 
         if ( par_rank() == 0 )
         {
-            MORIS_ERROR( std::system( "rm -f levelset_adv_filter.hdf5" ) == 0, "LevelSet_ADV_Filter: removing the sweep file failed" );
+            MORIS_ERROR( std::system( "rm -f levelset_adv_filter.hdf5 levelset_adv_filter.exo* ADV_Alg_0_Iter_*.hdf5" ) == 0,
+                    "LevelSet_ADV_Filter: removing the output of an earlier run failed" );
         }
 
         int   argc       = 2;
@@ -130,7 +182,14 @@ namespace exa_levelset_adv_filter
         {
             int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
             REQUIRE( tRet == 0 );
-            check_results( aCaseIndex );
+            if ( aCaseIndex < 2 )
+            {
+                check_results( aCaseIndex );
+            }
+            else
+            {
+                check_optimization_results( aCaseIndex );
+            }
         }
     }
 
@@ -144,6 +203,16 @@ namespace exa_levelset_adv_filter
     TEST_CASE( "LevelSet_ADV_Filter_1", "[moris],[example],[optimization],[sweep],[EXA_LevelSet_ADV_Filter_1]" )
     {
         run_case( 1 );
+    }
+
+    TEST_CASE( "LevelSet_ADV_Filter_2", "[moris],[example],[optimization],[EXA_LevelSet_ADV_Filter_2]" )
+    {
+        run_case( 2 );
+    }
+
+    TEST_CASE( "LevelSet_ADV_Filter_3", "[moris],[example],[optimization],[EXA_LevelSet_ADV_Filter_3]" )
+    {
+        run_case( 3 );
     }
 
 }    // namespace exa_levelset_adv_filter

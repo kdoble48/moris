@@ -17,6 +17,8 @@ geometry parameter `adv_filter_radius`. It highlights:
 - Design-variable filter: the design field uses filtered B-spline coefficients F psi, where
   F_ij = max( 0, r - |x_i - x_j| ) / sum_j max( 0, r - |x_i - x_j| ) on the Greville points of the coefficients
 - Sensitivity sweep (OPT SWEEP) comparing analytic and finite-difference sensitivities
+- Level-set topology optimization of a cantilever without and with the filter (in-tree MMA)
+- Cut on the cell's own-order interpolant of the level set (use_cell_order_intersection)
 
 Each optimizer variable psi_j then moves the design field over a neighbourhood of radius r instead of a single B-spline
 support. This removes interface wiggles on the scale of the mesh that coefficient-wise optimizer steps create on
@@ -30,12 +32,17 @@ F^T times the sensitivities with respect to the coefficients.
 - Criteria: strain energy (objective) and volume (constraint)
 - Case 0: no filter. Case 1: `adv_filter_radius` = 1.5 h (each filtered coefficient averages its 3 x 3 neighbourhood)
 
-Both cases run an OPT SWEEP at the initial design with analytic and finite-difference sensitivities for every design
-variable; the check uses the central differences.
+Cases 0 and 1 run an OPT SWEEP at the initial design with analytic and finite-difference sensitivities for every
+design variable; the check uses the central differences.
+
+Cases 2 and 3: 40 x 20 cells, a staggered grid of 13 holes as the seed (924 design variables), traction (0, -10) on
+x = 2, y in [0.45, 0.55]; minimum strain energy with volume <= 1.0, 100 MMA iterations; case 2 without, case 3 with
+the filter (radius 1.5 h). Documentation with figures: doc/examples/exa/optimization/LevelSet_ADV_Filter.md.
 
 # Checks
 - Analytic and finite-difference sensitivities agree for every design variable (relative to the largest entry, 1e-5)
 - The criteria at the initial design match reference values; the filtered case differs from the unfiltered one
+- Cases 2 and 3: the final design meets the volume limit; final strain energy and volume match reference values
 
 # Literature
 - Kreissl, S. and Maute, K. (2012), Levelset based fluid topology optimization using the extended finite element method,

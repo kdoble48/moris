@@ -6,24 +6,31 @@
  *
  * LevelSet_ADV_Filter.cpp
  *
- * Plate with a circular hole, B-spline level set: sensitivity sweep with and without the Kreissl-Maute linear filter
- * of the level-set B-spline coefficients (GEN level-set parameter "adv_filter_radius").
+ * B-spline level-set designs with and without the Kreissl-Maute linear filter of the level-set B-spline coefficients
+ * (GEN level-set parameter "adv_filter_radius"). With the filter the design field is F psi, with
+ * F_ij ~ max( 0, r - |x_i - x_j| ) (rows normalized) on the Greville points of the coefficients; the optimizer keeps
+ * psi and the sensitivities are F^T times the coefficient sensitivities.
  *
- *   2 x 1 plate on [0, 2] x [0, 1], 12 x 6 cells (h = 1/6), quadratic Lagrange and B-splines
- *   design: circular hole, center (1.0, 0.5), radius 0.3, discretized on the B-splines (112 ADVs)
- *   physics: linear elasticity (E = 1, nu = 0.3, plane strain), clamped at x = 0 (Nitsche), traction (0, -1) at x = 2
+ * Common: 2 x 1 domain on [0, 2] x [0, 1], quadratic Lagrange and B-splines, linear elasticity (E = 1, nu = 0.3),
+ * clamped at x = 0 (Nitsche), material where the level set is positive, ghost stabilization, KLU direct solver.
+ *
+ * Cases 0 and 1: sensitivity sweep (OPT SWEEP) at the initial design, analytic vs finite differences for every ADV
+ *   12 x 6 cells (h = 1/6); one circular hole, center (1.0, 0.5), radius 0.3 (112 ADVs); traction (0, -1) on x = 2
  *   criteria: strain energy (objective) and volume (constraint)
+ *   case 0: no filter; case 1: filter radius 1.5 h
  *
- *   gCaseIndex = 0: no filter
- *   gCaseIndex = 1: filter radius 1.5 h; the design field is F psi with F_ij ~ max( 0, r - |x_i - x_j| ), rows
- *                   normalized, on the Greville points of the coefficients; the optimizer keeps psi and the
- *                   sensitivities are F^T times the coefficient sensitivities
- *
- * Both cases run an OPT SWEEP at the initial design with central finite differences on every ADV.
+ * Cases 2 and 3: cantilever optimization, min strain energy s.t. volume <= 50 % of the domain
+ *   40 x 20 cells (h = 1/20); seed: staggered grid of 13 circular holes of radius 0.12 (924 ADVs, bounds +- 3 h)
+ *   load: traction (0, -10) on x = 2, y in [0.45, 0.55]
+ *   cut on the quadratic interpolant of the level set (use_cell_order_intersection)
+ *   native MMA (GCMMA inner loop), 100 iterations, no level-set reinitialization
+ *   case 2: no filter; case 3: filter radius 1.5 h
  */
 
 #include <string>
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 #include "moris_typedefs.hpp"
 #include "cl_Matrix.hpp"
 #include "linalg_typedefs.hpp"
@@ -42,8 +49,31 @@ extern "C" {
 //------------------------------------------------------------------------------
 namespace moris
 {
-    // mesh: 12 x 6 cells on [0, 2] x [0, 1]
-    real tCellSize = 1.0 / 6.0;
+    // cases 0, 1: sweep on 12 x 6 cells; cases 2, 3: optimization on 40 x 20 cells
+    bool
+    is_optimization()
+    {
+        return gCaseIndex >= 2;
+    }
+
+    bool
+    use_filter()
+    {
+        return gCaseIndex == 1 or gCaseIndex == 3;
+    }
+
+    real
+    cell_size()
+    {
+        return is_optimization() ? 1.0 / 20.0 : 1.0 / 6.0;
+    }
+
+    // optimization cases: volume limit (50 % of the domain) and the strain energy of the initial design (normalization)
+    real tMaxVolume  = 0.5 * 2.0;
+    real tInitialSE  = -1.0;
+    real tSeedRadius = 0.12;
+    real tLoadY0     = 0.45;
+    real tLoadY1     = 0.55;
 
     // material = outside the hole (level set > 0, phase 1)
     std::string tMaterialSets = "HMR_dummy_n_p1,HMR_dummy_c_p1";
@@ -62,6 +92,38 @@ namespace moris
         aPropMatrix = aParameters( 0 );
     }
 
+    // traction (0, t) on x = 2: everywhere (sweep cases) or on y in [0.45, 0.55] (optimization cases)
+    void
+    Func_Traction(
+            moris::Matrix< moris::DDRMat >&           aPropMatrix,
+            Vector< moris::Matrix< moris::DDRMat > >& aParameters,
+            moris::fem::Field_Interpolator_Manager*   aFIManager )
+    {
+        real tY       = aFIManager->get_IG_geometry_interpolator()->valx()( 1 );
+        bool tOnPatch = not is_optimization() or ( tY >= tLoadY0 - 1e-12 and tY <= tLoadY1 + 1e-12 );
+        aPropMatrix   = { { 0.0 }, { tOnPatch ? aParameters( 0 )( 0 ) : 0.0 } };
+    }
+
+    // optimization seed: staggered grid of circular holes, phi = min_k ( |x - c_k| - r ), clipped to the ADV bounds
+    real
+    Func_Hole_Grid(
+            const moris::Matrix< DDRMat >& aCoordinates,
+            const Vector< real >&          aGeometryParameters )
+    {
+        real tPhi = 1.0e10;
+        for ( uint iColumn = 0; iColumn < 5; iColumn++ )
+        {
+            real           tX    = 0.2 + 0.4 * iColumn;
+            Vector< real > tRows = iColumn % 2 == 0 ? Vector< real >{ 0.25, 0.75 } : Vector< real >{ 0.0, 0.5, 1.0 };
+            for ( real tY : tRows )
+            {
+                tPhi = std::min( tPhi, std::hypot( aCoordinates( 0 ) - tX, aCoordinates( 1 ) - tY ) - tSeedRadius );
+            }
+        }
+        real tBound = 3.0 * cell_size();
+        return std::max( -tBound, std::min( tBound, tPhi ) );
+    }
+
     bool
     Output_Criterion( moris::tsa::Time_Solver* aTimeSolver )
     {
@@ -78,17 +140,22 @@ namespace moris
         return tConstraintTypes;
     }
 
+    // sweep cases: the criteria as they are; optimization cases: SE / SE(initial design) and V / V_max - 1
     Matrix< DDRMat >
     compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
     {
-        Matrix< DDRMat > tObjectives = { { aCriteria( 0 ) } };
+        if ( is_optimization() and tInitialSE < 0.0 )
+        {
+            tInitialSE = aCriteria( 0 );
+        }
+        Matrix< DDRMat > tObjectives = { { is_optimization() ? aCriteria( 0 ) / tInitialSE : aCriteria( 0 ) } };
         return tObjectives;
     }
 
     Matrix< DDRMat >
     compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
     {
-        Matrix< DDRMat > tConstraints = { { aCriteria( 1 ) } };
+        Matrix< DDRMat > tConstraints = { { is_optimization() ? aCriteria( 1 ) / tMaxVolume - 1.0 : aCriteria( 1 ) } };
         return tConstraints;
     }
 
@@ -102,7 +169,7 @@ namespace moris
     Matrix< DDRMat >
     compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
     {
-        Matrix< DDRMat > tDObjectiveDCriteria = { { 1.0, 0.0 } };
+        Matrix< DDRMat > tDObjectiveDCriteria = { { is_optimization() ? 1.0 / tInitialSE : 1.0, 0.0 } };
         return tDObjectiveDCriteria;
     }
 
@@ -116,7 +183,7 @@ namespace moris
     Matrix< DDRMat >
     compute_dconstraint_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
     {
-        Matrix< DDRMat > tDConstraintDCriteria = { { 0.0, 1.0 } };
+        Matrix< DDRMat > tDConstraintDCriteria = { { 0.0, is_optimization() ? 1.0 / tMaxVolume : 1.0 } };
         return tDConstraintDCriteria;
     }
 
@@ -125,7 +192,14 @@ namespace moris
     void
     HMRParameterList( Module_Parameter_Lists& aParameterLists )
     {
-        aParameterLists.set( "number_of_elements_per_dimension", 12, 6 );
+        if ( is_optimization() )
+        {
+            aParameterLists.set( "number_of_elements_per_dimension", 40, 20 );
+        }
+        else
+        {
+            aParameterLists.set( "number_of_elements_per_dimension", 12, 6 );
+        }
         aParameterLists.set( "domain_dimensions", 2.0, 1.0 );
         aParameterLists.set( "domain_offset", 0.0, 0.0 );
         aParameterLists.set( "lagrange_output_meshes", "0" );
@@ -165,19 +239,34 @@ namespace moris
         aParameterLists.set( "IQI_types", "IQIBulkStrainEnergy", "IQIBulkVolume" );
         aParameterLists.set( "output_mesh_file", "gen_levelset_adv_filter.exo" );
 
-        // hole: phi = distance to the center - radius (material where phi > 0)
-        aParameterLists( GEN::GEOMETRIES ).add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::CIRCLE ) );
-        aParameterLists.set( "center_x", 1.0 );
-        aParameterLists.set( "center_y", 0.5 );
-        aParameterLists.set( "radius", 0.3 );
-        aParameterLists.set( "discretization_mesh_index", 0 );
-        aParameterLists.set( "discretization_lower_bound", -2.0 );
-        aParameterLists.set( "discretization_upper_bound", 2.0 );
-
-        // case 1: Kreissl-Maute filter of the B-spline coefficients, radius 1.5 cells
-        if ( gCaseIndex == 1 )
+        if ( is_optimization() )
         {
-            aParameterLists.set( "adv_filter_radius", 1.5 * tCellSize );
+            // seed: staggered grid of holes (material where phi > 0), bounds +- 3 h
+            aParameterLists( GEN::GEOMETRIES ).add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::USER_DEFINED ) );
+            aParameterLists.set( "field_function_name", "Func_Hole_Grid" );
+            aParameterLists.set( "discretization_lower_bound", -3.0 * cell_size() );
+            aParameterLists.set( "discretization_upper_bound", 3.0 * cell_size() );
+
+            // cut on the cell's own-order (quadratic) interpolant of the level set, so the analysed boundary follows the
+            // design field itself rather than its corner values
+            aParameterLists.set( "use_cell_order_intersection", true );
+        }
+        else
+        {
+            // hole: phi = distance to the center - radius (material where phi > 0)
+            aParameterLists( GEN::GEOMETRIES ).add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::CIRCLE ) );
+            aParameterLists.set( "center_x", 1.0 );
+            aParameterLists.set( "center_y", 0.5 );
+            aParameterLists.set( "radius", 0.3 );
+            aParameterLists.set( "discretization_lower_bound", -2.0 );
+            aParameterLists.set( "discretization_upper_bound", 2.0 );
+        }
+        aParameterLists.set( "discretization_mesh_index", 0 );
+
+        // cases 1 and 3: Kreissl-Maute filter of the B-spline coefficients, radius 1.5 cells
+        if ( use_filter() )
+        {
+            aParameterLists.set( "adv_filter_radius", 1.5 * cell_size() );
         }
     }
 
@@ -210,8 +299,8 @@ namespace moris
 
         aParameterLists( FEM::PROPERTIES ).add_parameter_list();
         aParameterLists.set( "property_name", "PropTraction" );
-        aParameterLists.set( "function_parameters", "0.0;-1.0" );
-        aParameterLists.set( "value_function", "Func_Const" );
+        aParameterLists.set( "function_parameters", is_optimization() ? "-10.0" : "-1.0" );
+        aParameterLists.set( "value_function", "Func_Traction" );
 
         aParameterLists( FEM::CONSTITUTIVE_MODELS ).add_parameter_list();
         aParameterLists.set( "constitutive_name", "CMStrucLinIso" );
@@ -335,10 +424,15 @@ namespace moris
         aParameterLists.set( "File_Name", std::pair< std::string, std::string >( "./", "levelset_adv_filter.exo" ) );
         aParameterLists.set( "Mesh_Type", vis::VIS_Mesh_Type::STANDARD );
         aParameterLists.set( "Set_Names", tMaterialSets );
-        aParameterLists.set( "Field_Names", "UX" );
-        aParameterLists.set( "Field_Type", "NODAL" );
-        aParameterLists.set( "IQI_Names", "IQIBulkUX" );
+        aParameterLists.set( "Field_Names", "UX,StrainEnergy,Volume" );
+        aParameterLists.set( "Field_Type", "NODAL,GLOBAL,GLOBAL" );
+        aParameterLists.set( "IQI_Names", "IQIBulkUX,IQIBulkStrainEnergy,IQIBulkVolume" );
         aParameterLists.set( "Save_Frequency", 1 );
+        if ( is_optimization() )
+        {
+            // one file per evaluation (levelset_adv_filter.exo.e-s.NNNN): the design history
+            aParameterLists.set( "Time_Offset", 10.0 );
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -349,6 +443,18 @@ namespace moris
         aParameterLists.set( "is_optimization_problem", true );
         aParameterLists.set( "problem", "user_defined" );
         aParameterLists.set( "library", "LevelSet_ADV_Filter.so" );
+
+        if ( is_optimization() )
+        {
+            // native MMA with the GCMMA conservativeness inner loop; no level-set reinitialization
+            aParameterLists( OPT::ALGORITHMS ).add_parameter_list( opt::Optimization_Algorithm_Type::MMA );
+            aParameterLists.set( "step_size", 0.05 );
+            aParameterLists.set( "penalty", 5.0 );
+            aParameterLists.set( "max_its", 100 );
+            aParameterLists.set( "max_inner_its", 5 );
+            aParameterLists.set( "norm_drop", 1e-9 );
+            return;
+        }
 
         // sensitivity sweep at the initial design: analytic and finite differences (forward, backward, central) for every ADV
         // ("all": a single finite-difference mode skips the analytic gradients)
