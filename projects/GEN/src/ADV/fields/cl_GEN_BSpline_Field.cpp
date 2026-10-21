@@ -73,6 +73,7 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // Greville coordinates of the coefficients (coordinate fields mapped to B-splines) and their ADV IDs
     void
     BSpline_Field::get_coefficient_coordinates(
             Matrix< DDRMat >& aCoordinates,

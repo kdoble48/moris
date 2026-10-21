@@ -27,19 +27,6 @@ namespace moris::gen
 
     public:
       /**
-       * Greville coordinates of this field's B-spline coefficients and their global ADV IDs, in local coefficient
-       * order. The coordinate fields x, y (, z) are mapped NODE -> BSPLINE with this field's own mapper; B-splines
-       * reproduce linear functions, so the mapped coefficients are the Greville abscissae. Used by the geometry
-       * engine's ADV filter (adv_filter_radius).
-       *
-       * @param aCoordinates Coordinates, one row per coefficient
-       * @param aADVIds Global ADV ID of each coefficient
-       */
-      void get_coefficient_coordinates(
-              Matrix< DDRMat >& aCoordinates,
-              Vector< sint >&   aADVIds );
-
-      /**
        * Constructor where ADVs are added based on an input field and a B-spline mesh.
        *
        * @param aOwnedADVs Pointer to the owned distributed ADVs
@@ -68,6 +55,19 @@ namespace moris::gen
        * Destructor
        */
       ~BSpline_Field() override;
+
+      /**
+       * Greville coordinates of this field's B-spline coefficients and their global ADV IDs, in local coefficient
+       * order. The coordinate fields x, y (, z) are mapped NODE -> BSPLINE with this field's own mapper; B-splines
+       * reproduce linear functions, so the mapped coefficients are the Greville abscissae. Used by the geometry
+       * engine's ADV filter (adv_filter_radius).
+       *
+       * @param aCoordinates Coordinates, one row per coefficient
+       * @param aADVIds Global ADV ID of each coefficient
+       */
+      void get_coefficient_coordinates(
+              Matrix< DDRMat >& aCoordinates,
+              Vector< sint >&   aADVIds );
 
       /**
        * Given a node index, returns the field value.

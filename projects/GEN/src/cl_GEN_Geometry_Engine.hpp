@@ -20,6 +20,8 @@
 // MTK
 #include "cl_MTK_Enums.hpp"
 #include <unordered_map>
+#include <map>
+#include <array>
 
 namespace moris::gen
 {
@@ -75,6 +77,12 @@ namespace moris::gen
             Vector< uint > mColumns;     // positions of the ADVs it averages
             Vector< real > mWeights;     // normalized weights max( 0, r - |x_i - x_j| ) / sum
         };
+
+        // Neighbor search of the ADV filter: coefficients are sorted into buckets of edge length r (integer bucket
+        // coordinates), and global ADV IDs are mapped to positions in the full ADV vector
+        using Filter_Bucket_Key = std::array< sint, 3 >;
+        using Filter_Buckets    = std::map< Filter_Bucket_Key, Vector< uint > >;
+        using ADV_Position_Map  = std::unordered_map< sint, uint >;
         Vector< ADV_Filter_Row > mADVFilterRows;
         Vector< real >           mUnfilteredADVs;    // the optimizer's ADVs last passed to set_advs()
 
@@ -508,12 +516,6 @@ namespace moris::gen
         void reset_mesh_information( mtk::Interpolation_Mesh* aMesh );
 
         /**
-         * Builds the ADV filter rows (mADVFilterRows) for every geometry with adv_filter_radius > 0 from the Greville
-         * coordinates of its B-spline coefficients. Called at the end of distribute_advs(); serial only.
-         */
-        void build_adv_filter();
-
-        /**
          * Outputs geometry and property fields on the given mesh, and writes level set fields to a text file.
          * Uses output locations and file names stored from a parameter list or previous call to an output function.
          *
@@ -570,6 +572,28 @@ namespace moris::gen
         //-------------------------------------------------------------------------------
 
       private:
+        /**
+         * Builds the ADV filter rows (mADVFilterRows) for every geometry with adv_filter_radius > 0 from the Greville
+         * coordinates of its B-spline coefficients. Called at the end of distribute_advs(); serial only.
+         */
+        void build_adv_filter();
+
+        /**
+         * Appends the filter rows of one B-spline field to mADVFilterRows: for each coefficient i with an ADV, the
+         * normalized weights max( 0, r - |x_i - x_j| ) of all coefficients j within the radius (Kreissl and Maute 2012,
+         * Eq. 12).
+         *
+         * @param aCoordinates Greville coordinates of the field's coefficients, one row per coefficient
+         * @param aADVIds Global ADV ID of each coefficient
+         * @param aRadius Filter radius in physical units
+         * @param aPositionOfId Position of each global ADV ID in the full ADV vector
+         * @return Number of nonzero filter weights added
+         */
+        uint add_adv_filter_rows(
+                const Matrix< DDRMat >& aCoordinates,
+                const Vector< sint >&   aADVIds,
+                real                    aRadius,
+                const ADV_Position_Map& aPositionOfId );
 
         static void communicate_missing_owned_coefficients(
                 mtk::Mesh_Pair&  aMeshPair,

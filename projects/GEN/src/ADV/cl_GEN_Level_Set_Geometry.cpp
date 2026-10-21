@@ -771,6 +771,7 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // radius of the Kreissl-Maute filter of this level set's ADVs (0 = off)
     real
     Level_Set_Geometry::get_adv_filter_radius()
     {

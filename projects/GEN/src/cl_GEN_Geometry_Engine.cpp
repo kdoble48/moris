@@ -10,8 +10,6 @@
 
 // MRS
 #include <unordered_map>
-#include <map>
-#include <array>
 #include <cmath>
 
 #include "cl_Module_Parameter_Lists.hpp"
@@ -257,6 +255,7 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // whether any design filters its B-spline coefficients
     bool
     Geometry_Engine::has_adv_filter() const
     {
@@ -265,10 +264,14 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // F * aADVs: filtered rows are weighted averages, all other entries pass through
     Vector< real >
     Geometry_Engine::apply_adv_filter( const Vector< real >& aADVs ) const
     {
+        // start from the identity
         Vector< real > tFiltered = aADVs;
+
+        // replace each filtered entry by the weighted average of its columns
         for ( const ADV_Filter_Row& iRow : mADVFilterRows )
         {
             real tValue = 0.0;
@@ -283,15 +286,18 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // F^T * aValues: each filtered row distributes its value to its columns with its weights
     Vector< real >
     Geometry_Engine::apply_adv_filter_transpose( const Vector< real >& aValues ) const
     {
-        // identity rows pass through; a filtered row p distributes aValues( p ) to its columns with its weights
+        // start from the identity and remove the identity part of the filtered rows
         Vector< real > tResult = aValues;
         for ( const ADV_Filter_Row& iRow : mADVFilterRows )
         {
             tResult( iRow.mPosition ) -= aValues( iRow.mPosition );
         }
+
+        // scatter each filtered row's value to its columns
         for ( const ADV_Filter_Row& iRow : mADVFilterRows )
         {
             for ( uint iColumn = 0; iColumn < iRow.mColumns.size(); iColumn++ )
@@ -304,6 +310,7 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // filter rows of every geometry with adv_filter_radius > 0, on processor 0's full ADV vector
     void
     Geometry_Engine::build_adv_filter()
     {
@@ -311,7 +318,7 @@ namespace moris::gen
         mUnfilteredADVs.clear();
 
         // global ADV ID -> position in the full ADV vector (processor 0 holds the full vector)
-        std::unordered_map< sint, uint > tPositionOfId;
+        ADV_Position_Map tPositionOfId;
         for ( uint iPosition = 0; iPosition < mFullADVIds.size(); iPosition++ )
         {
             tPositionOfId[ mFullADVIds( iPosition ) ] = iPosition;
@@ -319,89 +326,36 @@ namespace moris::gen
 
         for ( const std::shared_ptr< Geometry >& iGeometry : mGeometries )
         {
+            // skip unfiltered geometries
             real tRadius = iGeometry->get_adv_filter_radius();
-            if ( tRadius <= 0.0 )
+            MORIS_ERROR( tRadius >= 0.0, "Geometry_Engine: adv_filter_radius of %s must be >= 0 (0 = off).", iGeometry->get_name().c_str() );
+            if ( tRadius == 0.0 )
             {
                 continue;
             }
             MORIS_ERROR( par_size() == 1, "Geometry_Engine: adv_filter_radius (%s) is implemented for serial runs only.", iGeometry->get_name().c_str() );
 
+            // the filter acts on B-spline coefficients
             std::shared_ptr< BSpline_Field > tBSplineField = std::dynamic_pointer_cast< BSpline_Field >( iGeometry->get_field() );
             MORIS_ERROR( tBSplineField != nullptr,
                     "Geometry_Engine: adv_filter_radius needs a B-spline discretized level set (discretization_mesh_index >= 0): %s",
                     iGeometry->get_name().c_str() );
 
+            // Greville coordinates and ADV IDs of the coefficients
             Matrix< DDRMat > tCoordinates;
             Vector< sint >   tADVIds;
             tBSplineField->get_coefficient_coordinates( tCoordinates, tADVIds );
+
+            // filter rows of this field
+            uint tNumEntries      = this->add_adv_filter_rows( tCoordinates, tADVIds, tRadius, tPositionOfId );
             uint tNumCoefficients = tCoordinates.n_rows();
-            uint tDimensions      = tCoordinates.n_cols();
 
-            // bucket the coefficients on a grid of cell size r: neighbors within r lie in the 3^d surrounding buckets
-            using Bucket_Key = std::array< long, 3 >;
-            std::map< Bucket_Key, Vector< uint > > tBuckets;
-            Vector< Bucket_Key >                   tKeys( tNumCoefficients );
-            for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+            // a radius below the coefficient spacing leaves every coefficient its own only neighbor
+            if ( tNumEntries <= tNumCoefficients )
             {
-                Bucket_Key tKey = { 0, 0, 0 };
-                for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
-                {
-                    tKey[ iDimension ] = (long)std::floor( tCoordinates( iCoefficient, iDimension ) / tRadius );
-                }
-                tKeys( iCoefficient ) = tKey;
-                tBuckets[ tKey ].push_back( iCoefficient );
-            }
-
-            uint tNumEntries = 0;
-            for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
-            {
-                std::unordered_map< sint, uint >::const_iterator tRowPosition = tPositionOfId.find( tADVIds( iCoefficient ) );
-                if ( tRowPosition == tPositionOfId.end() )
-                {
-                    continue;
-                }
-                ADV_Filter_Row tRow;
-                tRow.mPosition    = tRowPosition->second;
-                real tWeightSum   = 0.0;
-                long tOffsetLimit = tDimensions > 2 ? 1 : 0;
-                for ( long iX = -1; iX <= 1; iX++ )
-                {
-                    for ( long iY = -1; iY <= 1; iY++ )
-                    {
-                        for ( long iZ = -tOffsetLimit; iZ <= tOffsetLimit; iZ++ )
-                        {
-                            Bucket_Key                                             tNeighborKey = { tKeys( iCoefficient )[ 0 ] + iX, tKeys( iCoefficient )[ 1 ] + iY, tKeys( iCoefficient )[ 2 ] + iZ };
-                            std::map< Bucket_Key, Vector< uint > >::const_iterator tBucket      = tBuckets.find( tNeighborKey );
-                            if ( tBucket == tBuckets.end() )
-                            {
-                                continue;
-                            }
-                            for ( uint iNeighbor : tBucket->second )
-                            {
-                                real tDistanceSquared = 0.0;
-                                for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
-                                {
-                                    real tDelta = tCoordinates( iCoefficient, iDimension ) - tCoordinates( iNeighbor, iDimension );
-                                    tDistanceSquared += tDelta * tDelta;
-                                }
-                                real                                             tWeight         = tRadius - std::sqrt( tDistanceSquared );
-                                std::unordered_map< sint, uint >::const_iterator tColumnPosition = tPositionOfId.find( tADVIds( iNeighbor ) );
-                                if ( tWeight > 0.0 and tColumnPosition != tPositionOfId.end() )
-                                {
-                                    tRow.mColumns.push_back( tColumnPosition->second );
-                                    tRow.mWeights.push_back( tWeight );
-                                    tWeightSum += tWeight;
-                                }
-                            }
-                        }
-                    }
-                }
-                for ( uint iColumn = 0; iColumn < tRow.mWeights.size(); iColumn++ )
-                {
-                    tRow.mWeights( iColumn ) /= tWeightSum;
-                }
-                tNumEntries += tRow.mColumns.size();
-                mADVFilterRows.push_back( tRow );
+                MORIS_LOG_WARNING( "ADV filter on %s: radius %g averages no neighbors (radius below the coefficient spacing); the filter is the identity",
+                        iGeometry->get_name().c_str(),
+                        tRadius );
             }
 
             MORIS_LOG_INFO( "ADV filter on %s: radius %g, %u coefficients, %.2f ADVs per filtered coefficient",
@@ -410,6 +364,105 @@ namespace moris::gen
                     tNumCoefficients,
                     tNumCoefficients > 0 ? (real)tNumEntries / tNumCoefficients : 0.0 );
         }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // filter rows of one field: weights max( 0, r - |x_i - x_j| ), normalized per row (Kreissl and Maute 2012, Eq. 12)
+    uint
+    Geometry_Engine::add_adv_filter_rows(
+            const Matrix< DDRMat >& aCoordinates,
+            const Vector< sint >&   aADVIds,
+            real                    aRadius,
+            const ADV_Position_Map& aPositionOfId )
+    {
+        uint tNumCoefficients = aCoordinates.n_rows();
+        uint tDimensions      = aCoordinates.n_cols();
+
+        // sort the coefficients into buckets of edge length r: all neighbors within r lie in the 3^d surrounding buckets
+        Filter_Buckets              tBuckets;
+        Vector< Filter_Bucket_Key > tKeys( tNumCoefficients );
+        for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+        {
+            Filter_Bucket_Key tKey = { 0, 0, 0 };
+            for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+            {
+                tKey[ iDimension ] = (sint)std::floor( aCoordinates( iCoefficient, iDimension ) / aRadius );
+            }
+            tKeys( iCoefficient ) = tKey;
+            tBuckets[ tKey ].push_back( iCoefficient );
+        }
+
+        // offsets to the surrounding buckets (3 x 3 in 2D, 3 x 3 x 3 in 3D)
+        sint                        tOffsetLimitZ = tDimensions > 2 ? 1 : 0;
+        Vector< Filter_Bucket_Key > tBucketOffsets;
+        for ( sint iX = -1; iX <= 1; iX++ )
+        {
+            for ( sint iY = -1; iY <= 1; iY++ )
+            {
+                for ( sint iZ = -tOffsetLimitZ; iZ <= tOffsetLimitZ; iZ++ )
+                {
+                    tBucketOffsets.push_back( { iX, iY, iZ } );
+                }
+            }
+        }
+
+        uint tNumEntries = 0;
+        for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+        {
+            // coefficients without an ADV on this processor have no row
+            ADV_Position_Map::const_iterator tRowPosition = aPositionOfId.find( aADVIds( iCoefficient ) );
+            if ( tRowPosition == aPositionOfId.end() )
+            {
+                continue;
+            }
+            ADV_Filter_Row tRow;
+            tRow.mPosition  = tRowPosition->second;
+            real tWeightSum = 0.0;
+
+            // weights of all coefficients within the radius, from the surrounding buckets
+            for ( const Filter_Bucket_Key& iOffset : tBucketOffsets )
+            {
+                Filter_Bucket_Key tNeighborKey = { tKeys( iCoefficient )[ 0 ] + iOffset[ 0 ],
+                    tKeys( iCoefficient )[ 1 ] + iOffset[ 1 ],
+                    tKeys( iCoefficient )[ 2 ] + iOffset[ 2 ] };
+
+                Filter_Buckets::const_iterator tBucket = tBuckets.find( tNeighborKey );
+                if ( tBucket == tBuckets.end() )
+                {
+                    continue;
+                }
+                for ( uint iNeighbor : tBucket->second )
+                {
+                    // distance between the two Greville points
+                    real tDistanceSquared = 0.0;
+                    for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+                    {
+                        real tDelta = aCoordinates( iCoefficient, iDimension ) - aCoordinates( iNeighbor, iDimension );
+                        tDistanceSquared += tDelta * tDelta;
+                    }
+
+                    // linear cone weight, for neighbors that are ADVs
+                    real                             tWeight         = aRadius - std::sqrt( tDistanceSquared );
+                    ADV_Position_Map::const_iterator tColumnPosition = aPositionOfId.find( aADVIds( iNeighbor ) );
+                    if ( tWeight > 0.0 and tColumnPosition != aPositionOfId.end() )
+                    {
+                        tRow.mColumns.push_back( tColumnPosition->second );
+                        tRow.mWeights.push_back( tWeight );
+                        tWeightSum += tWeight;
+                    }
+                }
+            }
+
+            // normalize the row
+            for ( uint iColumn = 0; iColumn < tRow.mWeights.size(); iColumn++ )
+            {
+                tRow.mWeights( iColumn ) /= tWeightSum;
+            }
+            tNumEntries += tRow.mColumns.size();
+            mADVFilterRows.push_back( tRow );
+        }
+        return tNumEntries;
     }
 
     //--------------------------------------------------------------------------------------------------------------

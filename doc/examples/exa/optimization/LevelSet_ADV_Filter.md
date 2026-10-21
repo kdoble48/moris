@@ -162,9 +162,14 @@ aParameterLists.set( "adv_filter_radius", 1.5 * h );            // physical unit
 - Use 1.5 cells in 2D and about 1.8 cells in 3D. A radius below the coefficient spacing changes
   nothing (each coefficient is its own only neighbour).
 - Keep the radius in physical units when the mesh is refined.
-- The filter runs on one processor only.
+- The filter is a parameter of level-set geometries on a B-spline mesh
+  (`discretization_mesh_index` ≥ 0); properties and surface meshes do not have it. A negative
+  radius is an error; a radius below the coefficient spacing logs a warning (the filter is then
+  the identity).
+- The filter runs on one processor only; a parallel run with the filter stops with an error.
 - The in-place level-set reinitialization (`reinit_in_place`) writes coefficient values directly
-  and is not supported with the filter; the workflow stops with an error if both are set.
+  and is not supported with the filter, nor is remeshing during the optimization (the variables
+  ψ belong to the old basis); the workflow stops with an error in both cases.
 - Restart files hold the optimizer's variables ψ, so a warm restart continues the filtered run.
 
 ## What the test checks

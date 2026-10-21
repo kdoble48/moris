@@ -35,7 +35,9 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     static Submodule_Parameter_Lists
-    create_level_set_parameters( bool aLinear, real aFilterRadius )
+    create_level_set_parameters(
+            bool aLinear,
+            real aFilterRadius )
     {
         Submodule_Parameter_Lists tFieldParameterLists( "FIELDS" );
         if ( aLinear )
@@ -64,7 +66,9 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     static Vector< real >
-    random_vector( uint aSize, uint aSeed )
+    random_vector(
+            uint aSize,
+            uint aSeed )
     {
         std::mt19937                     tGenerator( aSeed );
         std::uniform_real_distribution<> tDistribution( -1.0, 1.0 );
@@ -79,7 +83,9 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     static real
-    dot( const Vector< real >& aFirst, const Vector< real >& aSecond )
+    dot(
+            const Vector< real >& aFirst,
+            const Vector< real >& aSecond )
     {
         real tSum = 0.0;
         for ( uint iEntry = 0; iEntry < aFirst.size(); iEntry++ )

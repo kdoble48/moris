@@ -206,7 +206,6 @@ namespace moris::prm
         aDesignParameterList.insert( "discretization_upper_bound", 1.0 );         // Upper bound of level set field (if bspline_mesh_index >= 0)
         aDesignParameterList.insert( "use_multilinear_interpolation", false );    // Whether to use multilinear interpolation for derived node field values
         aDesignParameterList.insert( "use_cell_order_intersection", false );      // Intersections and derived node values on the background cell's own-order Lagrange interpolant (implies multilinear)
-        aDesignParameterList.insert( "adv_filter_radius", 0.0 );                  // Kreissl-Maute linear filter (SMO 46:311-326, Eq. 12) of this field's B-spline coefficients (ADVs): radius in physical units, 0 = off (serial, B-spline level sets)
     }
 
     /**
@@ -260,6 +259,7 @@ namespace moris::prm
         tLevelSetParameterList.insert( "isocontour_threshold", 0.0 );              // Level set isocontour level
         tLevelSetParameterList.insert( "isocontour_tolerance", 1e-12 );            // Interface tolerance based on geometry value
         tLevelSetParameterList.insert( "intersection_tolerance", 1e-12 );          // Interface tolerance based on intersection distance
+        tLevelSetParameterList.insert( "adv_filter_radius", 0.0 );                 // Kreissl-Maute linear filter (SMO 46:311-326, Eq. 12) of the B-spline coefficients (ADVs): radius in physical units, 0 = off (serial only)
 
         return tLevelSetParameterList;
     }
