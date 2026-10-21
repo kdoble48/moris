@@ -66,8 +66,9 @@ namespace moris::gen
         sol::Dist_Vector* mOwnedADVs     = nullptr;
         sol::Dist_Vector* mPrimitiveADVs = nullptr;
 
-        // Kreissl-Maute ADV filter (adv_filter_radius): the filtered rows of F (coefficients = F * ADVs) on the full ADV
-        // vector; positions without a row are identity rows. Built on processor 0 by build_adv_filter().
+        // Kreissl-Maute ADV filter (adv_filter_radius; Kreissl and Maute 2012, SMO 46:311-326, Eq. 12, with r = r_s h): the
+        // filtered rows of F (coefficients = F * ADVs) on the full ADV vector; positions without a row are identity rows.
+        // Built on processor 0 by build_adv_filter().
         struct ADV_Filter_Row
         {
             uint           mPosition;    // position of the filtered coefficient in the full ADV vector
