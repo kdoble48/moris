@@ -492,6 +492,12 @@ namespace moris::wrk
                     }
                     Tracer tTracer( "GEN", "Levelset", "Interface-SDF-Reinitialize" );
 
+                    // the redistance writes B-spline coefficients into the ADV vector; with an ADV filter the ADVs are not
+                    // the coefficients (moris-gen-theory sign-off 2026-10-20: redistancing psi every step ratchets curvature flow)
+                    MORIS_ERROR( not mPerformerManager->mGENPerformer( 0 )->has_adv_filter(),
+                            "Workflow_HMR_XTK: in-place SDF reinitialization is not supported with adv_filter_radius > 0; "
+                            "turn the redistance off (reinitialization_frequency) or the filter off" );
+
                     // Get XTK cut integration mesh
                     xtk::Cut_Integration_Mesh* tCutMeshPtr = tXTKPerformer->get_cut_integration_mesh();
 

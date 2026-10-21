@@ -10,6 +10,9 @@
 
 // MRS
 #include <unordered_map>
+#include <map>
+#include <array>
+#include <cmath>
 
 #include "cl_Module_Parameter_Lists.hpp"
 #include "fn_Parsing_Tools.hpp"
@@ -20,6 +23,7 @@
 #include "cl_GEN_Geometry_Engine.hpp"
 #include "GEN_Data_Types.hpp"
 #include "cl_GEN_Design_Factory.hpp"
+#include "cl_GEN_BSpline_Field.hpp"
 #include "cl_GEN_Background_Node.hpp"
 #include "cl_GEN_Parent_Node.hpp"
 
@@ -146,9 +150,18 @@ namespace moris::gen
     void
     Geometry_Engine::set_advs( const Vector< real >& aNewADVs )
     {
+        // ADV filter: keep the optimizer's variables, give the fields the filtered coefficients
+        Vector< real > tFilteredADVs;
+        if ( this->has_adv_filter() )
+        {
+            mUnfilteredADVs = aNewADVs;
+            tFilteredADVs   = this->apply_adv_filter( aNewADVs );
+        }
+        const Vector< real >& tCoefficients = this->has_adv_filter() ? tFilteredADVs : aNewADVs;
+
         // Set new ADVs
         mOwnedADVs->vec_put_scalar( 0 );
-        mOwnedADVs->replace_global_values( mFullADVIds, aNewADVs );
+        mOwnedADVs->replace_global_values( mFullADVIds, tCoefficients );
         mOwnedADVs->vector_global_assembly();
         mPrimitiveADVs->import_local_to_global( *mOwnedADVs );
 
@@ -232,7 +245,171 @@ namespace moris::gen
         // Delete full ADVs/map
         delete tFullVector;
 
+        // ADV filter: the optimizer's variables, not the filtered coefficients (before the first set_advs() they are the
+        // initial coefficients)
+        if ( this->has_adv_filter() and mUnfilteredADVs.size() == mADVManager.mADVs.size() )
+        {
+            mADVManager.mADVs = mUnfilteredADVs;
+        }
+
         return mADVManager.mADVs;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    Geometry_Engine::has_adv_filter() const
+    {
+        return mADVFilterRows.size() > 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< real >
+    Geometry_Engine::apply_adv_filter( const Vector< real >& aADVs ) const
+    {
+        Vector< real > tFiltered = aADVs;
+        for ( const ADV_Filter_Row& iRow : mADVFilterRows )
+        {
+            real tValue = 0.0;
+            for ( uint iColumn = 0; iColumn < iRow.mColumns.size(); iColumn++ )
+            {
+                tValue += iRow.mWeights( iColumn ) * aADVs( iRow.mColumns( iColumn ) );
+            }
+            tFiltered( iRow.mPosition ) = tValue;
+        }
+        return tFiltered;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< real >
+    Geometry_Engine::apply_adv_filter_transpose( const Vector< real >& aValues ) const
+    {
+        // identity rows pass through; a filtered row p distributes aValues( p ) to its columns with its weights
+        Vector< real > tResult = aValues;
+        for ( const ADV_Filter_Row& iRow : mADVFilterRows )
+        {
+            tResult( iRow.mPosition ) -= aValues( iRow.mPosition );
+        }
+        for ( const ADV_Filter_Row& iRow : mADVFilterRows )
+        {
+            for ( uint iColumn = 0; iColumn < iRow.mColumns.size(); iColumn++ )
+            {
+                tResult( iRow.mColumns( iColumn ) ) += iRow.mWeights( iColumn ) * aValues( iRow.mPosition );
+            }
+        }
+        return tResult;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Geometry_Engine::build_adv_filter()
+    {
+        mADVFilterRows.clear();
+        mUnfilteredADVs.clear();
+
+        // global ADV ID -> position in the full ADV vector (processor 0 holds the full vector)
+        std::unordered_map< sint, uint > tPositionOfId;
+        for ( uint iPosition = 0; iPosition < mFullADVIds.size(); iPosition++ )
+        {
+            tPositionOfId[ mFullADVIds( iPosition ) ] = iPosition;
+        }
+
+        for ( const std::shared_ptr< Geometry >& iGeometry : mGeometries )
+        {
+            real tRadius = iGeometry->get_adv_filter_radius();
+            if ( tRadius <= 0.0 )
+            {
+                continue;
+            }
+            MORIS_ERROR( par_size() == 1, "Geometry_Engine: adv_filter_radius (%s) is implemented for serial runs only.", iGeometry->get_name().c_str() );
+
+            std::shared_ptr< BSpline_Field > tBSplineField = std::dynamic_pointer_cast< BSpline_Field >( iGeometry->get_field() );
+            MORIS_ERROR( tBSplineField != nullptr,
+                    "Geometry_Engine: adv_filter_radius needs a B-spline discretized level set (discretization_mesh_index >= 0): %s",
+                    iGeometry->get_name().c_str() );
+
+            Matrix< DDRMat > tCoordinates;
+            Vector< sint >   tADVIds;
+            tBSplineField->get_coefficient_coordinates( tCoordinates, tADVIds );
+            uint tNumCoefficients = tCoordinates.n_rows();
+            uint tDimensions      = tCoordinates.n_cols();
+
+            // bucket the coefficients on a grid of cell size r: neighbors within r lie in the 3^d surrounding buckets
+            using Bucket_Key = std::array< long, 3 >;
+            std::map< Bucket_Key, Vector< uint > > tBuckets;
+            Vector< Bucket_Key >                   tKeys( tNumCoefficients );
+            for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+            {
+                Bucket_Key tKey = { 0, 0, 0 };
+                for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+                {
+                    tKey[ iDimension ] = (long)std::floor( tCoordinates( iCoefficient, iDimension ) / tRadius );
+                }
+                tKeys( iCoefficient ) = tKey;
+                tBuckets[ tKey ].push_back( iCoefficient );
+            }
+
+            uint tNumEntries = 0;
+            for ( uint iCoefficient = 0; iCoefficient < tNumCoefficients; iCoefficient++ )
+            {
+                std::unordered_map< sint, uint >::const_iterator tRowPosition = tPositionOfId.find( tADVIds( iCoefficient ) );
+                if ( tRowPosition == tPositionOfId.end() )
+                {
+                    continue;
+                }
+                ADV_Filter_Row tRow;
+                tRow.mPosition    = tRowPosition->second;
+                real tWeightSum   = 0.0;
+                long tOffsetLimit = tDimensions > 2 ? 1 : 0;
+                for ( long iX = -1; iX <= 1; iX++ )
+                {
+                    for ( long iY = -1; iY <= 1; iY++ )
+                    {
+                        for ( long iZ = -tOffsetLimit; iZ <= tOffsetLimit; iZ++ )
+                        {
+                            Bucket_Key                                             tNeighborKey = { tKeys( iCoefficient )[ 0 ] + iX, tKeys( iCoefficient )[ 1 ] + iY, tKeys( iCoefficient )[ 2 ] + iZ };
+                            std::map< Bucket_Key, Vector< uint > >::const_iterator tBucket      = tBuckets.find( tNeighborKey );
+                            if ( tBucket == tBuckets.end() )
+                            {
+                                continue;
+                            }
+                            for ( uint iNeighbor : tBucket->second )
+                            {
+                                real tDistanceSquared = 0.0;
+                                for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+                                {
+                                    real tDelta = tCoordinates( iCoefficient, iDimension ) - tCoordinates( iNeighbor, iDimension );
+                                    tDistanceSquared += tDelta * tDelta;
+                                }
+                                real                                             tWeight         = tRadius - std::sqrt( tDistanceSquared );
+                                std::unordered_map< sint, uint >::const_iterator tColumnPosition = tPositionOfId.find( tADVIds( iNeighbor ) );
+                                if ( tWeight > 0.0 and tColumnPosition != tPositionOfId.end() )
+                                {
+                                    tRow.mColumns.push_back( tColumnPosition->second );
+                                    tRow.mWeights.push_back( tWeight );
+                                    tWeightSum += tWeight;
+                                }
+                            }
+                        }
+                    }
+                }
+                for ( uint iColumn = 0; iColumn < tRow.mWeights.size(); iColumn++ )
+                {
+                    tRow.mWeights( iColumn ) /= tWeightSum;
+                }
+                tNumEntries += tRow.mColumns.size();
+                mADVFilterRows.push_back( tRow );
+            }
+
+            MORIS_LOG_INFO( "ADV filter on %s: radius %g, %u coefficients, %.2f ADVs per filtered coefficient",
+                    iGeometry->get_name().c_str(),
+                    tRadius,
+                    tNumCoefficients,
+                    tNumCoefficients > 0 ? (real)tNumEntries / tNumCoefficients : 0.0 );
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -291,7 +468,26 @@ namespace moris::gen
     Matrix< DDRMat >
     Geometry_Engine::get_dcriteria_dadv()
     {
-        return mPDVHostManager.compute_diqi_dadv( mFullADVIds );
+        Matrix< DDRMat > tSensitivities = mPDVHostManager.compute_diqi_dadv( mFullADVIds );
+
+        // ADV filter: dQ/dpsi = F^T dQ/dcoefficients, one criterion (row) at a time
+        if ( this->has_adv_filter() and tSensitivities.n_cols() == mFullADVIds.size() )
+        {
+            Vector< real > tRow( tSensitivities.n_cols() );
+            for ( uint iCriterion = 0; iCriterion < tSensitivities.n_rows(); iCriterion++ )
+            {
+                for ( uint iADV = 0; iADV < tSensitivities.n_cols(); iADV++ )
+                {
+                    tRow( iADV ) = tSensitivities( iCriterion, iADV );
+                }
+                Vector< real > tFilteredRow = this->apply_adv_filter_transpose( tRow );
+                for ( uint iADV = 0; iADV < tSensitivities.n_cols(); iADV++ )
+                {
+                    tSensitivities( iCriterion, iADV ) = tFilteredRow( iADV );
+                }
+            }
+        }
+        return tSensitivities;
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -1424,6 +1620,9 @@ namespace moris::gen
         this->reset_mesh_information( tMesh );
 
         MORIS_LOG_INFO( "Time to reset mesh information: %f sec", ( moris::real )( clock() - tStart_Reset_Mesh_Info ) / CLOCKS_PER_SEC );
+
+        // ADV filter (adv_filter_radius): rebuilt for the new discretization
+        this->build_adv_filter();
     }
 
     //--------------------------------------------------------------------------------------------------------------

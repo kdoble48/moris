@@ -66,6 +66,17 @@ namespace moris::gen
         sol::Dist_Vector* mOwnedADVs     = nullptr;
         sol::Dist_Vector* mPrimitiveADVs = nullptr;
 
+        // Kreissl-Maute ADV filter (adv_filter_radius): the filtered rows of F (coefficients = F * ADVs) on the full ADV
+        // vector; positions without a row are identity rows. Built on processor 0 by build_adv_filter().
+        struct ADV_Filter_Row
+        {
+            uint           mPosition;    // position of the filtered coefficient in the full ADV vector
+            Vector< uint > mColumns;     // positions of the ADVs it averages
+            Vector< real > mWeights;     // normalized weights max( 0, r - |x_i - x_j| ) / sum
+        };
+        Vector< ADV_Filter_Row > mADVFilterRows;
+        Vector< real >           mUnfilteredADVs;    // the optimizer's ADVs last passed to set_advs()
+
         // IQIs
         Vector< std::string > mRequestedIQIs;
 
@@ -126,6 +137,31 @@ namespace moris::gen
          * @return vector of advs
          */
         Vector< real >& get_advs();
+
+        /**
+         * Whether any design filters its B-spline coefficients (adv_filter_radius > 0). With a filter, set_advs() and
+         * get_advs() exchange the optimizer's variables psi, the fields use F * psi, and get_dcriteria_dadv() returns
+         * F^T times the coefficient sensitivities.
+         *
+         * @return true if an ADV filter is active
+         */
+        bool has_adv_filter() const;
+
+        /**
+         * Applies the ADV filter to a full ADV vector: F * aADVs (identity outside the filtered designs).
+         *
+         * @param aADVs Full ADV vector (processor 0)
+         * @return Filtered vector
+         */
+        Vector< real > apply_adv_filter( const Vector< real >& aADVs ) const;
+
+        /**
+         * Applies the transposed ADV filter to a full vector of sensitivities: F^T * aValues.
+         *
+         * @param aValues Derivatives with respect to the filtered coefficients (processor 0)
+         * @return Derivatives with respect to the ADVs
+         */
+        Vector< real > apply_adv_filter_transpose( const Vector< real >& aValues ) const;
 
         /**
          * Gets the global ADV IDs owned by a named design's field, in coefficient order. Lets a
@@ -469,6 +505,12 @@ namespace moris::gen
          * @param aMesh Mesh for computing level set data
          */
         void reset_mesh_information( mtk::Interpolation_Mesh* aMesh );
+
+        /**
+         * Builds the ADV filter rows (mADVFilterRows) for every geometry with adv_filter_radius > 0 from the Greville
+         * coordinates of its B-spline coefficients. Called at the end of distribute_advs(); serial only.
+         */
+        void build_adv_filter();
 
         /**
          * Outputs geometry and property fields on the given mesh, and writes level set fields to a text file.

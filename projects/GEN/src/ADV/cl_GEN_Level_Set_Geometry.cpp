@@ -772,6 +772,14 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     real
+    Level_Set_Geometry::get_adv_filter_radius()
+    {
+        return mParameters.mADVFilterRadius;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real
     Level_Set_Geometry::get_discretization_upper_bound()
     {
         return mParameters.mDiscretizationUpperBound;

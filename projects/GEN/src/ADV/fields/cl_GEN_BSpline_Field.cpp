@@ -73,6 +73,52 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    void
+    BSpline_Field::get_coefficient_coordinates(
+            Matrix< DDRMat >& aCoordinates,
+            Vector< sint >&   aADVIds )
+    {
+        mtk::Interpolation_Mesh* tMesh       = mMeshPair.get_interpolation_mesh();
+        uint                     tNumNodes   = tMesh->get_num_nodes();
+        uint                     tDimensions = tMesh->get_spatial_dim();
+        mtk::Mapper              tMapper;
+
+        for ( uint iDimension = 0; iDimension < tDimensions; iDimension++ )
+        {
+            // nodal coordinate field -> B-spline coefficients
+            mtk::Field_Discrete* tCoordinateField = new mtk::Field_Discrete( mMeshPair, mDiscretizationIndex );
+            Matrix< DDRMat >     tNodalValues( tNumNodes, 1 );
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                tNodalValues( iNode ) = tMesh->get_node_coordinate( iNode )( iDimension );
+            }
+            tCoordinateField->unlock_field();
+            tCoordinateField->set_values( tNodalValues );
+            tMapper.perform_mapping( tCoordinateField, mtk::EntityRank::NODE, mtk::EntityRank::BSPLINE );
+            const Matrix< DDRMat >& tCoefficients = tCoordinateField->get_coefficients();
+
+            if ( iDimension == 0 )
+            {
+                aCoordinates.set_size( tCoefficients.numel(), tDimensions );
+            }
+            for ( uint iCoefficient = 0; iCoefficient < tCoefficients.numel(); iCoefficient++ )
+            {
+                aCoordinates( iCoefficient, iDimension ) = tCoefficients( iCoefficient );
+            }
+            delete tCoordinateField;
+        }
+
+        // global ADV IDs, as in distribute_coeffs()
+        aADVIds.resize( aCoordinates.n_rows() );
+        for ( uint iCoefficient = 0; iCoefficient < aCoordinates.n_rows(); iCoefficient++ )
+        {
+            aADVIds( iCoefficient ) = mADVOffsetID
+                                    + tMesh->get_glb_entity_id_from_entity_loc_index( iCoefficient, mtk::EntityRank::BSPLINE, mDiscretizationIndex );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     BSpline_Field::~BSpline_Field()
     {
         delete mOwnedNodalValues;
