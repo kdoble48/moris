@@ -1,6 +1,6 @@
 # Level-set design variable filter
 
-How the linear filter of the level-set design variables (Kreissl and Maute 2012) works, why
+How the linear filter of the level-set design variables (Kreissl and Maute 2012, Eq. 12) works, why
 level-set designs need it, and what it changes in an optimization. The level-set geometry
 parameter `adv_filter_radius` turns it on. Cases 0 and 1 check the filtered sensitivities
 against finite differences on a plate with a hole. Cases 2 and 3 optimize a cantilever without
@@ -22,7 +22,11 @@ F_{ij} = \frac{\max(0,\; r - \lVert x_i - x_j \rVert)}{\sum_k \max(0,\; r - \lVe
 $$
 
 where $x_i$ are the Greville points of the coefficients (the cell centres for uniform quadratic
-B-splines). The weights fall off linearly with distance, reach zero at the radius, and each row
+B-splines). This is Eq. (12) of Kreissl and Maute (2012), who write the radius as $r_s h$
+($r_s$ relative to the element edge length $h$) and filter the nodal values of a finite-element
+level set; here the same weights act on the B-spline coefficients, so
+`adv_filter_radius` $= r_s h$. Their motivation is the one shown below: "smoothing is
+necessary to limit the spatial oscillations of the interface". The weights fall off linearly with distance, reach zero at the radius, and each row
 sums to one, so a constant field stays constant and a linear field is reproduced wherever the
 filter's neighbourhood is complete. The criteria sensitivities with respect to the optimizer's
 variables are $F^\mathsf{T}$ times the sensitivities with respect to the coefficients. The
@@ -188,7 +192,9 @@ cases 2 and 3 about 80 s each.
 
 - Kreissl, S. and Maute, K. (2012). Levelset based fluid topology optimization using the
   extended finite element method. *Structural and Multidisciplinary Optimization* 46(3),
-  311–326. [doi:10.1007/s00158-012-0782-8](https://doi.org/10.1007/s00158-012-0782-8)
+  311–326. [doi:10.1007/s00158-012-0782-8](https://doi.org/10.1007/s00158-012-0782-8).
+  The filter is their Eq. (12), applied to nodal level-set values; they attribute the idea to
+  Sigmund and Petersson (1998) and Daoud et al. (2005).
 - Barrera, J. L., Geiss, M. J. and Maute, K. (2022). Minimum feature size control in level set
   topology optimization via density fields. *Structural and Multidisciplinary Optimization*
   65(3), 94. [doi:10.1007/s00158-021-03096-7](https://doi.org/10.1007/s00158-021-03096-7).
