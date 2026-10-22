@@ -1276,4 +1276,59 @@ namespace moris::gen
     }
 
     //--------------------------------------------------------------------------------------------------------------
+    TEST_CASE( "Design variable IDs beyond 256", "[gen], [design_variable], [MB-029]" )
+    {
+        // MB-029 (first cited as MB-017): Design_Variable IDs were stored as char, so more than ~250 variables aliased onto one ADV
+        const uint tNumberOfVariables = 300;
+
+        // Create distinct, non-constant design variables
+        Vector< Design_Variable > tVariables;
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            const real tOffset = static_cast< real >( iVariable );
+            tVariables.push_back( Design_Variable( -1.0 - tOffset, 0.5 + tOffset, 2.0 + tOffset ) );
+        }
+
+        // Register IDs in the same way the design factory does, then finalize
+        gen::ADV_Manager tADVManager;
+        Vector< decltype( tVariables( 0 ).get_id() ) > tIDs;
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            tIDs.push_back( tVariables( iVariable ).get_id() );
+        }
+        tADVManager.register_parameter_ids( tIDs );
+        tADVManager.finalize_parameter_ids();
+
+        // Create ADVs
+        Vector< gen::ADV > tADVs;
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            tADVs.push_back( tADVManager.create_adv( tVariables( iVariable ) ) );
+        }
+
+        // All 300 variables must give distinct ADVs with the right values and bounds
+        REQUIRE( tADVManager.mADVs.size() == tNumberOfVariables );
+        REQUIRE( tADVManager.mLowerBounds.size() == tNumberOfVariables );
+        REQUIRE( tADVManager.mUpperBounds.size() == tNumberOfVariables );
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            const real tOffset = static_cast< real >( iVariable );
+            CHECK( tADVs( iVariable ).get_value() == Approx( 0.5 + tOffset ) );
+            CHECK( tADVManager.mADVs( iVariable ) == Approx( 0.5 + tOffset ) );
+            CHECK( tADVManager.mLowerBounds( iVariable ) == Approx( -1.0 - tOffset ) );
+            CHECK( tADVManager.mUpperBounds( iVariable ) == Approx( 2.0 + tOffset ) );
+        }
+
+        // Intended sharing: the same Design_Variable object still aliases a single ADV
+        gen::ADV_Manager tSharedManager;
+        Design_Variable  tShared( 0.0, 1.0, 2.0 );
+        tSharedManager.register_parameter_ids( { tShared.get_id() } );
+        tSharedManager.finalize_parameter_ids();
+        gen::ADV tFirst  = tSharedManager.create_adv( tShared );
+        gen::ADV tSecond = tSharedManager.create_adv( tShared );
+        CHECK( tSharedManager.mADVs.size() == 1 );
+        CHECK( tFirst.get_id() == tSecond.get_id() );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
 }    // namespace moris::gen
