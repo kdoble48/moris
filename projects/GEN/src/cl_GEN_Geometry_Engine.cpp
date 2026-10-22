@@ -68,8 +68,8 @@ namespace moris::gen
         Design_Factory tDesignFactory( aParameterLists( 1 ), mADVManager, aLibrary, aMesh, mNodeManager );
 
         // Set primitive ADVs FIXME don't copy, store in one place to begin with
+        // mADVManager.mADVs is not cleared: the designs' ADVs read from it until distribute_advs() points them to mPrimitiveADVs
         mInitialPrimitiveADVs = mADVManager.mADVs;
-        mADVManager.mADVs.clear();
 
         // Get geometries and properties from the factory
         mGeometries = tDesignFactory.get_geometries();
