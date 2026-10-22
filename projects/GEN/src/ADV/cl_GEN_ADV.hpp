@@ -23,12 +23,14 @@ namespace moris::gen
     class ADV
     {
       private:
-        real* mValue;
-        sint mID;
+        Vector< real >* mADVs  = nullptr;    // ADV vector this ADV indexes into, if constructed from one
+        real*           mValue = nullptr;    // value, if constructed from a distributed vector or a constant
+        sint            mID;
 
       public:
         /**
-         * Constructor given an ADV vector and an ID
+         * Constructor given an ADV vector and an ID. The value is looked up in aADVs on every access, so it
+         * stays valid when aADVs is reassigned or reallocated; aADVs itself must outlive this ADV.
          *
          * @param aADVs ADV vector
          * @param aID ID in the ADV vector

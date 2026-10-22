@@ -17,7 +17,7 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     ADV::ADV( Vector< real >& aADVs, sint aID )
-            : mValue( &aADVs( aID ) )
+            : mADVs( &aADVs )
             , mID( aID )
     {
     }
@@ -41,7 +41,8 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     ADV::ADV( const ADV& aCopyADV )
-            : mValue( aCopyADV.mID == gNoID ? new real( *aCopyADV.mValue ) : aCopyADV.mValue )
+            : mADVs( aCopyADV.mADVs )
+            , mValue( aCopyADV.mID == gNoID ? new real( *aCopyADV.mValue ) : aCopyADV.mValue )
             , mID( aCopyADV.mID )
     {
     }
@@ -60,7 +61,7 @@ namespace moris::gen
 
     real ADV::get_value() const
     {
-        return *mValue;
+        return mADVs ? ( *mADVs )( mID ) : *mValue;
     }
 
     //--------------------------------------------------------------------------------------------------------------

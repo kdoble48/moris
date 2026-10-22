@@ -68,8 +68,8 @@ namespace moris::gen
         Design_Factory tDesignFactory( aParameterLists( 1 ), mADVManager, aLibrary, aMesh, mNodeManager );
 
         // Set primitive ADVs FIXME don't copy, store in one place to begin with
+        // mADVManager.mADVs is not cleared: the designs' ADVs read from it until distribute_advs() points them to mPrimitiveADVs
         mInitialPrimitiveADVs = mADVManager.mADVs;
-        mADVManager.mADVs.clear();
 
         // Get geometries and properties from the factory
         mGeometries = tDesignFactory.get_geometries();
@@ -210,6 +210,37 @@ namespace moris::gen
             }
         }
         return tPositions;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< std::string >
+    Geometry_Engine::get_additive_discretized_design_names() const
+    {
+        Vector< std::string > tNames;
+        for ( const std::shared_ptr< Geometry >& iGeometry : mGeometries )
+        {
+            if ( iGeometry->uses_additive_discretization() )
+            {
+                tNames.push_back( iGeometry->get_name() );
+            }
+        }
+        for ( const std::shared_ptr< Property >& iProperty : mProperties )
+        {
+            if ( iProperty->uses_additive_discretization() )
+            {
+                tNames.push_back( iProperty->get_name() );
+            }
+        }
+        return tNames;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    Geometry_Engine::has_additive_discretized_designs() const
+    {
+        return this->get_additive_discretized_design_names().size() > 0;
     }
 
     //--------------------------------------------------------------------------------------------------------------

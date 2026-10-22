@@ -14,6 +14,8 @@
 #include "cl_MTK_Interpolation_Mesh.hpp"
 #include "cl_GEN_BSpline_Field.hpp"
 #include "cl_GEN_Stored_Field.hpp"
+#include "cl_GEN_Constant_Field.hpp"
+#include "cl_GEN_Summed_Fields.hpp"
 
 namespace moris::gen
 {
@@ -26,8 +28,9 @@ namespace moris::gen
             , mDiscretizationUpperBound( aParameterList.get< real >( "discretization_upper_bound" ) )
             , mUseMultilinearInterpolation( aParameterList.get< bool >( "use_multilinear_interpolation" ) )
             , mUseCellOrderIntersection( aParameterList.exists( "use_cell_order_intersection" ) and aParameterList.get< bool >( "use_cell_order_intersection" ) )
+            , mDiscretizationMode( aParameterList.exists( "discretization_mode" ) ? aParameterList.get< std::string >( "discretization_mode" ) : "replace" )
     {
-        // (the key is read only if present, so that decks compiled against older PRM headers keep working)
+        // (the keys are read only if present, so that decks compiled against older PRM headers keep working)
 
         // Cell-order intersections use the multilinear code path (Newton on a cell interpolant, interpolated derived
         // node values) with the background cell's own-order basis
@@ -35,6 +38,17 @@ namespace moris::gen
         {
             mUseMultilinearInterpolation = true;
         }
+
+        MORIS_ERROR( mDiscretizationMode == "replace" or mDiscretizationMode == "additive",
+                "discretization_mode must be \"replace\" or \"additive\", got \"%s\".",
+                mDiscretizationMode.c_str() );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Field_Parameters::uses_additive_discretization() const
+    {
+        return mDiscretizationIndex >= 0 and mDiscretizationMode == "additive";
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -74,14 +88,36 @@ namespace moris::gen
     {
         if ( mParameters.mDiscretizationIndex >= 0 )
         {
-            // Create a B-spline field
-            mField = std::make_shared< BSpline_Field >(
-                    aMeshPair,
-                    aOwnedADVs,
-                    aSharedADVIds,
-                    aADVOffsetID,
-                    mParameters.mDiscretizationIndex,
-                    mField );
+            if ( mParameters.mDiscretizationMode == "additive" )
+            {
+                // B-spline correction starts at zero: project a constant zero field
+                std::shared_ptr< Field > tZeroField = std::make_shared< Constant_Field >( ADV( 0.0 ), mField->get_name() + "_bspline_correction" );
+
+                // Create the B-spline correction field (same arguments as the replace mode, zero source field)
+                std::shared_ptr< Field > tCorrectionField = std::make_shared< BSpline_Field >(
+                        aMeshPair,
+                        aOwnedADVs,
+                        aSharedADVIds,
+                        aADVOffsetID,
+                        mParameters.mDiscretizationIndex,
+                        tZeroField );
+
+                // Design field is the original field plus the correction; the original field keeps its ADVs
+                Vector< std::shared_ptr< Field > > tSummands = { mField, tCorrectionField };
+
+                mField = std::make_shared< Summed_Fields >( tSummands, mField->get_name() );
+            }
+            else
+            {
+                // Create a B-spline field
+                mField = std::make_shared< BSpline_Field >(
+                        aMeshPair,
+                        aOwnedADVs,
+                        aSharedADVIds,
+                        aADVOffsetID,
+                        mParameters.mDiscretizationIndex,
+                        mField );
+            }
 
             // Set analytic field index, for now
             Field::gDiscretizationIndex = mParameters.mDiscretizationIndex;
@@ -107,6 +143,10 @@ namespace moris::gen
     {
         if ( mParameters.mDiscretizationIndex >= 0 )
         {
+            // Remeshing maps the full discretized field; the additive split would be lost
+            MORIS_ERROR( mParameters.mDiscretizationMode == "replace",
+                    "discretization_mode = \"additive\" does not support remeshing (mapping from an MTK field) yet." );
+
             // Create a B-spline field
             mField = std::make_shared< BSpline_Field >(
                     aOwnedADVs,

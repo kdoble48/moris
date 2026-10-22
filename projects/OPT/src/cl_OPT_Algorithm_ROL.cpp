@@ -28,12 +28,26 @@
 #include "ROL_Constraint.hpp"
 #include "ROL_Problem.hpp"
 #include "ROL_Solver.hpp"
+#include "ROL_SecantFactory.hpp"
+#include "ROL_TypeB_AlgorithmFactory.hpp"
 #endif
+
+#include <algorithm>
+#include <cmath>
 
 using namespace moris;
 
 namespace moris::opt
 {
+    namespace
+    {
+        // Thrown by ensure_criteria when max_forward_solves is reached; caught in rol_solve. Not derived from
+        // std::exception on purpose, so ROL's internal catch( std::exception& ) blocks do not swallow it.
+        struct ROL_Budget_Exhausted
+        {
+        };
+    }    // namespace
+
 #ifdef MORIS_HAVE_ROL
     namespace
     {
@@ -82,7 +96,7 @@ namespace moris::opt
             {
                 mAlgorithm->ensure_criteria( rol_std_vector( aX ) );
 
-                return mAlgorithm->get_objectives()( 0 );
+                return mAlgorithm->cached_objectives()( 0 );
             }
 
             void
@@ -90,7 +104,7 @@ namespace moris::opt
             {
                 mAlgorithm->ensure_gradients( rol_std_vector( aX ) );
 
-                const Matrix< DDRMat >& tObjectiveGradient = mAlgorithm->get_objective_gradients();
+                const Matrix< DDRMat >& tObjectiveGradient = mAlgorithm->cached_objective_gradients();
 
                 std::vector< real >& tG = rol_std_vector( aG );
                 for ( uint iADV = 0; iADV < tG.size(); ++iADV )
@@ -123,7 +137,7 @@ namespace moris::opt
             {
                 mAlgorithm->ensure_criteria( rol_std_vector( aX ) );
 
-                const Matrix< DDRMat >& tConstraints = mAlgorithm->get_constraints();
+                const Matrix< DDRMat >& tConstraints = mAlgorithm->cached_constraints();
 
                 std::vector< real >& tC = rol_std_vector( aC );
                 for ( uint iCon = 0; iCon < tC.size(); ++iCon )
@@ -141,7 +155,7 @@ namespace moris::opt
             {
                 mAlgorithm->ensure_gradients( rol_std_vector( aX ) );
 
-                const Matrix< DDRMat >& tJacobian = mAlgorithm->get_constraint_gradients();    // nCon x nADV
+                const Matrix< DDRMat >& tJacobian = mAlgorithm->cached_constraint_gradients();    // nCon x nADV
 
                 const std::vector< real >& tV  = rol_std_vector( aV );     // nADV
                 std::vector< real >&       tJv = rol_std_vector( aJv );    // nCon
@@ -166,7 +180,7 @@ namespace moris::opt
             {
                 mAlgorithm->ensure_gradients( rol_std_vector( aX ) );
 
-                const Matrix< DDRMat >& tJacobian = mAlgorithm->get_constraint_gradients();    // nCon x nADV
+                const Matrix< DDRMat >& tJacobian = mAlgorithm->cached_constraint_gradients();    // nCon x nADV
 
                 const std::vector< real >& tV   = rol_std_vector( aV );      // nCon
                 std::vector< real >&       tAjv = rol_std_vector( aAjv );    // nADV
@@ -179,6 +193,100 @@ namespace moris::opt
                         tSum += tJacobian( iCon, jADV ) * tV[ iCon ];
                     }
                     tAjv[ jADV ] = tSum;
+                }
+            }
+        };
+
+
+        //--------------------------------------------------------------------------------------------------------------
+        // Persistent-secant PHR augmented Lagrangian (al_mode = "persistent"), for MORIS constraints g_i (type 0:
+        // g_i = 0, type 1: g_i <= 0) with multipliers lambda_i and penalty rho:
+        //   equality   : psi = lambda g + rho/2 g^2,                          dpsi/dg = lambda + rho g
+        //   inequality : psi = ( max(0, lambda + rho g)^2 - lambda^2 ) / (2 rho), dpsi/dg = max(0, lambda + rho g)
+        // L(x) = f(x) + sum_i psi_i is minimized subject to the ADV bounds only (Lin-More), then the multipliers are
+        // updated outside (lambda <- dpsi/dg at the new iterate).
+
+        class Moris_ROL_AL_Objective : public ROL::Objective< real >
+        {
+          private:
+            Algorithm_ROL*             mAlgorithm;
+            const std::vector< real >& mLambda;
+            const real&                mRho;
+            const Matrix< DDSMat >&    mTypes;
+
+          public:
+            Moris_ROL_AL_Objective(
+                    Algorithm_ROL*             aAlgorithm,
+                    const std::vector< real >& aLambda,
+                    const real&                aRho,
+                    const Matrix< DDSMat >&    aTypes )
+                    : mAlgorithm( aAlgorithm )
+                    , mLambda( aLambda )
+                    , mRho( aRho )
+                    , mTypes( aTypes )
+            {
+            }
+
+            void
+            update( const ROL::Vector< real >& aX, ROL::UpdateType aType, int aIter ) override
+            {
+                if ( aType == ROL::UpdateType::Accept || aType == ROL::UpdateType::Initial )
+                {
+                    mAlgorithm->notify_accepted_step( rol_std_vector( aX ) );
+                }
+            }
+
+            real
+            multiplier_slope( uint aIndex, real aConstraint ) const
+            {
+                real tSlope = mLambda[ aIndex ] + mRho * aConstraint;
+                return ( mTypes( aIndex ) == 0 ) ? tSlope : std::max( 0.0, tSlope );
+            }
+
+            real
+            value( const ROL::Vector< real >& aX, real& aTol ) override
+            {
+                mAlgorithm->ensure_criteria( rol_std_vector( aX ) );
+
+                real                    tValue       = mAlgorithm->cached_objectives()( 0 );
+                const Matrix< DDRMat >& tConstraints = mAlgorithm->cached_constraints();
+                for ( uint iCon = 0; iCon < mLambda.size(); ++iCon )
+                {
+                    real tG = tConstraints( iCon );
+                    if ( mTypes( iCon ) == 0 )
+                    {
+                        tValue += mLambda[ iCon ] * tG + 0.5 * mRho * tG * tG;
+                    }
+                    else
+                    {
+                        real tSlope = std::max( 0.0, mLambda[ iCon ] + mRho * tG );
+                        tValue += ( tSlope * tSlope - mLambda[ iCon ] * mLambda[ iCon ] ) / ( 2.0 * mRho );
+                    }
+                }
+                return tValue;
+            }
+
+            void
+            gradient( ROL::Vector< real >& aG, const ROL::Vector< real >& aX, real& aTol ) override
+            {
+                mAlgorithm->ensure_gradients( rol_std_vector( aX ) );
+
+                const Matrix< DDRMat >& tDObjective   = mAlgorithm->cached_objective_gradients();     // 1 x nADV
+                const Matrix< DDRMat >& tDConstraints = mAlgorithm->cached_constraint_gradients();    // nCon x nADV
+                const Matrix< DDRMat >& tConstraints  = mAlgorithm->cached_constraints();
+
+                std::vector< real >& tG = rol_std_vector( aG );
+                for ( uint iADV = 0; iADV < tG.size(); ++iADV )
+                {
+                    tG[ iADV ] = tDObjective( iADV );
+                }
+                for ( uint iCon = 0; iCon < mLambda.size(); ++iCon )
+                {
+                    real tSlope = this->multiplier_slope( iCon, tConstraints( iCon ) );
+                    for ( uint iADV = 0; iADV < tG.size(); ++iADV )
+                    {
+                        tG[ iADV ] += tSlope * tDConstraints( iCon, iADV );
+                    }
                 }
             }
         };
@@ -206,7 +314,14 @@ namespace moris::opt
             , mConstraintTol( aParameterList.get< real >( "constraint_tol" ) )
             , mStepTol( aParameterList.get< real >( "step_tol" ) )
             , mXmlFile( aParameterList.get< std::string >( "xml_file" ) )
+            , mALMode( aParameterList.get< std::string >( "al_mode" ) )
+            , mALInitialMultiplier( aParameterList.get< real >( "al_initial_multiplier" ) )
+            , mALFeasibilityReduction( aParameterList.get< real >( "al_feasibility_reduction" ) )
+            , mALMaxPenalty( aParameterList.get< real >( "al_max_penalty" ) )
+            , mMaxForwardSolves( aParameterList.get< sint >( "max_forward_solves" ) )
     {
+        MORIS_ERROR( mALMode == "rol" || mALMode == "persistent",
+                "Algorithm_ROL: al_mode must be \"rol\" or \"persistent\", got \"%s\"", mALMode.c_str() );
 #ifndef MORIS_HAVE_ROL
         MORIS_ERROR( false, "MORIS was compiled without ROL support" );
 #endif
@@ -215,8 +330,8 @@ namespace moris::opt
         mMaxIterationsInitial = aParameterList.get< sint >( "max_its" );
         mMaxIterations        = mMaxIterationsInitial;
 
-        MORIS_LOG_INFO( "ROL initialized: step='%s', subproblem_model='%s', max_its=%d",
-                mStepType.c_str(), mSubproblemModel.c_str(), (int)mMaxIterations );
+        MORIS_LOG_INFO( "ROL initialized: step='%s', subproblem_model='%s', max_its=%d, al_mode='%s', max_forward_solves=%d",
+                mStepType.c_str(), mSubproblemModel.c_str(), (int)mMaxIterations, mALMode.c_str(), (int)mMaxForwardSolves );
     }
 
     //----------------------------------------------------------------------------------------------------------------------
@@ -241,9 +356,12 @@ namespace moris::opt
         mCurrentOptAlgInd = aCurrentOptAlgInd;    // set index of current optimization algorithm
         mProblem          = aOptProb;             // set the member variable mProblem to aOptProb
 
-        // fresh solve: invalidate the evaluation cache
-        mHaveCriteria  = false;
-        mHaveGradients = false;
+        // fresh solve: invalidate the evaluation cache and the forward-solve budget counter
+        mLatest           = Eval_Point();
+        mAccepted         = Eval_Point();
+        mActivePoint      = &mLatest;
+        mNumForwardSolves = 0;
+        mLastAcceptedADVs.clear();
 
         // Set optimization iteration index for restart
         if ( mRestartIndex > 0 )
@@ -280,6 +398,16 @@ namespace moris::opt
     void
     Algorithm_ROL::notify_accepted_step( const std::vector< real >& aADVs )
     {
+        // keep the accepted iterate's criteria / gradients (normally the latest evaluation is at aADVs)
+        if ( mLatest.mHaveCriteria && mLatest.mADVs == aADVs )
+        {
+            mAccepted = mLatest;
+        }
+        mLastAcceptedADVs = aADVs;
+
+        // grep-able accepted-iterate marker (fsolve = forward solve index of this design, 1-based)
+        MORIS_LOG_INFO( "ROL_ACCEPT fsolve=%d", (int)( mAccepted.mADVs == aADVs ? mAccepted.mFSolve : -1 ) );
+
         Vector< real > tADVs( aADVs.size() );
         for ( uint iADV = 0; iADV < aADVs.size(); ++iADV )
         {
@@ -295,9 +423,21 @@ namespace moris::opt
     Algorithm_ROL::ensure_criteria( const std::vector< real >& aADVs )
     {
         // skip the forward solve if criteria are already current at these ADVs
-        if ( mHaveCriteria && aADVs == mCriteriaADVs )
+        if ( mLatest.mHaveCriteria && aADVs == mLatest.mADVs )
         {
+            mActivePoint = &mLatest;
             return;
+        }
+        if ( mAccepted.mHaveCriteria && aADVs == mAccepted.mADVs )
+        {
+            mActivePoint = &mAccepted;
+            return;
+        }
+
+        // forward-solve budget (max_forward_solves): stop ROL; rol_solve returns the last accepted iterate
+        if ( mMaxForwardSolves > 0 && mNumForwardSolves >= mMaxForwardSolves )
+        {
+            throw ROL_Budget_Exhausted();
         }
 
         // copy into a MORIS ADV vector
@@ -312,10 +452,15 @@ namespace moris::opt
         // restart write would emit hundreds of large HDF5 files; the restart is written only on
         // ACCEPTED steps via notify_accepted_step (called from the objective adapter's update()).
         this->compute_design_criteria( tADVs );
+        ++mNumForwardSolves;
 
-        mCriteriaADVs  = aADVs;
-        mHaveCriteria  = true;
-        mHaveGradients = false;    // criteria changed -> cached gradients are stale
+        mLatest.mADVs          = aADVs;
+        mLatest.mObjectives    = this->get_objectives();
+        mLatest.mConstraints   = this->get_constraints();
+        mLatest.mHaveCriteria  = true;
+        mLatest.mHaveGradients = false;    // criteria changed -> cached gradients are stale
+        mLatest.mFSolve        = mNumForwardSolves;
+        mActivePoint           = &mLatest;
     }
 
     //----------------------------------------------------------------------------------------------------------------------
@@ -323,13 +468,34 @@ namespace moris::opt
     void
     Algorithm_ROL::ensure_gradients( const std::vector< real >& aADVs )
     {
-        // the adjoint reuses the forward state, so make sure criteria are current first
         this->ensure_criteria( aADVs );
 
-        // skip the adjoint solve if gradients are already current at these ADVs
-        if ( mHaveGradients && aADVs == mGradientADVs )
+        if ( mActivePoint->mHaveGradients )
         {
             return;
+        }
+
+        // the adjoint reuses the forward state: if the point is only cached (the Problem was moved to a later
+        // trial), re-solve the forward problem at aADVs first
+        if ( mActivePoint == &mAccepted )
+        {
+            if ( mMaxForwardSolves > 0 && mNumForwardSolves >= mMaxForwardSolves )
+            {
+                throw ROL_Budget_Exhausted();
+            }
+            Vector< real > tRe( aADVs.size() );
+            for ( uint iADV = 0; iADV < aADVs.size(); ++iADV )
+            {
+                tRe( iADV ) = aADVs[ iADV ];
+            }
+            this->compute_design_criteria( tRe );
+            ++mNumForwardSolves;
+            mLatest                = mAccepted;
+            mLatest.mObjectives    = this->get_objectives();
+            mLatest.mConstraints   = this->get_constraints();
+            mLatest.mHaveGradients = false;
+            mLatest.mFSolve        = mNumForwardSolves;
+            mActivePoint           = &mLatest;
         }
 
         Vector< real > tADVs( aADVs.size() );
@@ -340,8 +506,13 @@ namespace moris::opt
 
         this->compute_design_criteria_gradients( tADVs );
 
-        mGradientADVs  = aADVs;
-        mHaveGradients = true;
+        mLatest.mObjectiveGradients  = this->get_objective_gradients();
+        mLatest.mConstraintGradients = this->get_constraint_gradients();
+        mLatest.mHaveGradients       = true;
+        if ( mAccepted.mHaveCriteria && mAccepted.mADVs == aADVs )
+        {
+            mAccepted = mLatest;
+        }
     }
 
     //----------------------------------------------------------------------------------------------------------------------
@@ -350,6 +521,12 @@ namespace moris::opt
     Algorithm_ROL::rol_solve()
     {
 #ifdef MORIS_HAVE_ROL
+        if ( mALMode == "persistent" && mProblem->get_num_constraints() > 0 && mUseAugmentedLagrangian )
+        {
+            this->rol_solve_persistent_al();
+            return;
+        }
+
         const uint tNumADVs = mProblem->get_num_advs();
 
         // --- design vector and bounds as ROL StdVectors backed by std::vectors -------------------
@@ -449,6 +626,10 @@ namespace moris::opt
             if ( tUseConstraints )
             {
                 ROL::ParameterList& tAugLag = tStep.sublist( "Augmented Lagrangian" );
+                // ROL ignores "Initial Penalty Parameter" unless the default-penalty heuristic is switched off
+                // (ROL_TypeG_AugmentedLagrangianAlgorithm_Def.hpp: "Use Default Initial Penalty Parameter"
+                // defaults to true), which made al_initial_penalty a silent no-op.
+                tAugLag.set( "Use Default Initial Penalty Parameter", false );
                 tAugLag.set( "Initial Penalty Parameter", mALInitialPenalty );
                 tAugLag.set( "Penalty Parameter Growth Factor", mALPenaltyGrowth );
                 tAugLag.set( "Subproblem Step Type", "Trust Region" );
@@ -480,13 +661,213 @@ namespace moris::opt
         tRolProblem->finalize( false, true, std::cout );
 
         ROL::Solver< real > tSolver( tRolProblem, tParameterList );
-        tSolver.solve( std::cout );
+        try
+        {
+            tSolver.solve( std::cout );
 
-        ROL::Ptr< const ROL::AlgorithmState< real > > tState = tSolver.getAlgorithmState();
-        MORIS_LOG_INFO( "ROL finished: iterations=%d, objective=%.6e, gnorm=%.3e",
-                tState->iter, tState->value, tState->gnorm );
+            ROL::Ptr< const ROL::AlgorithmState< real > > tState = tSolver.getAlgorithmState();
+            MORIS_LOG_INFO( "ROL finished: iterations=%d, objective=%.6e, gnorm=%.3e",
+                    tState->iter, tState->value, tState->gnorm );
+        }
+        catch ( const ROL_Budget_Exhausted& )
+        {
+            MORIS_LOG_INFO( "ROL stopped: forward-solve budget max_forward_solves=%d reached; returning the last accepted iterate",
+                    (int)mMaxForwardSolves );
+            if ( !mLastAcceptedADVs.empty() )
+            {
+                *tAdvVec = mLastAcceptedADVs;
+            }
+        }
 
         // --- leave the MORIS Problem at the final design ----------------------------------------
+        Vector< real > tFinalADVs( tNumADVs );
+        for ( uint iADV = 0; iADV < tNumADVs; ++iADV )
+        {
+            tFinalADVs( iADV ) = ( *tAdvVec )[ iADV ];
+        }
+        this->compute_design_criteria( tFinalADVs );
+#else
+        MORIS_ERROR( false, "MORIS was compiled without ROL support" );
+#endif
+    }
+
+    //----------------------------------------------------------------------------------------------------------------------
+
+    void
+    Algorithm_ROL::rol_solve_persistent_al()
+    {
+#ifdef MORIS_HAVE_ROL
+        const uint tNumADVs        = mProblem->get_num_advs();
+        const uint tNumConstraints = mProblem->get_num_constraints();
+
+        auto tAdvVec = ROL::makePtr< std::vector< real > >( tNumADVs );
+        auto tLoVec  = ROL::makePtr< std::vector< real > >( tNumADVs );
+        auto tHiVec  = ROL::makePtr< std::vector< real > >( tNumADVs );
+        for ( uint iADV = 0; iADV < tNumADVs; ++iADV )
+        {
+            ( *tAdvVec )[ iADV ] = mProblem->get_advs()( iADV );
+            ( *tLoVec )[ iADV ]  = mProblem->get_lower_bounds()( iADV );
+            ( *tHiVec )[ iADV ]  = mProblem->get_upper_bounds()( iADV );
+        }
+        // start inside the bounds (Lin-More assumes a feasible start for the bound constraints)
+        for ( uint iADV = 0; iADV < tNumADVs; ++iADV )
+        {
+            ( *tAdvVec )[ iADV ] = std::min( std::max( ( *tAdvVec )[ iADV ], ( *tLoVec )[ iADV ] ), ( *tHiVec )[ iADV ] );
+        }
+
+        ROL::StdVector< real >                   tX( tAdvVec );
+        ROL::Ptr< ROL::BoundConstraint< real > > tBounds = ROL::makePtr< ROL::Bounds< real > >(
+                ROL::makePtr< ROL::StdVector< real > >( tLoVec ), ROL::makePtr< ROL::StdVector< real > >( tHiVec ) );
+
+        Matrix< DDSMat > tTypes = mProblem->get_constraint_types();
+
+        // --- multipliers and penalty --------------------------------------------------------------
+        std::vector< real > tLambda( tNumConstraints, 0.0 );
+        real                tRho = mALInitialPenalty;
+
+        this->ensure_gradients( *tAdvVec );
+        const Matrix< DDRMat > tG0 = this->cached_constraints();
+        if ( mALInitialMultiplier >= 0.0 )
+        {
+            std::fill( tLambda.begin(), tLambda.end(), mALInitialMultiplier );
+        }
+        else
+        {
+            // least-squares multiplier estimate at the start: min || df + sum lambda_i dg_i ||, then projected
+            // (lambda_i >= 0 for inequalities); for one constraint lambda = -<df, dg> / <dg, dg>
+            const Matrix< DDRMat >& tDf = this->cached_objective_gradients();
+            const Matrix< DDRMat >& tDg = this->cached_constraint_gradients();
+            for ( uint iCon = 0; iCon < tNumConstraints; ++iCon )
+            {
+                real tFG = 0.0, tGG = 0.0;
+                for ( uint iADV = 0; iADV < tNumADVs; ++iADV )
+                {
+                    tFG += tDf( iADV ) * tDg( iCon, iADV );
+                    tGG += tDg( iCon, iADV ) * tDg( iCon, iADV );
+                }
+                real tL         = ( tGG > 0.0 ) ? -tFG / tGG : 0.0;
+                tLambda[ iCon ] = ( tTypes( iCon ) == 0 ) ? tL : std::max( 0.0, tL );
+            }
+        }
+
+        // violation measure: equality |g|, inequality max(0, g)
+        auto tViolation = [ & ]( const Matrix< DDRMat >& aG ) -> real {
+            real tV = 0.0;
+            for ( uint iCon = 0; iCon < tNumConstraints; ++iCon )
+            {
+                tV = std::max( tV, ( tTypes( iCon ) == 0 ) ? std::abs( aG( iCon ) ) : std::max( 0.0, aG( iCon ) ) );
+            }
+            return tV;
+        };
+        real tPrevViolation = tViolation( tG0 );
+
+        // --- ROL parameter list for the bound-constrained inner solve (one secant for the whole run) ---------
+        ROL::ParameterList tParameterList;
+        if ( !mXmlFile.empty() )
+        {
+            tParameterList = *ROL::getParametersFromXmlFile( mXmlFile );
+        }
+        else
+        {
+            tParameterList.sublist( "General" ).set( "Output Level", 1 );
+            tParameterList.sublist( "Step" ).set( "Type", mStepType == "Augmented Lagrangian" ? std::string( "Trust Region" ) : mStepType );
+            ROL::ParameterList& tTrustRegion = tParameterList.sublist( "Step" ).sublist( "Trust Region" );
+            tTrustRegion.set( "Subproblem Model", mSubproblemModel );
+            tTrustRegion.set( "Subproblem Solver", mSubproblemSolver );
+            tTrustRegion.set( "Maximum Radius", mMaxTRRadius );
+            ROL::ParameterList& tSecantList = tParameterList.sublist( "General" ).sublist( "Secant" );
+            tSecantList.set( "Type", mSecantType );
+            tSecantList.set( "Maximum Storage", (int)mSecantStorage );
+            tSecantList.set( "Use as Hessian", true );
+        }
+        tParameterList.sublist( "Status Test" ).set( "Iteration Limit", (int)mSubproblemIterationLimit );
+        tParameterList.sublist( "Status Test" ).set( "Gradient Tolerance", mGradientTol );
+        tParameterList.sublist( "Status Test" ).set( "Step Tolerance", mStepTol );
+
+        ROL::Ptr< ROL::Secant< real > > tSecant = ROL::SecantFactory< real >( tParameterList );
+
+        Moris_ROL_AL_Objective tALObjective( this, tLambda, tRho, tTypes );
+
+        // per-outer radius floor: the immersed response has small discontinuities (cut-topology / snapping events) that
+        // the ratio test cannot step across once the radius has collapsed; restarting each outer at no less than this
+        // floor lets the next inner solve take steps whose predicted decrease exceeds the jump. Read from the XML
+        // ("Step" / "Trust Region" / "MORIS Minimum Outer Radius"), default 1e-8 x initial_tr_radius (= no floor).
+        const real tRadiusFloor = tParameterList.sublist( "Step" ).sublist( "Trust Region" ).get( "MORIS Minimum Outer Radius", 1.0e-8 * mInitialTRRadius );
+
+        real tRadius = mInitialTRRadius;
+        bool tBudget = false;
+        uint tOuter  = 0;
+
+        for ( tOuter = 0; tOuter < (uint)mMaxIterations; ++tOuter )
+        {
+            tParameterList.sublist( "Step" ).sublist( "Trust Region" ).set( "Initial Radius", tRadius );
+
+            ROL::Ptr< ROL::TypeB::Algorithm< real > > tAlgorithm =
+                    ROL::TypeB::AlgorithmFactory< real >( tParameterList, tSecant );
+            int  tInnerIterations = 0;
+            real tGNorm           = 0.0;
+            try
+            {
+                tAlgorithm->run( tX, tALObjective, *tBounds, std::cout );
+                tInnerIterations = tAlgorithm->getState()->iter;
+                tGNorm           = tAlgorithm->getState()->gnorm;
+                tRadius          = std::max( tAlgorithm->getState()->searchSize, tRadiusFloor );
+            }
+            catch ( const ROL_Budget_Exhausted& )
+            {
+                tBudget = true;
+            }
+
+            // continue from the last accepted iterate (the inner solve may have ended on a rejected trial)
+            if ( !mLastAcceptedADVs.empty() )
+            {
+                *tAdvVec = mLastAcceptedADVs;
+            }
+            if ( tBudget )
+            {
+                break;
+            }
+
+            // multiplier / penalty update at the accepted iterate (criteria cached -> no extra solve)
+            this->ensure_criteria( *tAdvVec );
+            const Matrix< DDRMat > tG         = this->cached_constraints();
+            const real             tObjective = this->cached_objectives()( 0 );
+            real                   tViol      = tViolation( tG );
+            real                   tDLambda   = 0.0;    // multiplier change = complementarity / stationarity residual
+            for ( uint iCon = 0; iCon < tNumConstraints; ++iCon )
+            {
+                real tNew       = tALObjective.multiplier_slope( iCon, tG( iCon ) );
+                tDLambda        = std::max( tDLambda, std::abs( tNew - tLambda[ iCon ] ) / std::max( 1.0, std::abs( tNew ) ) );
+                tLambda[ iCon ] = tNew;
+            }
+            // grow the penalty only when an INFEASIBLE outer failed to reduce the violation enough; after a feasible
+            // outer (previous violation <= tol) any small overshoot would otherwise ratchet rho up every other outer
+            if ( tPrevViolation > mConstraintTol && tViol > mConstraintTol
+                    && tViol > mALFeasibilityReduction * tPrevViolation )
+            {
+                tRho = std::min( tRho * mALPenaltyGrowth, mALMaxPenalty );
+            }
+            tPrevViolation = tViol;
+
+            MORIS_LOG_INFO( "ROLAL outer=%d fsolves=%d inner_its=%d obj=%.8e violation=%.3e lambda0=%.6e dlambda=%.3e rho=%.3e radius=%.3e gnorm=%.3e",
+                    (int)tOuter + 1, (int)mNumForwardSolves, tInnerIterations, tObjective, tViol,
+                    tNumConstraints > 0 ? tLambda[ 0 ] : 0.0, tDLambda, tRho, tRadius, tGNorm );
+
+            if ( tViol <= mConstraintTol && tDLambda <= mConstraintTol && tGNorm <= mGradientTol )
+            {
+                MORIS_LOG_INFO( "ROLAL converged: violation %.3e, relative multiplier change %.3e (<= %.3e) and projected AL gradient %.3e <= %.3e",
+                        tViol, tDLambda, mConstraintTol, tGNorm, mGradientTol );
+                break;
+            }
+        }
+
+        if ( tBudget )
+        {
+            MORIS_LOG_INFO( "ROLAL stopped: forward-solve budget max_forward_solves=%d reached at outer %d; returning the last accepted iterate",
+                    (int)mMaxForwardSolves, (int)tOuter + 1 );
+        }
+
+        // leave the MORIS Problem at the final (last accepted) design
         Vector< real > tFinalADVs( tNumADVs );
         for ( uint iADV = 0; iADV < tNumADVs; ++iADV )
         {
