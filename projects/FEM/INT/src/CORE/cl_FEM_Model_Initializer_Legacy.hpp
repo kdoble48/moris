@@ -51,9 +51,21 @@ namespace moris::fem
         void set_iwg_stabilization_parameters( Parameter_List const &aIWGParameter, std::shared_ptr< IWG > &aIWG );
         void set_iwg_residual_dof_type( Parameter_List const &aIWGParameter, std::shared_ptr< IWG > &aIWG ) const;
 
+        // property, material model and CM of the given index for the leader or the follower side
+        std::shared_ptr< Property > const           &get_property( uint aIndex, mtk::Leader_Follower aLeaderFollowerType ) const;
+        std::shared_ptr< Material_Model > const     &get_material_model( uint aIndex, mtk::Leader_Follower aLeaderFollowerType ) const;
+        std::shared_ptr< Constitutive_Model > const &get_constitutive_model( uint aIndex, mtk::Leader_Follower aLeaderFollowerType ) const;
+
+        // follower-side instances, built from the same parameter lists as mProperties, mMaterialModels and
+        // mConstitutiveModels (which serve the leader side)
+        PointerCell< fem::Property >           mFollowerProperties;
+        PointerCell< fem::Material_Model >     mFollowerMaterialModels;
+        PointerCell< fem::Constitutive_Model > mFollowerConstitutiveModels;
+
       protected:
         void create_material_models() override;
         void create_constitutive_models() override;
+        void create_follower_side_models() override;
         void create_stabilization_parameters() override;
         void create_iwgs() override;
         void create_iqis() override;

@@ -225,6 +225,55 @@ namespace moris::fem
 
     //----------------------------------------------------------------
 
+    void Model_Initializer_Legacy::create_follower_side_models()
+    {
+        // MB-047: a property, MM or CM named on both sides of an IWG, IQI or SP used to be one shared object. Its field
+        // interpolator manager is set for the leader and then overwritten by the follower's, and its cached values
+        // (property value, flux, traction) are reused for the other side. Build a second, identical set from the same
+        // parameter lists and hand it to the follower side only.
+        std::swap( mProperties, mFollowerProperties );
+        std::swap( mMaterialModels, mFollowerMaterialModels );
+        std::swap( mConstitutiveModels, mFollowerConstitutiveModels );
+
+        // the follower MMs and CMs are wired to the follower properties (and the CMs to the follower MMs)
+        this->create_properties();
+        this->create_material_models();
+        this->create_constitutive_models();
+
+        std::swap( mProperties, mFollowerProperties );
+        std::swap( mMaterialModels, mFollowerMaterialModels );
+        std::swap( mConstitutiveModels, mFollowerConstitutiveModels );
+    }
+
+    //----------------------------------------------------------------
+
+    std::shared_ptr< Property > const &Model_Initializer_Legacy::get_property(
+            uint                 aIndex,
+            mtk::Leader_Follower aLeaderFollowerType ) const
+    {
+        return aLeaderFollowerType == mtk::Leader_Follower::FOLLOWER ? mFollowerProperties( aIndex ) : mProperties( aIndex );
+    }
+
+    //----------------------------------------------------------------
+
+    std::shared_ptr< Material_Model > const &Model_Initializer_Legacy::get_material_model(
+            uint                 aIndex,
+            mtk::Leader_Follower aLeaderFollowerType ) const
+    {
+        return aLeaderFollowerType == mtk::Leader_Follower::FOLLOWER ? mFollowerMaterialModels( aIndex ) : mMaterialModels( aIndex );
+    }
+
+    //----------------------------------------------------------------
+
+    std::shared_ptr< Constitutive_Model > const &Model_Initializer_Legacy::get_constitutive_model(
+            uint                 aIndex,
+            mtk::Leader_Follower aLeaderFollowerType ) const
+    {
+        return aLeaderFollowerType == mtk::Leader_Follower::FOLLOWER ? mFollowerConstitutiveModels( aIndex ) : mConstitutiveModels( aIndex );
+    }
+
+    //----------------------------------------------------------------
+
     void Model_Initializer_Legacy::create_stabilization_parameters()
     {
         // create a stabilization parameter factory
@@ -328,7 +377,7 @@ namespace moris::fem
 
                     // set property for CM
                     mStabilizationParameters( iSP )->set_property(
-                            mProperties( tPropertyIndex ),
+                            this->get_property( tPropertyIndex, tIsLeader ),
                             tPropertyNamesPair( iProp )( 1 ),
                             tIsLeader );
                 }
@@ -355,8 +404,9 @@ namespace moris::fem
 
                     // set CM for SP
                     mStabilizationParameters( iSP )->set_constitutive_model(
-                            mConstitutiveModels( tCMIndex ),
-                            tCMNamesPair( iCM )( 1 ) );
+                            this->get_constitutive_model( tCMIndex, tIsLeader ),
+                            tCMNamesPair( iCM )( 1 ),
+                            tIsLeader );
                 }
             }
         }
@@ -481,7 +531,7 @@ namespace moris::fem
 
                 // set CM for IWG
                 aIWG->set_constitutive_model(
-                        mConstitutiveModels( tCMIndex ),
+                        this->get_constitutive_model( tCMIndex, aLeaderFollowerType ),
                         tCMNamesPair( iCM )( 1 ),
                         aLeaderFollowerType );
             }
@@ -518,7 +568,7 @@ namespace moris::fem
 
                 // set MM for IWG
                 aIWG->set_material_model(
-                        mMaterialModels( tMMIndex ),
+                        this->get_material_model( tMMIndex, aLeaderFollowerType ),
                         tMMNamesPair( iMM )( 1 ),
                         aLeaderFollowerType );
             }
@@ -556,7 +606,7 @@ namespace moris::fem
 
                 // set property for IWG
                 aIWG->set_property(
-                        mProperties( tPropertyIndex ),
+                        this->get_property( tPropertyIndex, aLeaderFollowerType ),
                         tPropertyNamesPair( iProp )( 1 ),
                         aLeaderFollowerType );
             }
@@ -733,7 +783,7 @@ namespace moris::fem
 
                         // set property for IWG
                         mIQIs( iIQI )->set_property(
-                                mProperties( tPropertyIndex ),
+                                this->get_property( tPropertyIndex, tIsLeader ),
                                 tPropertyNamesPair( iProp )( 1 ),
                                 tIsLeader );
                     }
@@ -763,7 +813,7 @@ namespace moris::fem
 
                         // set CM for IQI
                         mIQIs( iIQI )->set_constitutive_model(
-                                mConstitutiveModels( tCMIndex ),
+                                this->get_constitutive_model( tCMIndex, tIsLeader ),
                                 tCMNamesPair( iCM )( 1 ),
                                 tIsLeader );
                     }
