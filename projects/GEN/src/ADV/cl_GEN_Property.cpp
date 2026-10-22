@@ -123,6 +123,13 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool Property::uses_additive_discretization() const
+    {
+        return mParameters.uses_additive_discretization();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     moris_index
     Property::get_discretization_mesh_index()
     {
