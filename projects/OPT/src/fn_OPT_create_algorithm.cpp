@@ -15,6 +15,7 @@
 #include "cl_OPT_Algorithm_LBFGS.hpp"
 #include "cl_OPT_Algorithm_Sweep.hpp"
 #include "cl_OPT_Algorithm_ROL.hpp"
+#include "cl_OPT_Algorithm_Adam_Projected.hpp"
 
 namespace moris::opt
 {
@@ -45,6 +46,10 @@ namespace moris::opt
         else if ( tAlgorithmName == "rol" )
         {
             return std::make_shared< Algorithm_ROL >( aAlgorithmParameterList );
+        }
+        else if ( tAlgorithmName == "adam_proj" )
+        {
+            return std::make_shared< Algorithm_Adam_Projected >( aAlgorithmParameterList );
         }
         else
         {

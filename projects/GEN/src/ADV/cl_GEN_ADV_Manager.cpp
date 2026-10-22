@@ -24,7 +24,7 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
-    void ADV_Manager::register_parameter_ids( const Vector< char >& aParameterIDs )
+    void ADV_Manager::register_parameter_ids( const Vector< sint >& aParameterIDs )
     {
         // Check for finalization
         MORIS_ASSERT( not mParameterIDsFinalized, "The ADV manager cannot add additional parameter IDs after they have already been finalized." );

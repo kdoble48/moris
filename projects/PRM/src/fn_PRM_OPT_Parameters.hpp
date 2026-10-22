@@ -21,7 +21,8 @@ namespace moris::opt
         LBFGS,
         SQP,
         SWEEP,
-        ROL
+        ROL,
+        ADAM_PROJ
     };
 }
 
@@ -203,6 +204,30 @@ namespace moris::prm
         // by one extra evaluation per trial
         tParameterList.insert( "debug_inner_trials", false );
 
+        // Oscillation-adaptive per-ADV move limit (off by default => identical to the fixed step_size box).
+        // Each ADV keeps its own move limit m_i (fraction of its range). After every accepted outer iteration,
+        // for an ADV whose step reached its subproblem move bound (alfa/beta, not an ADV bound) in either of the
+        // last two steps: a sign flip of the last two increments sets m_i = shrink * min(m_i, |last step|/range);
+        // two increments of the same sign set m_i = grow * m_i. Then m_i is clamped to [move_adapt_min,
+        // move_adapt_max]. With move_adapt_gate = false every ADV is adapted (the classic ungated rule).
+        tParameterList.insert( "move_adapt", false );          // enable the per-ADV adaptive move limit
+        tParameterList.insert( "move_adapt_gate", true );      // adapt only ADVs whose step hit the move bound
+        tParameterList.insert( "move_adapt_shrink", 0.7 );     // factor on a sign flip of consecutive increments
+        tParameterList.insert( "move_adapt_grow", 1.2 );       // factor on two increments of the same sign
+        tParameterList.insert( "move_adapt_min", 1.0e-4 );     // floor of m_i (fraction of range)
+        tParameterList.insert( "move_adapt_max", -1.0 );       // cap of m_i (fraction of range); < 0 => step_size
+        tParameterList.insert( "move_adapt_init", -1.0 );      // initial m_i (e.g. on a warm restart); < 0 => step_size
+
+        // Rise guard (off by default): when the current design is feasible (every constraint <= move_guard_feas) and
+        // a trial step raises the objective by more than move_guard_rise * |f0|, the step is rejected and the move
+        // box is multiplied by move_guard_shrink and the subproblem re-solved (up to move_guard_max_backtracks
+        // times; the last trial is then accepted). With move_adapt the reduced limits persist. Catches a member
+        // severed in one step, which neither asymptote nor oscillation rules anticipate.
+        tParameterList.insert( "move_guard_rise", -1.0 );      // relative objective rise that rejects a step; < 0 off
+        tParameterList.insert( "move_guard_feas", 2.0e-3 );    // the current design counts as feasible below this
+        tParameterList.insert( "move_guard_shrink", 0.5 );     // move-box factor per rejected trial
+        tParameterList.insert( "move_guard_max_backtracks", 4 );
+
         return tParameterList;
     }
 
@@ -377,8 +402,50 @@ namespace moris::prm
         // Optional full ROL ParameterList XML; empty -> build the list from the curated keys above
         tParameterList.insert( "xml_file", "" );
 
+        // Constraint handling: "rol" = ROL's Type-G Augmented-Lagrangian solver (multipliers update only when
+        // an inner solve converges; L-BFGS memory and TR radius restart every outer iteration);
+        // "persistent" = PHR augmented Lagrangian driven by MORIS: max_its outer iterations of at most
+        // subproblem_iteration_limit Lin-More steps each, one secant and TR radius kept across outers, and
+        // multipliers updated after every outer iteration.
+        tParameterList.insert( "al_mode", "rol" );
+        tParameterList.insert( "al_initial_multiplier", -1.0 );      // persistent: < 0 -> least-squares estimate
+        tParameterList.insert( "al_feasibility_reduction", 0.25 );   // persistent: grow penalty if violation > this x previous
+        tParameterList.insert( "al_max_penalty", 1.0e8 );            // persistent: penalty cap
+
+        // Stop after this many forward (criteria) solves and return the last accepted iterate; <= 0: unlimited
+        tParameterList.insert( "max_forward_solves", 0 );
+
         return tParameterList;
     }
+
+    inline Parameter_List
+    create_adam_proj_parameter_list()
+    {
+        // Adam with an exact one-constraint projection (Algorithm_Adam_Projected; 3DGS-style first-order method)
+        Parameter_List tParameterList( "ADAM_PROJ" );
+
+        tParameterList.insert( "algorithm", "adam_proj" );    // Algorithm name, don't change
+        tParameterList.insert( "restart_index", 0 );          // Restart iteration index
+        tParameterList.insert( "max_its", 300 );              // iterations (each: >= 1 forward + 1 adjoint solve)
+
+        tParameterList.insert( "learning_rate", 0.5 );            // initial base learning rate, ADV units
+        tParameterList.insert( "learning_rate_pattern", "" );     // per-ADV multipliers cycled over ADVs ("" = all 1)
+        tParameterList.insert( "lr_decay_final", 0.01 );          // exponential decay: lr(last) = this x lr(first)
+        tParameterList.insert( "adam_beta1", 0.9 );
+        tParameterList.insert( "adam_beta2", 0.999 );
+        tParameterList.insert( "adam_epsilon", 1.0e-8 );
+
+        tParameterList.insert( "projection_mask", "" );           // 0/1 (or weights) cycled over ADVs ("" = all)
+        tParameterList.insert( "projection_direction", "uniform" );  // "uniform" (the mask) | "gradient" (masked dg/dx)
+        tParameterList.insert( "projection_mode", "equality" );   // "equality": g = 0 always; "inequality": only if g > 0
+        tParameterList.insert( "projection_tol", 2.0e-4 );        // |g| tolerance of the 1D root find
+        tParameterList.insert( "projection_max_its", 4 );         // secant corrections (forward solves) per iteration
+        tParameterList.insert( "tangent_moments", true );         // Adam on the objective gradient tangent to g
+
+        return tParameterList;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
 
     /**
      * Creates an optimization algorithm parameter list depending on the optimziation algorithm type given.
@@ -402,6 +469,8 @@ namespace moris::prm
                 return create_sweep_parameter_list();
             case opt::Optimization_Algorithm_Type::ROL:
                 return create_rol_parameter_list();
+            case opt::Optimization_Algorithm_Type::ADAM_PROJ:
+                return create_adam_proj_parameter_list();
             default:
                 MORIS_ERROR( false, "Unknown optimization algorithm type provided." );
                 return Parameter_List( "Error" );

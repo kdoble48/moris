@@ -29,7 +29,10 @@ namespace moris::hmr
     /**
      * \brief mesh interface class
      */
-    class Mesh : public virtual mtk::Mesh
+    // alignas: mtk::Mesh is 16-byte aligned (armadillo Matrix members), but as a virtual base it does not
+    // align this class's non-virtual part; GCC 13 nevertheless emits 16-byte aligned stores in the
+    // base-object constructor, which faults when the class sits at an 8-mod-16 offset in a derived class.
+    class alignas( alignof( mtk::Mesh ) ) Mesh : public virtual mtk::Mesh
     {
         //! describing label
         std::string mLabel;

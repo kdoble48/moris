@@ -15,6 +15,8 @@
 #include <algorithm>    // for unique
 #include <iostream>
 #include <iterator>
+#include <type_traits>    // for is_nothrow_move_constructible
+#include <utility>        // for move
 
 // MORIS library header files.
 #include "moris_typedefs.hpp"    // COR/src
@@ -68,6 +70,21 @@ namespace moris
         Vector( const Vector< T >& aVector )
         {
             mVector = aVector.data();
+        }
+
+        //------------------------------------------------------------------
+        /**
+         * Vector move constructor
+         *
+         * Takes over the buffer of aVector; aVector is left empty.
+         * noexcept so that std::vector< Vector< T > > moves rather than
+         * copies its elements when it reallocates.
+         *
+         * @param[in] aVector Vector to move from, left empty
+         */
+        Vector( Vector< T >&& aVector ) noexcept( std::is_nothrow_move_constructible< std::vector< T > >::value )
+                : mVector( std::move( aVector.mVector ) )
+        {
         }
 
         //------------------------------------------------------------------
@@ -132,6 +149,24 @@ namespace moris
         operator=( Vector< T > const & aVector )
         {
             mVector = aVector.data();
+
+            return *this;
+        }
+
+        //------------------------------------------------------------------
+
+        /**
+         * @brief Move assignment operator
+         *
+         * Takes over the buffer of aVector; aVector is left empty.
+         *
+         * @param[in] aVector Vector to move from, left empty
+         */
+
+        const Vector< T >&
+        operator=( Vector< T >&& aVector ) noexcept( std::is_nothrow_move_assignable< std::vector< T > >::value )
+        {
+            mVector = std::move( aVector.mVector );
 
             return *this;
         }
