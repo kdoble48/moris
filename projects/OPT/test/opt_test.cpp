@@ -859,6 +859,30 @@ namespace moris::opt
 
         // ---------------------------------------------------------------------------------------------------------
 
+        // Adam with exact constraint projection on the binding quadratic: the iterate stays on x0 + x1 = 2 (linear
+        // constraint -> the linearized projection is exact) and the decaying rate converges to (1,1).
+        SECTION( "Adam projected (binding constraint)" )
+        {
+            Parameter_List tAlgorithmParameterList = moris::prm::create_adam_proj_parameter_list();
+            tAlgorithmParameterList.set( "max_its", 400 );
+            tAlgorithmParameterList.set( "learning_rate", 0.2 );
+            tAlgorithmParameterList.set( "lr_decay_final", 0.001 );
+            tAlgorithmParameterList.set( "projection_tol", 1.0e-10 );
+
+            Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+            tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+            Manager tManager( tAlgorithms, binding::make_problem() );
+            tManager.perform();
+
+            if ( par_rank() == 0 )
+            {
+                Vector< real > tADVs = tManager.get_advs();
+                REQUIRE( std::abs( tADVs( 0 ) + tADVs( 1 ) - 2.0 ) < 1E-8 );    // exactly on the constraint
+                REQUIRE( std::abs( tADVs( 0 ) - 1.0 ) < 2E-3 );
+                REQUIRE( std::abs( tADVs( 1 ) - 1.0 ) < 2E-3 );
+            }
+        }
+
         // ROL driven by a full ROL/Teuchos ParameterList XML (the "xml_file" escape hatch, e.g.
         // Plato's rol_inputs.xml). Confirms the passthrough path parses the XML and drives ROL;
         // bound-constrained so the XML "Trust Region" step matches (constraints off).
