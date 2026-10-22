@@ -23,6 +23,7 @@
 #include "fn_OPT_create_interface.hpp"
 #include "cl_OPT_Problem_User_Defined.hpp"
 #include "cl_OPT_Interface_User_Defined.hpp"
+#include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_Communication_Tools.hpp"
 #include "paths.hpp"
 
@@ -258,6 +259,114 @@ namespace moris::opt
                 for ( auto iADV : tADVs )
                 {
                     REQUIRE( std::abs( iADV - 1.0 ) < 1E-4 );
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+
+        // Oscillation-adaptive per-ADV move limit (move_adapt): the update rule itself, then the native solver
+        // with the rule on (Rosenbrock minimum reached), and shrink = grow = 1 reproducing the fixed box exactly.
+        SECTION( "MMA adaptive move limit rule" )
+        {
+            // range 1. ADV 0 flips (+0.1, -0.05) on the bound: shrink relative to the step taken, 0.7 * min(0.08, 0.05);
+            // ADV 1 agrees on the bound: grow; ADV 2 does not move; ADV 3 flips at the floor; ADV 4 grows into the cap;
+            // ADV 5 flips but its steps were interior (not on the move bound): unchanged
+            std::vector< double > tMove  = { 0.08, 0.01, 0.01, 1.0e-4, 0.02, 0.01 };
+            std::vector< double > tXOld2 = { 0.0, 0.0, 0.5, 0.0, 0.0, 0.0 };
+            std::vector< double > tXOld1 = { 0.1, 0.1, 0.5, 0.1, 0.1, 0.005 };
+            std::vector< double > tX     = { 0.05, 0.2, 0.5, 0.0, 0.2, 0.0 };
+            std::vector< double > tRange( 6, 1.0 );
+            std::vector< int >    tHit   = { 1, 1, 1, 1, 1, 0 };
+
+            int tShrunk = Algorithm_MMA::adapt_move_limits( tMove, tX, tXOld1, tXOld2, tRange, tHit, 0.7, 1.2, 1.0e-4, 0.02 );
+
+            REQUIRE( tShrunk == 2 );
+            REQUIRE( std::abs( tMove[ 0 ] - 0.02 ) < 1e-15 );     // 0.7 * 0.05 = 0.035, then the cap 0.02
+            REQUIRE( std::abs( tMove[ 1 ] - 0.012 ) < 1e-15 );    // grow
+            REQUIRE( std::abs( tMove[ 2 ] - 0.01 ) < 1e-15 );     // zero increment: unchanged
+            REQUIRE( std::abs( tMove[ 3 ] - 1.0e-4 ) < 1e-15 );   // clamped at the floor
+            REQUIRE( std::abs( tMove[ 4 ] - 0.02 ) < 1e-15 );     // clamped at the cap
+            REQUIRE( std::abs( tMove[ 5 ] - 0.01 ) < 1e-15 );     // interior steps: gated out
+
+            // shrink is relative to the step actually taken: range 2, step 0.02 (= 0.01 of range) on a 0.05 limit
+            std::vector< double > tM2 = { 0.05 }, tA = { 0.0 }, tB = { 0.02 }, tC = { 0.0 }, tR2 = { 2.0 };
+            std::vector< int >    tH2 = { 1 };
+            Algorithm_MMA::adapt_move_limits( tM2, tC, tB, tA, tR2, tH2, 0.5, 1.2, 1.0e-4, 0.05 );
+            REQUIRE( std::abs( tM2[ 0 ] - 0.005 ) < 1e-15 );
+        }
+
+        SECTION( "MMA rise guard test" )
+        {
+            std::vector< double > tFeas = { -0.01, 0.001 }, tInfeas = { 0.01 };
+            REQUIRE( Algorithm_MMA::guard_rejects( 1.0, 1.2, tFeas, 0.1, 2e-3 ) );       // feasible, +20% > 10%
+            REQUIRE( !Algorithm_MMA::guard_rejects( 1.0, 1.05, tFeas, 0.1, 2e-3 ) );     // +5%: accepted
+            REQUIRE( !Algorithm_MMA::guard_rejects( 1.0, 1.5, tInfeas, 0.1, 2e-3 ) );    // infeasible march: never guarded
+            REQUIRE( !Algorithm_MMA::guard_rejects( 1.0, 1.5, tFeas, -1.0, 2e-3 ) );     // off
+            REQUIRE( Algorithm_MMA::guard_rejects( -1.0, -0.8, tFeas, 0.1, 2e-3 ) );     // relative to |f0|
+        }
+
+        SECTION( "MMA native adaptive move limit" )
+        {
+            auto tRun = []( bool aAdapt, real aShrink, real aGrow, sint aMaxIts, bool aGate = true, real aGuard = -1.0 ) -> std::pair< real, Vector< real > >
+            {
+                Parameter_List tProblemParameterList   = moris::prm::create_opt_problem_parameter_list();
+                Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+                tAlgorithmParameterList.set( "norm_drop", 2.5e-5 );
+                tAlgorithmParameterList.set( "asymp_adaptc", 1.1 );
+                tAlgorithmParameterList.set( "max_its", aMaxIts );
+                tAlgorithmParameterList.set( "move_adapt", aAdapt );
+                tAlgorithmParameterList.set( "move_adapt_shrink", aShrink );
+                tAlgorithmParameterList.set( "move_adapt_grow", aGrow );
+                tAlgorithmParameterList.set( "move_adapt_min", 1.0e-6 );
+                tAlgorithmParameterList.set( "move_adapt_gate", aGate );
+                tAlgorithmParameterList.set( "move_guard_rise", aGuard );
+
+                std::shared_ptr< Criteria_Interface > tInterface = std::make_shared< Interface_User_Defined >(
+                        &initialize_rosenbrock,
+                        &get_criteria_rosenbrock,
+                        &get_dcriteria_dadv_rosenbrock );
+                std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                        tProblemParameterList,
+                        tInterface,
+                        &get_constraint_types_rosenbrock,
+                        &compute_objectives_rosenbrock,
+                        &compute_constraints_rosenbrock,
+                        &compute_dobjective_dadv_rosenbrock,
+                        &compute_dobjective_dcriteria_rosenbrock,
+                        &compute_dconstraint_dadv_rosenbrock,
+                        &compute_dconstraint_dcriteria_rosenbrock );
+
+                Submodule_Parameter_Lists tAlgorithms( "Algorithms" );
+                tAlgorithms.add_parameter_list( tAlgorithmParameterList );
+                Manager tManager( tAlgorithms, tProblem );
+                tManager.perform();
+                return { tManager.get_objectives()( 0 ), tManager.get_advs() };
+            };
+
+            // the rule on (gated and ungated): still reaches the Rosenbrock minimum
+            for ( bool tGate : { true, false } )
+            {
+                auto [ tObj, tADVs ] = tRun( true, 0.7, 1.2, 100, tGate, 0.5 );    // with the rise guard
+                if ( par_rank() == 0 )
+                {
+                    REQUIRE( std::abs( tObj ) < 2E-7 );
+                    for ( auto iADV : tADVs )
+                    {
+                        REQUIRE( std::abs( iADV - 1.0 ) < 1E-4 );
+                    }
+                }
+            }
+
+            // shrink = grow = 1: every move limit stays step_size, so the trajectory equals the fixed box exactly
+            auto [ tObjFix, tADVsFix ] = tRun( false, 0.7, 1.2, 12 );
+            auto [ tObjNeu, tADVsNeu ] = tRun( true, 1.0, 1.0, 12 );
+            if ( par_rank() == 0 )
+            {
+                REQUIRE( tObjFix == tObjNeu );
+                for ( uint i = 0; i < tADVsFix.size(); ++i )
+                {
+                    REQUIRE( tADVsFix( i ) == tADVsNeu( i ) );
                 }
             }
         }

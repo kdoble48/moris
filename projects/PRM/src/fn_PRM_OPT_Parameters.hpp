@@ -203,6 +203,30 @@ namespace moris::prm
         // by one extra evaluation per trial
         tParameterList.insert( "debug_inner_trials", false );
 
+        // Oscillation-adaptive per-ADV move limit (off by default => identical to the fixed step_size box).
+        // Each ADV keeps its own move limit m_i (fraction of its range). After every accepted outer iteration,
+        // for an ADV whose step reached its subproblem move bound (alfa/beta, not an ADV bound) in either of the
+        // last two steps: a sign flip of the last two increments sets m_i = shrink * min(m_i, |last step|/range);
+        // two increments of the same sign set m_i = grow * m_i. Then m_i is clamped to [move_adapt_min,
+        // move_adapt_max]. With move_adapt_gate = false every ADV is adapted (the classic ungated rule).
+        tParameterList.insert( "move_adapt", false );          // enable the per-ADV adaptive move limit
+        tParameterList.insert( "move_adapt_gate", true );      // adapt only ADVs whose step hit the move bound
+        tParameterList.insert( "move_adapt_shrink", 0.7 );     // factor on a sign flip of consecutive increments
+        tParameterList.insert( "move_adapt_grow", 1.2 );       // factor on two increments of the same sign
+        tParameterList.insert( "move_adapt_min", 1.0e-4 );     // floor of m_i (fraction of range)
+        tParameterList.insert( "move_adapt_max", -1.0 );       // cap of m_i (fraction of range); < 0 => step_size
+        tParameterList.insert( "move_adapt_init", -1.0 );      // initial m_i (e.g. on a warm restart); < 0 => step_size
+
+        // Rise guard (off by default): when the current design is feasible (every constraint <= move_guard_feas) and
+        // a trial step raises the objective by more than move_guard_rise * |f0|, the step is rejected and the move
+        // box is multiplied by move_guard_shrink and the subproblem re-solved (up to move_guard_max_backtracks
+        // times; the last trial is then accepted). With move_adapt the reduced limits persist. Catches a member
+        // severed in one step, which neither asymptote nor oscillation rules anticipate.
+        tParameterList.insert( "move_guard_rise", -1.0 );      // relative objective rise that rejects a step; < 0 off
+        tParameterList.insert( "move_guard_feas", 2.0e-3 );    // the current design counts as feasible below this
+        tParameterList.insert( "move_guard_shrink", 0.5 );     // move-box factor per rejected trial
+        tParameterList.insert( "move_guard_max_backtracks", 4 );
+
         return tParameterList;
     }
 

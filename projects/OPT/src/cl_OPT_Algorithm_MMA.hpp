@@ -92,6 +92,24 @@ namespace moris::opt
         // ---- NaN guard ----
         real mMoveScale = 1.0;      ///< move-limit multiplier; shrunk while backtracking off a bad step
 
+        // ---- oscillation-adaptive per-ADV move limit (move_adapt) ----
+        bool mMoveAdapt       = false;    ///< off => every ADV uses mStepSize (the original fixed box)
+        real mMoveShrink      = 0.7;      ///< factor applied when the last two increments flip sign
+        real mMoveGrow        = 1.2;      ///< factor applied when they agree
+        real mMoveMin         = 1.0e-4;   ///< floor (fraction of range)
+        real mMoveMax         = -1.0;     ///< cap (fraction of range); < 0 => mStepSize
+        real mMoveInit        = -1.0;     ///< initial value; < 0 => mStepSize
+        bool mMoveGate        = true;     ///< adapt only ADVs whose step hit the subproblem move bound
+        std::vector< double > mMove;      ///< per-ADV move limit (fraction of range)
+        std::vector< int >    mMoveHit;   ///< 1 if the accepted step of this ADV sat on its move bound
+        std::vector< int >    mMoveHitPrev;   ///< same for the previous accepted step
+
+        // ---- rise guard (move_guard_*) ----
+        real mGuardRise   = -1.0;     ///< relative objective rise that rejects a step from a feasible design; < 0 off
+        real mGuardFeas   = 2.0e-3;   ///< feasibility tolerance of the current design
+        real mGuardShrink = 0.5;      ///< move-box factor per rejected trial
+        sint mGuardMaxBt  = 4;        ///< backtracks before the last trial is accepted
+
         // ---- objective scaling (degenerate-evaluation safeguard) ----
         // GCMMA assumes an O(1-100) objective (Svanberg's own scaling recommendation). Degenerate
         // XFEM cuts can hand back gradients of 1e10+, which overflow the subproblem's interior-point
@@ -189,6 +207,33 @@ namespace moris::opt
         inline double mn( double a, double b ) { return a < b ? a : b; }
 
       public:
+        /**
+         * Oscillation-adaptive move-limit update for one accepted outer iteration (move_adapt).
+         * For each ADV i with increments d1 = aX - aXOld1, d0 = aXOld1 - aXOld2 and range r_i, if aHit[i] != 0
+         * (the step sat on its move bound; pass all ones for the ungated rule):
+         *   d1 * d0 < 0 (sign flip)  => aMove[i] = aShrink * min( aMove[i], |d1| / r_i )
+         *   d1 * d0 > 0 (agreement)  => aMove[i] = aGrow * aMove[i]
+         * otherwise unchanged; then clamped to [aMin, aMax].
+         * @return number of ADVs shrunk
+         */
+        static int adapt_move_limits(
+                std::vector< double >&       aMove,
+                const std::vector< double >& aX,
+                const std::vector< double >& aXOld1,
+                const std::vector< double >& aXOld2,
+                const std::vector< double >& aRange,
+                const std::vector< int >&    aHit,
+                real                         aShrink,
+                real                         aGrow,
+                real                         aMin,
+                real                         aMax );
+
+        /**
+         * Rise-guard test: true if the current design is feasible (all aCon <= aFeas) and the trial objective
+         * exceeds the current one by more than aRise * |aF0|.
+         */
+        static bool guard_rejects( real aF0, real aF0New, const std::vector< double >& aCon, real aRise, real aFeas );
+
         /** Constructor */
         explicit Algorithm_MMA( const moris::Parameter_List& aParameterList );
 
