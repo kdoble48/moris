@@ -211,6 +211,27 @@ namespace moris::fem
 
         //--------------------------------------------------------------------------------------------------------------
         /**
+         * check whether the derivative of the constitutive matrix wrt the spatial coordinates is available
+         * (eval_dConstdx), i.e. whether the spatial variation of every CM property is known
+         * (see classify_property_spatial_variation). Base class: every CM property must be constant in space,
+         * since the dependence of the constitutive matrix on its properties is not known here.
+         * (used by the analytical geometric sensitivities of the structural IWGs and IQIs)
+         */
+        virtual bool has_spatial_constitutive_derivatives();
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the constitutive matrix wrt the spatial coordinate x_k, same layout as
+         * constitutive(); precondition: has_spatial_constitutive_derivatives(). Base class: zero.
+         * @param[ in ]  aDirection spatial direction k
+         * @param[ out ] adConstdx  d C / d x_k
+         */
+        virtual void eval_dConstdx(
+                uint              aDirection,
+                Matrix< DDRMat >& adConstdx );
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
          * evaluate the derivative of the test strain (strain-displacement matrix B) wrt the spatial coordinate x_k,
          * same layout as testStrain(); the derivative of the strain is adTestStraindx * vec( displacement coefficients )
          * @param[ in ]  aDirection       spatial direction k

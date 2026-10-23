@@ -158,6 +158,17 @@ namespace moris::fem
             return Constitutive_Type::STRUC_LIN_ISO_DAMAGE;
         }
 
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * the damaged flux is not C * strain and the damage depends on the strain history: the analytical geometric
+         * sensitivities do not cover this model, use the FD geometry path
+         */
+        bool
+        has_spatial_constitutive_derivatives() override
+        {
+            return false;
+        }
+
         //------------------------------------------------------------------------------
         /*
          * reset specific evaluation flag

@@ -15,6 +15,10 @@
  *       f(x_gp) changes by        df      = N_v(eta) * df/dx_i dX               (affine IP element map)
  *   (3) for side sets the normal: dn      = dn/dX(v,i) dX                       (see eval_ig_normal_derivatives)
  * which is what the finite difference geometry path (IWG::select_dRdp_FD_geometry_bulk/sideset) perturbs.
+ *
+ * Properties enter (2) through their spatial variation dP/dx_i. The analytical path is used only if that variation is
+ * known for every property involved (see classify_property_spatial_variation); otherwise the IWG/IQI reports no
+ * analytical support and the FD geometry path is used (MB-062).
  */
 
 #pragma once
@@ -24,10 +28,72 @@
 #include "linalg_typedefs.hpp"
 #include "cl_Vector.hpp"
 
+#include <memory>
+
 namespace moris::fem
 {
     class Geometry_Interpolator;
     class Field_Interpolator;
+    class Property;
+
+    //------------------------------------------------------------------------------
+    /**
+     * spatial variation of a property at the evaluation point, as seen by the analytical geometric sensitivities
+     *   CONSTANT       - no dof, dv or field dependency, no space derivative functions, and either the default constant
+     *                    value function or a value function whose value does not change when the evaluation point is
+     *                    translated by +/- a fraction of the IG cell size in each direction (parameter-only functions)
+     *   DIFFERENTIABLE - no dof, dv or field dependency, space derivative functions are set ( Property::dPropdx( 1 ) )
+     *   UNKNOWN        - anything else (dof, dv or field dependent, or space dependent without a space derivative):
+     *                    the analytical geometric sensitivities are not available, use the FD geometry path
+     */
+    enum class Property_Spatial_Variation
+    {
+        CONSTANT,
+        DIFFERENTIABLE,
+        UNKNOWN
+    };
+
+    //------------------------------------------------------------------------------
+    /**
+     * classify the spatial variation of a property at the current evaluation point (see Property_Spatial_Variation)
+     * @param[ in ] aProperty property, the field interpolator manager is set at the evaluation point; nullptr is CONSTANT
+     */
+    Property_Spatial_Variation classify_property_spatial_variation( const std::shared_ptr< Property >& aProperty );
+
+    //------------------------------------------------------------------------------
+    /**
+     * true if the spatial variation of the property is known (CONSTANT or DIFFERENTIABLE), or the property is nullptr
+     */
+    bool has_known_spatial_variation( const std::shared_ptr< Property >& aProperty );
+
+    //------------------------------------------------------------------------------
+    /**
+     * true if the property is nullptr or CONSTANT
+     */
+    bool is_spatially_constant( const std::shared_ptr< Property >& aProperty );
+
+    //------------------------------------------------------------------------------
+    /**
+     * true if the property is nullptr, CONSTANT, or DIFFERENTIABLE with a nonzero value:
+     * a thickness that scales the whole contribution, whose derivative is added as R * ( dt/dx ) / t
+     */
+    bool has_known_spatial_variation_nonzero( const std::shared_ptr< Property >& aProperty );
+
+    //------------------------------------------------------------------------------
+    /**
+     * derivative of the property value wrt the evaluation point location x_k
+     * precondition: has_known_spatial_variation( aProperty ) (checked by the supports_analytical_* hooks)
+     * @param[ in ]  aProperty  property, nullptr or of known spatial variation
+     * @param[ in ]  aDirection spatial direction k
+     * @param[ out ] adPropdxk  ( number of entries of the property value x 1 ), zero if the property is constant
+     *                          (or nullptr: 1 x 1 zero). The space derivative function returns, like Field_Interpolator::gradx,
+     *                          a ( number of space dimensions x number of entries ) matrix; for a scalar property a vector
+     *                          of length number of space dimensions is accepted.
+     */
+    void eval_property_space_derivative(
+            const std::shared_ptr< Property >& aProperty,
+            uint                               aDirection,
+            Matrix< DDRMat >&                  adPropdxk );
 
     //------------------------------------------------------------------------------
     /**

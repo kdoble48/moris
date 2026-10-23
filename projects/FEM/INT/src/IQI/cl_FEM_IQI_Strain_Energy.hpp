@@ -92,14 +92,24 @@ namespace moris::fem
         //------------------------------------------------------------------------------
         /**
          * analytical geometric sensitivities are available if the elasticity CM is a linear structural CM
-         * with exact spatial strain derivatives (see CM_Struc_Linear::has_spatial_strain_derivatives)
+         * with exact spatial strain derivatives (see CM_Struc_Linear::has_spatial_strain_derivatives) and known
+         * spatial derivatives of its constitutive matrix (CM_Struc_Linear::has_spatial_constitutive_derivatives),
+         * and the bedding and thickness properties are constant or have space derivative functions
+         * (see classify_property_spatial_variation); otherwise the FD geometry path is used
          */
         bool supports_analytical_dQIdp_geometry() override;
 
         //------------------------------------------------------------------------------
         /**
+         * the thickness property scales the whole QI contribution
+         */
+        std::shared_ptr< Property > get_geometric_sensitivity_thickness_property() override;
+
+        //------------------------------------------------------------------------------
+        /**
          * derivatives of the QI contribution wrt the evaluation point location, at fixed weight
-         * (see IQI::compute_dQIdx_geometry_integrand); spatial variations of the properties are not differentiated
+         * (see IQI::compute_dQIdx_geometry_integrand), including the spatial variation of the constitutive matrix
+         * and the bedding (the thickness is added by IQI::compute_dQIdp_geometry_analytical)
          * @param[ in ]  aWStar weight associated to the evaluation point
          * @param[ out ] adQIdx derivatives wrt the evaluation point location ( space dim x 1 )
          * @param[ out ] adQIdn derivatives wrt the normal (empty, bulk IQI)

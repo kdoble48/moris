@@ -137,6 +137,24 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * the derivative of the penalty parameter wrt the evaluation point location is available if the material
+         * property is constant or has space derivative functions (see classify_property_spatial_variation)
+         */
+        bool has_spatial_derivatives() override;
+
+        //------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the penalty parameter wrt the evaluation point location x_k, at fixed
+         * cluster measures: d SP / d x_k = alpha ( dE/dx_k ) / h
+         * @param[ in ]  aDirection spatial direction k
+         * @param[ out ] adSPdx     d SP / d x_k ( 1 x 1 )
+         */
+        void eval_dSPdx(
+                uint              aDirection,
+                Matrix< DDRMat >& adSPdx ) override;
+
+        //------------------------------------------------------------------------------
+        /**
          * evaluate the penalty parameter derivative wrt to a leader dof type
          * @param[ in ] aDofTypes a dof type wrt which the derivative is evaluated
          * dPPdLeaderDOF ( 1 x numDerDof )

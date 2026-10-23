@@ -182,7 +182,18 @@ namespace moris::fem
         bool
         IWG_Isotropic_Struc_Linear_Neumann::supports_analytical_dRdp_geometry()
         {
-            return true;
+            // the spatial variation of the loads must be known (MB-062)
+            return has_known_spatial_variation( mLeaderProp( static_cast< uint >( IWG_Property_Type::TRACTION ) ) )    //
+                && has_known_spatial_variation( mLeaderProp( static_cast< uint >( IWG_Property_Type::PRESSURE ) ) )    //
+                && has_known_spatial_variation_nonzero( mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) ) );
+        }
+
+        //------------------------------------------------------------------------------
+
+        std::shared_ptr< Property >
+        IWG_Isotropic_Struc_Linear_Neumann::get_geometric_sensitivity_thickness_property()
+        {
+            return mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
         }
 
         //------------------------------------------------------------------------------
@@ -222,6 +233,7 @@ namespace moris::fem
             adRdx.resize( tSpaceDim );
 
             Matrix< DDRMat > tNk;
+            Matrix< DDRMat > tdPropdx;
             for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
             {
                 Matrix< DDRMat > tdNdxk = tdNdx( { iDir, iDir }, { 0, tdNdx.n_cols() - 1 } );
@@ -229,16 +241,20 @@ namespace moris::fem
 
                 adRdx( iDir ).set_size( tFI->get_number_of_space_time_coefficients(), 1, 0.0 );
 
-                // traction (held fixed in space)
+                // traction: d/dx_k ( N^T t ) = dN^T t + N^T dt/dx_k
                 if ( tPropTraction != nullptr )
                 {
-                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * tPropTraction->val() );
+                    eval_property_space_derivative( tPropTraction, iDir, tdPropdx );
+
+                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * tPropTraction->val() + tFI->N_trans() * tdPropdx );
                 }
 
-                // pressure (held fixed in space)
+                // pressure: d/dx_k ( N^T n p ) = dN^T n p + N^T n dp/dx_k
                 if ( tPropPressure != nullptr )
                 {
-                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * mNormal * tPropPressure->val() );
+                    eval_property_space_derivative( tPropPressure, iDir, tdPropdx );
+
+                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * mNormal * tPropPressure->val() + tFI->N_trans() * mNormal * tdPropdx );
                 }
             }
 

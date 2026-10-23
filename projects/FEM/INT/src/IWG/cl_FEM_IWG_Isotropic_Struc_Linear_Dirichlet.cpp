@@ -267,9 +267,31 @@ namespace moris::fem
                     mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) );
 
             // the spatial derivatives are implemented for the linear structural CMs
-            const CM_Struc_Linear* tCMStrucLinear = dynamic_cast< const CM_Struc_Linear* >( tCMElasticity.get() );
+            CM_Struc_Linear* tCMStrucLinear = dynamic_cast< CM_Struc_Linear* >( tCMElasticity.get() );
 
-            return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+            if ( tCMStrucLinear == nullptr || !tCMStrucLinear->has_spatial_strain_derivatives() )
+            {
+                return false;
+            }
+
+            // get SP for Nitsche
+            const std::shared_ptr< Stabilization_Parameter >& tSPNitsche =
+                    mStabilizationParam( static_cast< uint >( IWG_Stabilization_Type::DIRICHLET_NITSCHE ) );
+
+            // the spatial variation of the CM, SP and IWG properties must be known (MB-062)
+            return tCMStrucLinear->has_spatial_constitutive_derivatives()                                               //
+                && tSPNitsche != nullptr && tSPNitsche->has_spatial_derivatives()                                       //
+                && has_known_spatial_variation( mLeaderProp( static_cast< uint >( IWG_Property_Type::DIRICHLET ) ) )    //
+                && is_spatially_constant( mLeaderProp( static_cast< uint >( IWG_Property_Type::SELECT ) ) )             //
+                && has_known_spatial_variation_nonzero( mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) ) );
+        }
+
+        //------------------------------------------------------------------------------
+
+        std::shared_ptr< Property >
+        IWG_Isotropic_Struc_Linear_Dirichlet::get_geometric_sensitivity_thickness_property()
+        {
+            return mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
         }
 
         //------------------------------------------------------------------------------
@@ -316,7 +338,7 @@ namespace moris::fem
                 return;
             }
 
-            // get the imposed displacement property (held fixed in space)
+            // get the imposed displacement property
             const std::shared_ptr< Property >& tPropDirichlet =
                     mLeaderProp( static_cast< uint >( IWG_Property_Type::DIRICHLET ) );
 
@@ -358,24 +380,35 @@ namespace moris::fem
 
             // derivatives wrt the evaluation point location
             Matrix< DDRMat > tdBdx;
+            Matrix< DDRMat > tdConstdx;
+            Matrix< DDRMat > tdDirichletdx;
+            Matrix< DDRMat > tdGammadx;
             Matrix< DDRMat > tNk;
             for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
             {
+                // d sigma = C dB u + dC eps
                 tCMElasticity->eval_dTestStraindx( iDir, tdBdx );
-                Matrix< DDRMat > tdFluxdx = tConst * ( tdBdx * tUHat );
+                tCMElasticity->eval_dConstdx( iDir, tdConstdx );
+                Matrix< DDRMat > tdFluxdx = tConst * ( tdBdx * tUHat ) + tdConstdx * tCMElasticity->strain();
 
                 Matrix< DDRMat > tdNdxk = tdNdx( { iDir, iDir }, { 0, tdNdx.n_cols() - 1 } );
                 build_vector_shape_function_matrix( tdNdxk, tNumFields, tNk );
 
-                // derivative of the jump
-                Matrix< DDRMat > tdJumpdx = tNk * tUHat;
+                // derivative of the jump: dN u - d u_D / dx_k
+                eval_property_space_derivative( tPropDirichlet, iDir, tdDirichletdx );
+                Matrix< DDRMat > tdJumpdx = tNk * tUHat - tdDirichletdx;
 
-                adRdx( iDir ) = aWStar * (                                                                       //
-                                        -trans( tNk ) * tM * tFlatNormal * tFlux                                 //
-                                        - tFIDispl->N_trans() * tM * tFlatNormal * tdFluxdx                      //
-                                        + mBeta * trans( tFlatNormal * tConst * tdBdx ) * tM * tJump             //
-                                        + mBeta * trans( tFlatNormal * tConst * tTestStrain ) * tM * tdJumpdx    //
-                                        + tGamma * ( trans( tNk ) * tM * tJump + tFIDispl->N_trans() * tM * tdJumpdx ) );
+                // derivative of the Nitsche parameter at fixed cluster measures
+                tSPNitsche->eval_dSPdx( iDir, tdGammadx );
+
+                adRdx( iDir ) = aWStar * (                                                                                //
+                                        -trans( tNk ) * tM * tFlatNormal * tFlux                                          //
+                                        - tFIDispl->N_trans() * tM * tFlatNormal * tdFluxdx                               //
+                                        + mBeta * trans( tFlatNormal * tConst * tdBdx ) * tM * tJump                      //
+                                        + mBeta * trans( tFlatNormal * tConst * tTestStrain ) * tM * tdJumpdx             //
+                                        + mBeta * trans( tFlatNormal * tdConstdx * tTestStrain ) * tM * tJump             //
+                                        + tGamma * ( trans( tNk ) * tM * tJump + tFIDispl->N_trans() * tM * tdJumpdx )    //
+                                        + tdGammadx( 0 ) * tFIDispl->N_trans() * tM * tJump );
             }
 
             // derivatives wrt the normal components: F is linear in the normal

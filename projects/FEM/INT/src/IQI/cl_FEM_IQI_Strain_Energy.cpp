@@ -279,10 +279,26 @@ namespace moris::fem
     IQI_Strain_Energy::supports_analytical_dQIdp_geometry()
     {
         // the spatial derivatives are implemented for the linear structural CMs
-        const CM_Struc_Linear *tCMStrucLinear = dynamic_cast< const CM_Struc_Linear * >(
+        CM_Struc_Linear *tCMStrucLinear = dynamic_cast< CM_Struc_Linear * >(
                 mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST ) ).get() );
 
-        return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+        if ( tCMStrucLinear == nullptr || !tCMStrucLinear->has_spatial_strain_derivatives() )
+        {
+            return false;
+        }
+
+        // the spatial variation of the CM and IQI properties must be known (MB-062)
+        return tCMStrucLinear->has_spatial_constitutive_derivatives()                                             //
+            && has_known_spatial_variation( mLeaderProp( static_cast< uint >( IWG_Property_Type::BEDDING ) ) )    //
+            && has_known_spatial_variation_nonzero( mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) ) );
+    }
+
+    //------------------------------------------------------------------------------
+
+    std::shared_ptr< Property >
+    IQI_Strain_Energy::get_geometric_sensitivity_thickness_property()
+    {
+        return mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
     }
 
     //------------------------------------------------------------------------------
@@ -338,16 +354,19 @@ namespace moris::fem
         }
 
         Matrix< DDRMat > tdStraindx;
+        Matrix< DDRMat > tdConstdx;
+        Matrix< DDRMat > tdBeddingdx;
         Matrix< DDRMat > tNk;
         for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
         {
-            // d/dx_k ( 1/2 sigma^T eps ) = 1/2 ( C deps^T eps + sigma^T deps )
+            // d/dx_k ( 1/2 sigma^T eps ) = 1/2 ( dsigma^T eps + sigma^T deps ), dsigma = C deps + dC eps
             tCMElasticity->eval_dStraindx( iDir, tdStraindx );
-            Matrix< DDRMat > tdFluxdx = tConst * tdStraindx;
+            tCMElasticity->eval_dConstdx( iDir, tdConstdx );
+            Matrix< DDRMat > tdFluxdx = tConst * tdStraindx + tdConstdx * tStrain;
 
             adQIdx( iDir ) = aWStar * 0.5 * ( dot( tdFluxdx, tStrain ) + dot( tFlux, tdStraindx ) );
 
-            // bedding: d/dx_k ( 1/2 k u^T u ) = k u^T du/dx_k
+            // bedding: d/dx_k ( 1/2 k u^T u ) = k u^T du/dx_k + 1/2 u^T u dk/dx_k
             if ( tPropBedding != nullptr )
             {
                 const Matrix< DDRMat > &tdNdx  = tDisplacementFI->dnNdxn( 1 );
@@ -357,6 +376,11 @@ namespace moris::fem
                 Matrix< DDRMat > tdUdx = tNk * tUHat;
 
                 adQIdx( iDir ) += aWStar * tPropBedding->val()( 0 ) * dot( tDisplacementFI->val(), tdUdx );
+
+                // spatial variation of the bedding: 1/2 u^T u dk/dx_k
+                eval_property_space_derivative( tPropBedding, iDir, tdBeddingdx );
+
+                adQIdx( iDir ) += aWStar * 0.5 * tdBeddingdx( 0 ) * dot( tDisplacementFI->val(), tDisplacementFI->val() );
             }
         }
     }
