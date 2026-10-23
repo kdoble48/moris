@@ -46,23 +46,29 @@ namespace moris::fem
 
         real tJumpNorm;
 
-        Field_Interpolator* tFIField = nullptr;
         if ( mLeaderFieldTypes.size() != 0 )
         {
-            tFIField = mLeaderFIManager->get_field_interpolators_for_type( mQuantityDofType( 0 ) );
+            // reference solution given as a field
+            Field_Interpolator* tFIField =
+                    mLeaderFIManager->get_field_interpolators_for_type( mLeaderFieldTypes( 0 )( 0 ) );
 
             tJumpNorm = norm( tFI->val() - tFIField->val() );
         }
         else
         {
-            // get analytical solution property
+            // reference solution given as a property
             std::shared_ptr< Property >& tPropL2Check =
                     mLeaderProp( static_cast< uint >( IQI_Property_Type::L2_CHECK ) );
+
+            MORIS_ERROR( tPropL2Check != nullptr,
+                    "IQI_L2_Error_Analytic::compute_QI - IQI %s: neither an L2Check property nor a field is set.",
+                    mName.c_str() );
+
             tJumpNorm = norm( tFI->val() - tPropL2Check->val() );
         }
 
         // evaluate the QI
-        aQI = tJumpNorm * tJumpNorm;
+        aQI = { { tJumpNorm * tJumpNorm } };
     }
 
     //------------------------------------------------------------------------------
@@ -73,23 +79,11 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
-        // check that mQuantityDofType is set
-        MORIS_ERROR( mQuantityDofType.size() > 0,
-                "IQI_L2_Error_Analytic::compute_QI - mQuantityDofType not set." );
-
-        // get field interpolator
-        Field_Interpolator* tFI =
-                mLeaderFIManager->get_field_interpolators_for_type( mQuantityDofType( 0 ) );
-
-        // get analytical solution property
-        std::shared_ptr< Property >& tPropL2Check =
-                mLeaderProp( static_cast< uint >( IQI_Property_Type::L2_CHECK ) );
-
-        // compute jump
-        real tJumpNorm = norm( tFI->val() - tPropL2Check->val() );
-
         // evaluate the QI
-        mSet->get_QI()( tQIIndex ) += aWStar * ( tJumpNorm * tJumpNorm );
+        Matrix< DDRMat > tQI;
+        this->compute_QI( tQI );
+
+        mSet->get_QI()( tQIIndex ) += aWStar * tQI( 0 );
     }
 
     //------------------------------------------------------------------------------

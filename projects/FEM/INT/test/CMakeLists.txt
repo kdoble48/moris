@@ -145,6 +145,7 @@ set(TEST_SOURCES
     UT_FEM_IQI_Power_Dissipation.cpp
     UT_FEM_IQI_Power_Dissipation_Bulk.cpp
     UT_FEM_IQI_Max_Damage.cpp
+    UT_FEM_IQI_Formulas.cpp
     UT_FEM_Geometric_Sensitivities_Struc_Linear.cpp
   
     UT_FEM_Input.cpp
