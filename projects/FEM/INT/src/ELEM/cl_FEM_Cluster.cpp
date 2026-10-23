@@ -1627,6 +1627,12 @@ namespace moris::fem
             return;
         }
 
+        // no volume error accepted: keep every IG cell (also avoids drops caused by round-off in the volume sum)
+        if ( mVolumeError <= 0.0 )
+        {
+            return;
+        }
+
         // get drop tolerance
         real const tCellDropTolerance = this->compute_volume_drop_threshold( tRelativeCellVolume, mVolumeError );
 
