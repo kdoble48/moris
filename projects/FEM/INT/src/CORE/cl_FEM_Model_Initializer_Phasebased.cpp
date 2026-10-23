@@ -312,6 +312,44 @@ namespace moris::fem
     
     //----------------------------------------------------------------
 
+    void Model_Initializer_Phasebased::create_follower_side_models()
+    {
+        // MB-047: a property named on both sides of an IWG, IQI or SP, or a phase's MM or CM used on both sides (a pair
+        // of the same phase), used to be one shared object. Its field interpolator manager is set for the leader and then
+        // overwritten by the follower's, and its cached values are reused for the other side. Build a second, identical
+        // set (properties, and the MMs and CMs of every phase) and hand it to the follower side only.
+        std::swap( mProperties, mFollowerProperties );
+        std::swap( mPhaseInfo, mFollowerPhaseInfo );
+
+        this->create_phases();
+        this->create_properties();
+        this->create_material_models();
+        this->create_constitutive_models();
+
+        std::swap( mProperties, mFollowerProperties );
+        std::swap( mPhaseInfo, mFollowerPhaseInfo );
+    }
+
+    //----------------------------------------------------------------
+
+    std::shared_ptr< Property > const &Model_Initializer_Phasebased::get_property(
+            uint                 aIndex,
+            mtk::Leader_Follower aLeaderFollowerType ) const
+    {
+        return aLeaderFollowerType == mtk::Leader_Follower::FOLLOWER ? mFollowerProperties( aIndex ) : mProperties( aIndex );
+    }
+
+    //----------------------------------------------------------------
+
+    fem::Phase_User_Info &Model_Initializer_Phasebased::get_phase_info(
+            uint                 aPhaseIndex,
+            mtk::Leader_Follower aLeaderFollowerType )
+    {
+        return aLeaderFollowerType == mtk::Leader_Follower::FOLLOWER ? mFollowerPhaseInfo( aPhaseIndex ) : mPhaseInfo( aPhaseIndex );
+    }
+
+    //----------------------------------------------------------------
+
     void Model_Initializer_Phasebased::create_stabilization_parameters()
     {
         // create a stabilization parameter factory
@@ -431,7 +469,7 @@ namespace moris::fem
 
                     // set property for CM
                     mStabilizationParameters( iSP )->set_property(
-                            mProperties( tPropertyIndex ),
+                            this->get_property( tPropertyIndex, tIsLeader ),
                             tPropertyNamesPair( iProp )( 1 ),
                             tIsLeader );
                 }
@@ -450,12 +488,13 @@ namespace moris::fem
 
                     // get CM from phase
                     std::shared_ptr< fem::Constitutive_Model > tCM =
-                            mPhaseInfo( mPhaseMap[ tPhaseName ] ).get_CM_by_name( tCMName );
+                            this->get_phase_info( mPhaseMap[ tPhaseName ], tIsLeader ).get_CM_by_name( tCMName );
 
                     // set CM for SP
                     mStabilizationParameters( iSP )->set_constitutive_model(
                             tCM,
-                            tCMNamesPair( iCM )( 1 ) );
+                            tCMNamesPair( iCM )( 1 ),
+                            tIsLeader );
                 }
 
                 // get the cluster measures specifications
@@ -656,7 +695,7 @@ namespace moris::fem
 
                     // set property for IWG
                     mIWGs( iIWG )->set_property(
-                            mProperties( tPropertyIndex ),
+                            this->get_property( tPropertyIndex, tIsLeader ),
                             tPropertyNamesPair( iProp )( 1 ),
                             tIsLeader );
                 }
@@ -676,7 +715,7 @@ namespace moris::fem
 
                     // get MM from phase
                     std::shared_ptr< fem::Material_Model > tMM =
-                            mPhaseInfo( tPhaseIndex ).get_MM_by_name( tMMName );
+                            this->get_phase_info( tPhaseIndex, tIsLeader ).get_MM_by_name( tMMName );
 
                     // set CM for IWG
                     mIWGs( iIWG )->set_material_model(
@@ -699,7 +738,7 @@ namespace moris::fem
 
                     // get CM from phase
                     std::shared_ptr< fem::Constitutive_Model > tCM =
-                            mPhaseInfo( tPhaseIndex ).get_CM_by_name( tCMName );
+                            this->get_phase_info( tPhaseIndex, tIsLeader ).get_CM_by_name( tCMName );
 
                     // set CM for IWG
                     mIWGs( iIWG )->set_constitutive_model(
@@ -945,7 +984,7 @@ namespace moris::fem
 
                     // set property for IWG
                     mIQIs( iIQI )->set_property(
-                            mProperties( tPropertyIndex ),
+                            this->get_property( tPropertyIndex, tIsLeader ),
                             tPropertyNamesPair( iProp )( 1 ),
                             tIsLeader );
                 }
@@ -963,7 +1002,7 @@ namespace moris::fem
 
                     // get CM from phase
                     std::shared_ptr< fem::Constitutive_Model > tCM =
-                            mPhaseInfo( tPhaseIndex ).get_CM_by_name( tCMName );
+                            this->get_phase_info( tPhaseIndex, tIsLeader ).get_CM_by_name( tCMName );
 
                     // set CM for IQI
                     mIQIs( iIQI )->set_constitutive_model(

@@ -48,7 +48,7 @@ namespace moris::fem
         // evaluate traction difference
         const Matrix< DDRMat >
                 tTractionJump =
-                        tCMLeader->traction( mNormal ) - tCMFollower->traction( -1.0 * mNormal );
+                        tCMLeader->traction( mNormal ) - tCMFollower->traction( mNormal );
 
         // based on the IQI index select the norm or the individual component
         if ( mIQITypeIndex == -1 )
@@ -86,7 +86,7 @@ namespace moris::fem
         // evaluate traction difference
         const Matrix< DDRMat >
                 tTractionJump =
-                        tCMLeader->traction( mNormal ) - tCMFollower->traction( -1.0 * mNormal );
+                        tCMLeader->traction( mNormal ) - tCMFollower->traction( mNormal );
 
         // initialize the output matrix
         Matrix< DDRMat > tMat;

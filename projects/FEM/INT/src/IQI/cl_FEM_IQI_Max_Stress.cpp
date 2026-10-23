@@ -54,7 +54,7 @@ namespace moris::fem
             MORIS_ERROR( mIQITypeIndex != -1,
                     "IQI_Max_Stress::compute_QI - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
 
-            MORIS_ERROR( mIQITypeIndex > 2,
+            MORIS_ERROR( mIQITypeIndex >= 0 && mIQITypeIndex <= 2,
                     "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
         }
 
@@ -119,7 +119,7 @@ namespace moris::fem
             MORIS_ERROR( mIQITypeIndex != -1,
                     "IQI_Max_Stress::compute_QI - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
 
-            MORIS_ERROR( mIQITypeIndex > 2,
+            MORIS_ERROR( mIQITypeIndex >= 0 && mIQITypeIndex <= 2,
                     "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
         }
 
@@ -197,12 +197,17 @@ namespace moris::fem
         // get stress vector
         Matrix< DDRMat > tStressVector = this->get_stress_vector();
 
+        // Standardized stress vector s = ( s_xx, s_yy, s_zz, s_yz, s_xz, s_xy ) (see get_stress_vector).
+        // 2D: the in-plane principal stresses are
+        //     sigma_1,2 = ( s_xx + s_yy ) / 2 +- sqrt( ( ( s_xx - s_yy ) / 2 )^2 + s_xy^2 )
+        // (in-plane shear s_xy is entry 5 of the standardized vector, entry 2 is s_zz)
+
         // initialize stress value
         real tStressValue = ( tStressVector( 0 ) + tStressVector( 1 ) ) / 2.0;
 
         // get max shear stress
         real tMaxShearStress = std::sqrt( std::pow( ( tStressVector( 0 ) - tStressVector( 1 ) ) / 2.0, 2.0 ) +    //
-                                          std::pow( tStressVector( 2 ), 2.0 ) );
+                                          std::pow( tStressVector( 5 ), 2.0 ) );
 
         // switch between the 2D case and the 3D case
         // for 2D
@@ -227,6 +232,15 @@ namespace moris::fem
         // for 3D
         else
         {
+            // 3D: the principal stresses are the roots of det( sigma - lambda I ) = -lambda^3 + I1 lambda^2 - I2 lambda + I3 = 0,
+            // with the stress invariants
+            //     I1 = s_xx + s_yy + s_zz                                                          (trace)
+            //     I2 = s_xx s_yy + s_yy s_zz + s_zz s_xx - s_yz^2 - s_xz^2 - s_xy^2               (sum of principal minors)
+            //     I3 = s_xx s_yy s_zz + 2 s_yz s_xz s_xy - s_xx s_yz^2 - s_yy s_xz^2 - s_zz s_xy^2  (det sigma)
+            // solved in closed form (trigonometric solution of the cubic):
+            //     Q = ( I1^2 - 3 I2 ) / 9,   R = ( 2 I1^3 - 9 I1 I2 + 27 I3 ) / 54,   theta = acos( R / Q^(3/2) )
+            //     lambda_k = 2 sqrt( Q ) cos( ( theta + 2 pi k ) / 3 ) + I1 / 3,   k = 0, 1, 2
+
             // compute invariants
             real tI1 = tStressVector( 0 ) + tStressVector( 1 ) + tStressVector( 2 );
             real tI2 = tStressVector( 0 ) * tStressVector( 1 ) +    //
@@ -238,13 +252,15 @@ namespace moris::fem
             real tI3 = tStressVector( 0 ) * tStressVector( 1 ) * tStressVector( 2 ) -    //
                        tStressVector( 0 ) * std::pow( tStressVector( 3 ), 2.0 ) -        //
                        tStressVector( 1 ) * std::pow( tStressVector( 4 ), 2.0 ) -        //
-                       tStressVector( 3 ) * std::pow( tStressVector( 5 ), 2.0 ) +        //
+                       tStressVector( 2 ) * std::pow( tStressVector( 5 ), 2.0 ) +        //
                        2.0 * tStressVector( 3 ) * tStressVector( 4 ) * tStressVector( 5 );
 
             // help values
             real tQ = ( 1. / 9. ) * ( std::pow( tI1, 2.0 ) - 3.0 * tI2 );
             real tR = ( 1. / 54. ) * ( 2.0 * std::pow( tI1, 3.0 ) - 9.0 * tI1 * tI2 + 27.0 * tI3 );
-            real tT = std::acos( tR / std::sqrt( std::pow( tQ, 3.0 ) ) );
+            // Q = 0 is a hydrostatic state (all principal values I1/3); round-off can push Q below 0 or |R|/Q^1.5 above 1
+            tQ      = std::max( tQ, 0.0 );
+            real tT = tQ > 0.0 ? std::acos( std::max( -1.0, std::min( 1.0, tR / std::sqrt( std::pow( tQ, 3.0 ) ) ) ) ) : 0.0;
 
             // compute principal values
             real tE1 = 2.0 * std::sqrt( tQ ) * std::cos( ( tT ) / 3.0 ) + tI1 / 3.0;
