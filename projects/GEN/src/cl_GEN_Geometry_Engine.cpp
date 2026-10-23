@@ -78,6 +78,12 @@ namespace moris::gen
         MORIS_ERROR( mGeometries.size() <= MAX_GEOMETRIES,
                 "Number of geometries exceeds MAX_GEOMETRIES, please change this in GEN_Data_Types.hpp" );
 
+        // Tell each geometry its position in the decomposition order
+        for ( uint iGeometryIndex = 0; iGeometryIndex < mGeometries.size(); iGeometryIndex++ )
+        {
+            mGeometries( iGeometryIndex )->set_decomposition_index( iGeometryIndex );
+        }
+
         // Set requested PDVs
         Vector< std::string > tRequestedPDVNames = aParameterLists( 0 )( 0 ).get_vector< std::string >( "PDV_types" );
         Vector< PDV_Type >    tRequestedPDVTypes( tRequestedPDVNames.size() );
@@ -116,6 +122,12 @@ namespace moris::gen
     {
         // Tracer
         Tracer tTracer( "GEN", "Create geometry engine" );
+
+        // Tell each geometry its position in the decomposition order
+        for ( uint iGeometryIndex = 0; iGeometryIndex < mGeometries.size(); iGeometryIndex++ )
+        {
+            mGeometries( iGeometryIndex )->set_decomposition_index( iGeometryIndex );
+        }
 
         // Create integration mesh
         mtk::Integration_Mesh* tIntegrationMesh = create_integration_mesh_from_interpolation_mesh(
