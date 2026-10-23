@@ -92,16 +92,13 @@ namespace moris::fem
         Field_Interpolator* tFI =
                 mLeaderFIManager->get_field_interpolators_for_type( mQuantityDofType( 0 ) );
 
-        // project level set field
-        real tVal = std::exp( -2.0 * mPhiGradient * mLevelSetSign * tFI->val()( 0 ) / mPhiBound );
-
-        // check for nan, infinity
-        MORIS_ASSERT( std::isfinite( tVal ),
-                "IQI_Heat_Method_Penalty::compute_QI - project level set field value is NAN or INF, exiting!" );
+        // project level set field: phi tilde = B tanh( y ), y = g s phi / B; the same as
+        // ( 2 / ( 1 + exp( -2 y ) ) - 1 ) B, which overflows to inf / inf = NaN for y < -354
+        real tTanh = std::tanh( mPhiGradient * mLevelSetSign * tFI->val()( 0 ) / mPhiBound );
 
         // Compute phi tilde
-        moris::real      tPhiTilde   = ( 2.0 / ( 1.0 + tVal ) - 1.0 ) * mPhiBound;
-        Matrix< DDRMat > tPhiTildeDx = ( 4.0 * mPhiGradient * tVal ) / std::pow( 1.0 + tVal, 2 ) * mLevelSetSign * tFI->gradx( 1 );
+        moris::real      tPhiTilde   = tTanh * mPhiBound;
+        Matrix< DDRMat > tPhiTildeDx = mPhiGradient * ( 1.0 - tTanh * tTanh ) * mLevelSetSign * tFI->gradx( 1 );
 
         // Compute alpha
         moris::real tAlpha = std::exp( -mPhiGamma * std::pow( tPhiTilde / mPhiBound, 2 ) );

@@ -27,6 +27,11 @@ namespace moris::fem
     /**
      * From Dilgen et al. (2018)
      * Topology optimization of turbulent flows
+     *
+     * Q = select * ( 2 mu eps : eps + rho |v|^2 ), with eps : eps evaluated with the factor 2 on the
+     * tensor shear components of the fluid CM strain. The rho |v|^2 term is not part of the viscous
+     * dissipation (and is not the Brinkman term alpha |v|^2 of Dilgen et al.); it is kept for the
+     * existing decks that use this IQI as an objective.
      */
     class IQI_Power_Dissipation_Bulk : public IQI
     {
@@ -43,6 +48,14 @@ namespace moris::fem
             FLUID,
             MAX_ENUM
         };
+
+        //------------------------------------------------------------------------------
+        /**
+         * Voigt weight for sigma : epsilon with the tensor shear strain of the fluid CM:
+         * 1 on the normal rows, 2 on the shear rows
+         * @param[ in ] aSpaceDim space dimension
+         */
+        static Matrix< DDRMat > shear_weight( uint aSpaceDim );
 
       public:
         //------------------------------------------------------------------------------

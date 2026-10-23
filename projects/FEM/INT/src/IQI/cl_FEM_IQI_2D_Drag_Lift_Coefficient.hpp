@@ -23,6 +23,12 @@ namespace moris::fem
 {
     //------------------------------------------------------------------------------
 
+    /**
+     * Drag (DRAG_COEFF) and lift (LIFT_COEFF) coefficient of the force the fluid exerts on a body,
+     * C = F_i / q, F = - int sigma n, with n the outward normal of the fluid (the leader side) and
+     * q = RefPressure, or 1/2 rho U^2 L from RefDensity, RefVelocity (the mean inflow velocity in the
+     * standard benchmarks) and LengthScale. A body in a stream in +x has C_D > 0.
+     */
     class IQI_Drag_Lift_Coefficient : public IQI
     {
         //------------------------------------------------------------------------------

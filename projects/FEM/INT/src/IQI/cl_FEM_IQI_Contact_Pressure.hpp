@@ -21,6 +21,14 @@ namespace moris::fem
 {
     //------------------------------------------------------------------------------
 
+    /**
+     * Normal contact pressure on a facet, compressive negative:
+     * - small-strain (linear) CM: N . sigma N with the facet normal N, for both types;
+     * - nonlinear CM, CONTACT_PRESSURE_REFERENCE: nominal pressure N . P N (first Piola-Kirchhoff,
+     *   undeformed normal N);
+     * - nonlinear CM, CONTACT_PRESSURE_CURRENT: true pressure n . sigma n (Cauchy, deformed normal n).
+     * Without a facet normal (requested on a bulk set) the value is 0.
+     */
     class IQI_Contact_Pressure : public IQI
     {
         bool mInReferenceConfiguration = false;

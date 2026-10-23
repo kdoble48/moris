@@ -61,7 +61,7 @@ namespace moris::fem
             // get the density property value
             std::shared_ptr< fem::Property > tPropRefDensity = mLeaderProp( static_cast< uint >( Property_Type::REF_DENSITY ) );
 
-            // get the maximum velocity property value
+            // get the reference velocity property value (the mean inflow velocity in the standard benchmarks)
             std::shared_ptr< fem::Property > tPropRefVelocity = mLeaderProp( static_cast< uint >( Property_Type::REF_VELOCITY ) );
 
             // get the diameter property value
@@ -84,14 +84,15 @@ namespace moris::fem
         const std::shared_ptr< Constitutive_Model > &tFluidCM =
                 mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::FLUID ) );
 
-        // compute QI
+        // compute QI: the leader is the fluid and mNormal its outward normal, so sigma n is the traction of the body
+        // on the fluid; the force on the body is its negative
         if ( mBeta == 1 )    // drag coefficient
         {
-            aQI = { { tFluidCM->traction( mNormal )( 0 ) / tRefPressure } };
+            aQI = { { -tFluidCM->traction( mNormal )( 0 ) / tRefPressure } };
         }
         else if ( mBeta == -1 )    // lift coefficient
         {
-            aQI = { { tFluidCM->traction( mNormal )( 1 ) / tRefPressure } };
+            aQI = { { -tFluidCM->traction( mNormal )( 1 ) / tRefPressure } };
         }
         else
         {
@@ -120,7 +121,7 @@ namespace moris::fem
             // get the density property value
             std::shared_ptr< fem::Property > tPropRefDensity = mLeaderProp( static_cast< uint >( Property_Type::REF_DENSITY ) );
 
-            // get the maximum velocity property value
+            // get the reference velocity property value (the mean inflow velocity in the standard benchmarks)
             std::shared_ptr< fem::Property > tPropRefVelocity = mLeaderProp( static_cast< uint >( Property_Type::REF_VELOCITY ) );
 
             // get the diameter property value
@@ -146,13 +147,14 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
+        // force on the body = - int sigma n, with mNormal the fluid's outward normal
         if ( mBeta == 1 )    // new drag coefficient
         {
-            mSet->get_QI()( tQIIndex ) += aWStar * ( tFluidCM->traction( mNormal )( 0 ) / tRefPressure );
+            mSet->get_QI()( tQIIndex ) += aWStar * ( -tFluidCM->traction( mNormal )( 0 ) / tRefPressure );
         }
         else if ( mBeta == -1 )    // new lift coefficient
         {
-            mSet->get_QI()( tQIIndex ) += aWStar * ( tFluidCM->traction( mNormal )( 1 ) / tRefPressure );
+            mSet->get_QI()( tQIIndex ) += aWStar * ( -tFluidCM->traction( mNormal )( 1 ) / tRefPressure );
         }
         else
         {

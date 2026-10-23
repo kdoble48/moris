@@ -227,10 +227,10 @@ check_results(
     // Check constraint values
     Vector< Matrix< DDRMat > > tReferenceConstraints;
 
-    tReferenceConstraints.push_back( { { 1.158612227050382e+01 },
+    tReferenceConstraints.push_back( { { 1.181240878267838e+01 },    // MB-056: bulk power dissipation with the full shear term
             { 2.120790687504068e+01 },
             { 1.023252485864117e+02 } } );
-    tReferenceConstraints.push_back( { { 1.158612227050381e+01 },
+    tReferenceConstraints.push_back( { { 1.181240878267838e+01 },    // MB-056: bulk power dissipation with the full shear term
             { 2.120790687504071e+01 },
             { 1.023252485864111e+02 } } );
 
