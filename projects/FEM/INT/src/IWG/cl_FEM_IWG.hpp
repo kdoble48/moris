@@ -938,6 +938,19 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * IWG specific: the property that scales the whole residual contribution (the thickness), or nullptr.
+         * If it has space derivative functions, compute_dRdp_geometry_analytical adds its spatial variation,
+         * d/dx_k ( t R~ ) = t dR~/dx_k + R ( dt/dx_k ) / t; the supports hook must then ensure t != 0
+         * (see has_known_spatial_variation_nonzero).
+         */
+        virtual std::shared_ptr< Property >
+        get_geometric_sensitivity_thickness_property()
+        {
+            return nullptr;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
          * IWG specific: derivatives of the residual contribution at the evaluation point, at fixed weight aWStar,
          * wrt the location x_k of the evaluation point (adRdx( k )) and, for side sets, wrt the normal component
          * n_m (adRdn( m ), may be left empty if the residual does not depend on the normal). Each entry is a column

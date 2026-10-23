@@ -11,6 +11,9 @@
  * (IWG::compute_dRdp_FD_geometry, IQI::compute_dQIdp_FD_geometry) on a cut configuration:
  * an IG simplex (bulk) or an IG facet (side set) inside a rectangular IP element, in 2D and 3D,
  * for linear and quadratic Lagrange interpolation.
+ *
+ * Spatially varying properties (MB-062, IQI audit B-5): with space derivative functions the analytical path includes
+ * their spatial variation and must match FD; without, the IWG/IQI must report no analytical support (FD fallback).
  */
 
 #include <string>
@@ -74,6 +77,65 @@ namespace
             Field_Interpolator_Manager* aFIManager )
     {
         aPropMatrix = aParameters( 0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    // linear variation in space of the varying properties: P(x) = P0 + sum_i slope_i x_i, slopes per entry
+    real
+    geo_sens_slope(
+            uint aEntry,
+            uint aDirection )
+    {
+        return 0.05 * ( 1.0 + aEntry ) * ( 1.0 + 0.7 * aDirection ) * ( ( aEntry + aDirection ) % 2 == 0 ? 1.0 : -1.0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    // spatially varying value: P(x) = P0 * ( 1 + sum_i slope_i x_i ) + 0.02 x_0^2, entry-wise (smooth, nonlinear)
+    void
+    tVaryingValFunc_GeoSens(
+            Matrix< DDRMat >&           aPropMatrix,
+            Vector< Matrix< DDRMat > >& aParameters,
+            Field_Interpolator_Manager* aFIManager )
+    {
+        const Matrix< DDRMat >& tX = aFIManager->get_IG_geometry_interpolator()->valx();
+
+        aPropMatrix = aParameters( 0 );
+        for ( uint iEntry = 0; iEntry < aPropMatrix.numel(); iEntry++ )
+        {
+            real tFactor = 1.0;
+            for ( uint iDir = 0; iDir < tX.numel(); iDir++ )
+            {
+                tFactor += geo_sens_slope( iEntry, iDir ) * tX( iDir );
+            }
+            aPropMatrix( iEntry ) = aParameters( 0 )( iEntry ) * tFactor + 0.02 * tX( 0 ) * tX( 0 );
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    // its space derivative, layout of Field_Interpolator::gradx: ( number of space dimensions x number of entries )
+    void
+    tVaryingDerFunc_GeoSens(
+            Matrix< DDRMat >&           aPropMatrix,
+            Vector< Matrix< DDRMat > >& aParameters,
+            Field_Interpolator_Manager* aFIManager )
+    {
+        const Matrix< DDRMat >& tX = aFIManager->get_IG_geometry_interpolator()->valx();
+
+        const uint tSpaceDim   = tX.numel();
+        const uint tNumEntries = aParameters( 0 ).numel();
+
+        aPropMatrix.set_size( tSpaceDim, tNumEntries, 0.0 );
+        for ( uint iEntry = 0; iEntry < tNumEntries; iEntry++ )
+        {
+            for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+            {
+                aPropMatrix( iDir, iEntry ) = aParameters( 0 )( iEntry ) * geo_sens_slope( iEntry, iDir );
+            }
+            aPropMatrix( 0, iEntry ) += 0.04 * tX( 0 );
+        }
     }
 
     //------------------------------------------------------------------------------
@@ -380,18 +442,52 @@ namespace
     //------------------------------------------------------------------------------
 
     // elastic CM, plane stress in 2D
+    // how a test property varies in space
+    enum class Geo_Sens_Variation
+    {
+        CONSTANT,            // parameter-only value function
+        VARYING_WITH_DER,    // spatially varying, with space derivative function
+        VARYING_NO_DER       // spatially varying, without space derivative function
+    };
+
+    //------------------------------------------------------------------------------
+
+    // property with the given value (at the origin) and spatial variation
+    std::shared_ptr< Property >
+    create_property(
+            const Matrix< DDRMat >& aValue,
+            Geo_Sens_Variation      aVariation )
+    {
+        std::shared_ptr< Property > tProp = std::make_shared< Property >();
+        tProp->set_parameters( { aValue } );
+
+        if ( aVariation == Geo_Sens_Variation::CONSTANT )
+        {
+            tProp->set_val_function( tConstValFunc_GeoSens );
+        }
+        else
+        {
+            tProp->set_val_function( tVaryingValFunc_GeoSens );
+        }
+
+        if ( aVariation == Geo_Sens_Variation::VARYING_WITH_DER )
+        {
+            tProp->set_space_derivative_functions( { tVaryingDerFunc_GeoSens } );
+        }
+
+        return tProp;
+    }
+
+    //------------------------------------------------------------------------------
+
     std::shared_ptr< Constitutive_Model >
     create_elastic_CM(
-            uint       aSpaceDim,
-            Model_Type aModelType = Model_Type::PLANE_STRESS )
+            uint               aSpaceDim,
+            Model_Type         aModelType = Model_Type::PLANE_STRESS,
+            Geo_Sens_Variation aVariation = Geo_Sens_Variation::CONSTANT )
     {
-        std::shared_ptr< Property > tPropEMod = std::make_shared< Property >();
-        tPropEMod->set_parameters( { { { 2.0 } } } );
-        tPropEMod->set_val_function( tConstValFunc_GeoSens );
-
-        std::shared_ptr< Property > tPropNu = std::make_shared< Property >();
-        tPropNu->set_parameters( { { { 0.3 } } } );
-        tPropNu->set_val_function( tConstValFunc_GeoSens );
+        std::shared_ptr< Property > tPropEMod = create_property( { { 2.0 } }, aVariation );
+        std::shared_ptr< Property > tPropNu   = create_property( { { 0.3 } }, aVariation );
 
         CM_Factory tCMFactory;
 
@@ -430,7 +526,8 @@ namespace
             const std::shared_ptr< IWG >& aIWG,
             uint                          aSpaceDim,
             uint                          aOrder,
-            bool                          aIsSide )
+            bool                          aIsSide,
+            bool                          aExpectAnalytical = true )
     {
         Geo_Sens_Setup tSetup( aSpaceDim, aOrder, aIsSide );
 
@@ -465,9 +562,6 @@ namespace
         // the cluster measure contribution is shared by the FD and the analytical path
         aIWG->mActiveCMEAFlag = false;
 
-        // the IWG must report analytical geometric sensitivities
-        REQUIRE( aIWG->has_analytical_dRdp_geometry() );
-
         Vector< Matrix< IndexMat > > tVertexIndices( 0 );
 
         real tMaxError = 0.0;
@@ -493,14 +587,19 @@ namespace
                     tVertexIndices );
             Matrix< DDRMat > tdRdpFD = tSet->mdRdp( 1 );
 
-            // analytical
+            // the IWG must report analytical geometric sensitivities, or the FD fallback
+            aIWG->reset_eval_flags();
+            REQUIRE( aIWG->has_analytical_dRdp_geometry() == aExpectAnalytical );
+
+            // analytical, or the FD fallback through the dispatcher
             aIWG->reset_eval_flags();
             tSet->mdRdp( 1 ).fill( 0.0 );
-            aIWG->compute_dRdp_geometry_analytical(
+            aIWG->compute_dRdp_geometry(
                     tWStar,
                     tGeoSensPerturbation,
                     FDScheme_Type::POINT_3_CENTRAL,
-                    tSetup.mGeoLocalAssembly );
+                    tSetup.mGeoLocalAssembly,
+                    tVertexIndices );
             Matrix< DDRMat > tdRdp = tSet->mdRdp( 1 );
 
             REQUIRE( norm( tdRdpFD ) > 0.0 );
@@ -527,7 +626,8 @@ namespace
     check_IQI_geometric_sensitivities(
             const std::shared_ptr< IQI >& aIQI,
             uint                          aSpaceDim,
-            uint                          aOrder )
+            uint                          aOrder,
+            bool                          aExpectAnalytical = true )
     {
         Geo_Sens_Setup tSetup( aSpaceDim, aOrder, false );
 
@@ -568,9 +668,6 @@ namespace
         // the cluster measure contribution is shared by the FD and the analytical path
         aIQI->mActiveCMEAFlag = false;
 
-        // the IQI must report analytical geometric sensitivities
-        REQUIRE( aIQI->has_analytical_dQIdp_geometry() );
-
         Vector< Matrix< IndexMat > > tVertexIndices( 0 );
 
         real tMaxError = 0.0;
@@ -589,14 +686,19 @@ namespace
                     tVertexIndices );
             Matrix< DDRMat > tdQIdpFD = tSet->mdQIdp( 1 )( 0 );
 
-            // analytical
+            // the IQI must report analytical geometric sensitivities, or the FD fallback
+            aIQI->reset_eval_flags();
+            REQUIRE( aIQI->has_analytical_dQIdp_geometry() == aExpectAnalytical );
+
+            // analytical, or the FD fallback through the dispatcher
             aIQI->reset_eval_flags();
             tSet->mdQIdp( 1 )( 0 ).fill( 0.0 );
-            aIQI->compute_dQIdp_geometry_analytical(
+            aIQI->compute_dQIdp_geometry(
                     tWStar,
                     tGeoSensPerturbation,
                     FDScheme_Type::POINT_3_CENTRAL,
-                    tSetup.mGeoLocalAssembly );
+                    tSetup.mGeoLocalAssembly,
+                    tVertexIndices );
             Matrix< DDRMat > tdQIdp = tSet->mdQIdp( 1 )( 0 );
 
             REQUIRE( norm( tdQIdpFD ) > 0.0 );
@@ -862,6 +964,214 @@ TEST_CASE( "Analytic_Geo_Sens_IQI_Max_Stress", "[fem],[Analytic_Geo_Sens],[Analy
                       << " max rel. error vs FD " << tError << '\n';
 
             CHECK( tError < tGeoSensTolerance );
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+// spatially varying properties (MB-062, IQI audit B-5)
+
+TEST_CASE( "Analytic_Geo_Sens_Varying_IWG_Struc_Linear_Bulk", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_Varying]" )
+{
+    // E(x), nu(x), bedding(x), load(x), thickness(x): with space derivatives (analytical), without one (FD fallback)
+    Vector< Geo_Sens_Variation > tVariations = { Geo_Sens_Variation::VARYING_WITH_DER, Geo_Sens_Variation::VARYING_NO_DER };
+
+    for ( Geo_Sens_Variation tVariation : tVariations )
+    {
+        const bool tExpectAnalytical = tVariation == Geo_Sens_Variation::VARYING_WITH_DER;
+
+        for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+        {
+            Vector< Model_Type > tModelTypes = { Model_Type::PLANE_STRESS };
+            if ( iSpaceDim == 2 )
+            {
+                tModelTypes.push_back( Model_Type::PLANE_STRAIN );
+            }
+
+            for ( Model_Type tModelType : tModelTypes )
+            {
+                for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+                {
+                    IWG_Factory tIWGFactory;
+
+                    std::shared_ptr< IWG > tIWG = tIWGFactory.create_IWG( IWG_Type::STRUC_LINEAR_BULK );
+                    tIWG->set_residual_dof_type( tGeoSensDispDofTypes );
+                    tIWG->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+                    tIWG->set_constitutive_model( create_elastic_CM( iSpaceDim, tModelType, tVariation ), "ElastLinIso" );
+
+                    // the IWG properties vary in space with a derivative; only the CM properties switch
+                    tIWG->set_property( create_property( { { 0.7 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Bedding" );
+                    tIWG->set_property( create_property( Matrix< DDRMat >( iSpaceDim, 1, 0.4 ), Geo_Sens_Variation::VARYING_WITH_DER ), "Load" );
+                    tIWG->set_property( create_property( { { 1.2 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Thickness" );
+
+                    real tError = check_IWG_geometric_sensitivities( tIWG, iSpaceDim, iOrder, false, tExpectAnalytical );
+
+                    std::cout << "Analytic_Geo_Sens Varying IWG_Struc_Linear_Bulk analytical " << tExpectAnalytical
+                              << " dim " << iSpaceDim << " model " << static_cast< uint >( tModelType ) << " order " << iOrder
+                              << " max rel. error vs FD " << tError << '\n';
+
+                    CHECK( tError < tGeoSensTolerance );
+                }
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+TEST_CASE( "Analytic_Geo_Sens_Varying_IWG_Struc_Linear_Neumann", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_Varying]" )
+{
+    // traction(x), pressure(x), thickness(x)
+    Vector< Geo_Sens_Variation > tVariations = { Geo_Sens_Variation::VARYING_WITH_DER, Geo_Sens_Variation::VARYING_NO_DER };
+
+    for ( Geo_Sens_Variation tVariation : tVariations )
+    {
+        const bool tExpectAnalytical = tVariation == Geo_Sens_Variation::VARYING_WITH_DER;
+
+        for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+        {
+            for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+            {
+                IWG_Factory tIWGFactory;
+
+                std::shared_ptr< IWG > tIWG = tIWGFactory.create_IWG( IWG_Type::STRUC_LINEAR_NEUMANN );
+                tIWG->set_residual_dof_type( tGeoSensDispDofTypes );
+                tIWG->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+
+                Matrix< DDRMat > tTraction( iSpaceDim, 1, 0.3 );
+                tTraction( 0 ) = -0.6;
+                tIWG->set_property( create_property( tTraction, tVariation ), "Traction" );
+                tIWG->set_property( create_property( { { 0.8 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Pressure" );
+                tIWG->set_property( create_property( { { 1.2 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Thickness" );
+
+                real tError = check_IWG_geometric_sensitivities( tIWG, iSpaceDim, iOrder, true, tExpectAnalytical );
+
+                std::cout << "Analytic_Geo_Sens Varying IWG_Struc_Linear_Neumann analytical " << tExpectAnalytical
+                          << " dim " << iSpaceDim << " order " << iOrder << " max rel. error vs FD " << tError << '\n';
+
+                CHECK( tError < tGeoSensTolerance );
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+TEST_CASE( "Analytic_Geo_Sens_Varying_IWG_Struc_Linear_Dirichlet", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_Varying]" )
+{
+    // E(x), nu(x) in the CM and in the Nitsche SP, imposed displacement u_D(x)
+    Vector< Geo_Sens_Variation > tVariations = { Geo_Sens_Variation::VARYING_WITH_DER, Geo_Sens_Variation::VARYING_NO_DER };
+
+    Vector< IWG_Type > tIWGTypes = {
+        IWG_Type::STRUC_LINEAR_DIRICHLET_SYMMETRIC_NITSCHE,
+        IWG_Type::STRUC_LINEAR_DIRICHLET_UNSYMMETRIC_NITSCHE
+    };
+
+    for ( Geo_Sens_Variation tVariation : tVariations )
+    {
+        const bool tExpectAnalytical = tVariation == Geo_Sens_Variation::VARYING_WITH_DER;
+
+        for ( IWG_Type tIWGType : tIWGTypes )
+        {
+            for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+            {
+                for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+                {
+                    std::shared_ptr< Constitutive_Model > tCM = create_elastic_CM( iSpaceDim, Model_Type::PLANE_STRESS, Geo_Sens_Variation::VARYING_WITH_DER );
+
+                    SP_Factory tSPFactory;
+
+                    std::shared_ptr< Stabilization_Parameter > tSPNitsche =
+                            tSPFactory.create_SP( Stabilization_Type::DIRICHLET_NITSCHE );
+                    tSPNitsche->set_parameters( { { { 100.0 } } } );
+                    tSPNitsche->set_property( create_property( { { 2.0 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Material", mtk::Leader_Follower::LEADER );
+
+                    Cluster tCluster;
+                    tSPNitsche->set_cluster( &tCluster );
+
+                    IWG_Factory tIWGFactory;
+
+                    std::shared_ptr< IWG > tIWG = tIWGFactory.create_IWG( tIWGType );
+                    tIWG->set_residual_dof_type( tGeoSensDispDofTypes );
+                    tIWG->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+                    tIWG->set_stabilization_parameter( tSPNitsche, "DirichletNitsche" );
+                    tIWG->set_constitutive_model( tCM, "ElastLinIso" );
+
+                    Matrix< DDRMat > tImposedDisp( iSpaceDim, 1, 0.05 );
+                    tIWG->set_property( create_property( tImposedDisp, tVariation ), "Dirichlet" );
+
+                    real tError = check_IWG_geometric_sensitivities( tIWG, iSpaceDim, iOrder, true, tExpectAnalytical );
+
+                    std::cout << "Analytic_Geo_Sens Varying IWG_Struc_Linear_Dirichlet analytical " << tExpectAnalytical
+                              << " type " << static_cast< uint >( tIWGType ) << " dim " << iSpaceDim << " order " << iOrder
+                              << " max rel. error vs FD " << tError << '\n';
+
+                    CHECK( tError < tGeoSensTolerance );
+                }
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+TEST_CASE( "Analytic_Geo_Sens_Varying_IQI_Volume", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_Varying]" )
+{
+    // density rho(x)
+    Vector< Geo_Sens_Variation > tVariations = { Geo_Sens_Variation::VARYING_WITH_DER, Geo_Sens_Variation::VARYING_NO_DER };
+
+    for ( Geo_Sens_Variation tVariation : tVariations )
+    {
+        const bool tExpectAnalytical = tVariation == Geo_Sens_Variation::VARYING_WITH_DER;
+
+        for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+        {
+            IQI_Factory tIQIFactory;
+
+            std::shared_ptr< IQI > tIQI = tIQIFactory.create_IQI( IQI_Type::VOLUME );
+            tIQI->set_property( create_property( { { 1.3 } }, tVariation ), "Density", mtk::Leader_Follower::LEADER );
+
+            real tError = check_IQI_geometric_sensitivities( tIQI, iSpaceDim, 1, tExpectAnalytical );
+
+            std::cout << "Analytic_Geo_Sens Varying IQI_Volume analytical " << tExpectAnalytical << " dim " << iSpaceDim
+                      << " max rel. error vs FD " << tError << '\n';
+
+            CHECK( tError < tGeoSensTolerance );
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+TEST_CASE( "Analytic_Geo_Sens_Varying_IQI_Strain_Energy", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_Varying]" )
+{
+    // E(x), nu(x), bedding(x), thickness(x)
+    Vector< Geo_Sens_Variation > tVariations = { Geo_Sens_Variation::VARYING_WITH_DER, Geo_Sens_Variation::VARYING_NO_DER };
+
+    for ( Geo_Sens_Variation tVariation : tVariations )
+    {
+        const bool tExpectAnalytical = tVariation == Geo_Sens_Variation::VARYING_WITH_DER;
+
+        for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+        {
+            for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+            {
+                IQI_Factory tIQIFactory;
+
+                std::shared_ptr< IQI > tIQI = tIQIFactory.create_IQI( IQI_Type::STRAIN_ENERGY );
+                tIQI->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+                tIQI->set_constitutive_model( create_elastic_CM( iSpaceDim, Model_Type::PLANE_STRESS, tVariation ), "Elast", mtk::Leader_Follower::LEADER );
+                tIQI->set_property( create_property( { { 0.7 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Bedding", mtk::Leader_Follower::LEADER );
+                tIQI->set_property( create_property( { { 1.2 } }, Geo_Sens_Variation::VARYING_WITH_DER ), "Thickness", mtk::Leader_Follower::LEADER );
+
+                real tError = check_IQI_geometric_sensitivities( tIQI, iSpaceDim, iOrder, tExpectAnalytical );
+
+                std::cout << "Analytic_Geo_Sens Varying IQI_Strain_Energy analytical " << tExpectAnalytical
+                          << " dim " << iSpaceDim << " order " << iOrder << " max rel. error vs FD " << tError << '\n';
+
+                CHECK( tError < tGeoSensTolerance );
+            }
         }
     }
 }

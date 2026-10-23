@@ -11,6 +11,7 @@
 #include "cl_FEM_IQI_Volume.hpp"
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 
 namespace moris::fem
 {
@@ -180,7 +181,8 @@ namespace moris::fem
     bool
     IQI_Volume::supports_analytical_dQIdp_geometry()
     {
-        return true;
+        // the spatial variation of the density must be known (MB-062, IQI audit B-5)
+        return has_known_spatial_variation( mLeaderProp( static_cast< uint >( IQI_Property_Type::DENSITY ) ) );
     }
 
     //------------------------------------------------------------------------------
@@ -191,11 +193,36 @@ namespace moris::fem
             Matrix< DDRMat > &adQIdx,
             Matrix< DDRMat > &adQIdn )
     {
-        // the integrand (density, held fixed in space) does not depend on the evaluation point location
+        // number of space dimensions
         const uint tSpaceDim = mLeaderFIManager->get_IP_geometry_interpolator()->get_number_of_space_dimensions();
 
         adQIdx.set_size( tSpaceDim, 1, 0.0 );
         adQIdn.set_size( 0, 0 );
+
+        // outside the box bounds the QI contribution is zero (box bounds are held fixed in space)
+        if ( !this->is_within_box_bounds() )
+        {
+            return;
+        }
+
+        // get density property
+        const std::shared_ptr< Property > &tPropDensity =
+                mLeaderProp( static_cast< uint >( IQI_Property_Type::DENSITY ) );
+
+        // no density: the integrand is 1
+        if ( tPropDensity == nullptr )
+        {
+            return;
+        }
+
+        // d/dx_k ( rho ) = drho/dx_k (zero for a constant density)
+        Matrix< DDRMat > tdDensitydx;
+        for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
+        {
+            eval_property_space_derivative( tPropDensity, iDir, tdDensitydx );
+
+            adQIdx( iDir ) = aWStar * tdDensitydx( 0 );
+        }
     }
 
     //------------------------------------------------------------------------------

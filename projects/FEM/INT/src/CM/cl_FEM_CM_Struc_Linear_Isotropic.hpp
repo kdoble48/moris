@@ -88,6 +88,31 @@ namespace moris::fem
         real get_e_prime() override;
 
         //--------------------------------------------------------------------------------------------------------------
+        /**
+         * the derivative of the constitutive matrix wrt the spatial coordinates is available if the Young's modulus and
+         * the Poisson ratio are constant or have space derivative functions, and every other CM property is constant
+         */
+        bool has_spatial_constitutive_derivatives() override;
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * evaluate d C / d x_k = C ( dE/dx_k ) / E + ( d C / d nu ) ( dnu/dx_k )
+         * @param[ in ]  aDirection spatial direction k
+         * @param[ out ] adConstdx  d C / d x_k
+         */
+        void eval_dConstdx(
+                uint              aDirection,
+                Matrix< DDRMat >& adConstdx ) override;
+
+        //--------------------------------------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the constitutive matrix wrt the Poisson ratio (full and deviatoric tensors,
+         * plane stress, plane strain and 3D; not axisymmetric)
+         * @param[ out ] adConstdNu d C / d nu
+         */
+        void eval_dConstdNu( Matrix< DDRMat >& adConstdNu );
+
+        //--------------------------------------------------------------------------------------------------------------
 
         Constitutive_Type
         get_constitutive_type() const override

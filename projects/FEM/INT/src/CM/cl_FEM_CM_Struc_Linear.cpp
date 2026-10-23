@@ -604,6 +604,35 @@ namespace moris::fem
 
     //--------------------------------------------------------------------------------------------------------------
 
+    bool
+    CM_Struc_Linear::has_spatial_constitutive_derivatives()
+    {
+        // the dependence of the constitutive matrix on the properties is model specific: require constant properties
+        for ( const std::shared_ptr< Property > &tProperty : mProperties )
+        {
+            if ( !is_spatially_constant( tProperty ) )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    CM_Struc_Linear::eval_dConstdx(
+            uint              aDirection,
+            Matrix< DDRMat > &adConstdx )
+    {
+        // constant properties: the constitutive matrix does not depend on the evaluation point location
+        const Matrix< DDRMat > &tConst = this->constitutive();
+
+        adConstdx.set_size( tConst.n_rows(), tConst.n_cols(), 0.0 );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     void
     CM_Struc_Linear::build_test_strain_from_gradient(
             const Matrix< DDRMat > &adNdx,

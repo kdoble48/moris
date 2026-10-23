@@ -74,6 +74,13 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    uint Intersection_Node::get_interface_decomposition_index() const
+    {
+        return this->get_interface_geometry().get_decomposition_index();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     bool
     Intersection_Node::parent_edge_is_intersected()
     {

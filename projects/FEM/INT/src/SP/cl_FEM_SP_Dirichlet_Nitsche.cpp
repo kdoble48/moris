@@ -11,6 +11,7 @@
 #include "cl_FEM_SP_Dirichlet_Nitsche.hpp"
 #include "cl_FEM_Cluster.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 // LINALG/src
 #include "fn_trans.hpp"
 #include "fn_norm.hpp"
@@ -181,6 +182,37 @@ namespace moris::fem
         else
         {
             mdPPdLeaderDof( tDofIndex ).fill( 0.0 );
+        }
+    }
+
+    //------------------------------------------------------------------------------
+    bool
+    SP_Dirichlet_Nitsche::has_spatial_derivatives()
+    {
+        // the material property may vary in space with a known derivative, the follower side is not used
+        return has_known_spatial_variation( mLeaderProp( static_cast< uint >( SP_Property_Type::MATERIAL ) ) );
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    SP_Dirichlet_Nitsche::eval_dSPdx(
+            uint              aDirection,
+            Matrix< DDRMat >& adSPdx )
+    {
+        // get the material property
+        const std::shared_ptr< Property >& tPropMaterial =
+                mLeaderProp( static_cast< uint >( SP_Property_Type::MATERIAL ) );
+
+        // spatial derivative of the material property
+        Matrix< DDRMat > tdMaterialdx;
+        eval_property_space_derivative( tPropMaterial, aDirection, tdMaterialdx );
+
+        // the SP is linear in the material property: d SP / d x_k = SP ( dE/dx_k ) / E
+        adSPdx.set_size( 1, 1, 0.0 );
+        if ( tdMaterialdx( 0 ) != 0.0 )
+        {
+            adSPdx( 0 ) = this->val()( 0 ) * tdMaterialdx( 0 ) / tPropMaterial->val()( 0 );
         }
     }
 

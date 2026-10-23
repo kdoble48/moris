@@ -428,6 +428,19 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * get the component selected by vectorial_field_index (mIQITypeIndex)
+         * a set index is always used as given; it is never overwritten by a default
+         * @param[ in ] aNumComponents number of components the index selects from
+         * @param[ in ] aDefault       index used when vectorial_field_index is unset (-1);
+         *                             -1 makes an unset index an error
+         * @return the component index, in [ 0, aNumComponents )
+         */
+        uint get_component_index(
+                uint aNumComponents,
+                sint aDefault = 0 ) const;
+
+        //------------------------------------------------------------------------------
+        /**
          * set normal
          * @param[ in ] aNormal normal vector
          */
@@ -839,6 +852,19 @@ namespace moris::fem
         supports_analytical_dQIdp_geometry()
         {
             return false;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * IQI specific: the property that scales the whole QI contribution (the thickness), or nullptr.
+         * If it has space derivative functions, compute_dQIdp_geometry_analytical adds its spatial variation,
+         * d/dx_k ( t Q~ ) = t dQ~/dx_k + Q ( dt/dx_k ) / t; the supports hook must then ensure t != 0
+         * (see has_known_spatial_variation_nonzero).
+         */
+        virtual std::shared_ptr< Property >
+        get_geometric_sensitivity_thickness_property()
+        {
+            return nullptr;
         }
 
         //------------------------------------------------------------------------------

@@ -234,6 +234,30 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
+    uint
+    IQI::get_component_index(
+            uint aNumComponents,
+            sint aDefault ) const
+    {
+        // use the set index, or the default if unset
+        sint tIndex = mIQITypeIndex != -1 ? mIQITypeIndex : aDefault;
+
+        MORIS_ERROR( tIndex != -1,
+                "IQI::get_component_index - IQI %s: vectorial_field_index must be set (%d components).",
+                mName.c_str(),
+                aNumComponents );
+
+        MORIS_ERROR( tIndex >= 0 && tIndex < (sint)aNumComponents,
+                "IQI::get_component_index - IQI %s: vectorial_field_index %d out of range [0,%d).",
+                mName.c_str(),
+                tIndex,
+                aNumComponents );
+
+        return tIndex;
+    }
+
+    //------------------------------------------------------------------------------
+
     void
     IQI::set_reference_value( real aReferenceValue )
     {
@@ -2316,6 +2340,20 @@ namespace moris::fem
             Matrix< DDRMat > tdQIdx;
             Matrix< DDRMat > tdQIdn;
             this->compute_dQIdx_geometry_integrand( aWStar, tdQIdx, tdQIdn );
+
+            // spatial variation of a thickness that scales the whole QI contribution: Q ( dt/dx_k ) / t
+            const std::shared_ptr< Property > tPropThickness = this->get_geometric_sensitivity_thickness_property();
+            if ( tPropThickness != nullptr && tPropThickness->check_space_dependency() )
+            {
+                const real tThickness = tPropThickness->val()( 0 );
+
+                Matrix< DDRMat > tdThicknessdx;
+                for ( uint iDir = 0; iDir < tdQIdx.numel(); iDir++ )
+                {
+                    eval_property_space_derivative( tPropThickness, iDir, tdThicknessdx );
+                    tdQIdx( iDir ) += tQI * ( tdThicknessdx( 0 ) / tThickness );
+                }
+            }
 
             // relative derivative of the integration measure wrt the IG vertex coordinates
             Matrix< DDRMat > tdMeasure;

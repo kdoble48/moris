@@ -99,9 +99,9 @@ namespace moris::xtk
 
             default:
             {
-                std::cout << "Node_Hierarchy_Template_Library::load_2d_template(): \n";
-                std::cout << "WARNING UNDEFINED TEMPLATE ID: " << aTemplateId << '\n'
-                          << std::flush;
+                // an unknown ID means the cut edges of a cell are inconsistent with its vertex labels; the cell would
+                // get no template and corrupt the cell bookkeeping downstream (MB-040)
+                MORIS_ERROR( false, "Node_Hierarchy_Template_Library::load_2d_template() - undefined template ID %d", aTemplateId );
                 break;
             }
         }
@@ -823,9 +823,9 @@ namespace moris::xtk
                 break;
             default:
             {
-                std::cout << "Node_Hierarchy_Template_Library::load_3d_template(): \n"
-                          << std::flush;
-                std::cout << "WARNING UNDEFINED TEMPLATE ID: " << aTemplateId << '\n';
+                // an unknown ID means the cut edges of a cell are inconsistent with its vertex labels; the cell would
+                // get no template and corrupt the cell bookkeeping downstream (MB-040)
+                MORIS_ERROR( false, "Node_Hierarchy_Template_Library::load_3d_template() - undefined template ID %d", aTemplateId );
                 break;
             }
         }

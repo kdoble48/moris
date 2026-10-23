@@ -12,6 +12,8 @@
 
 #include "cl_FEM_Geometry_Interpolator.hpp"
 #include "cl_FEM_Field_Interpolator.hpp"
+#include "cl_FEM_Field_Interpolator_Manager.hpp"
+#include "cl_FEM_Property.hpp"
 
 #include "fn_inv.hpp"
 #include "fn_trans.hpp"
@@ -24,6 +26,146 @@ namespace moris::fem
 
     namespace
     {
+        // size of the translation probe of classify_property_spatial_variation, relative to the IG cell size
+        // (an arbitrary irrational-looking fraction, so that the probe does not hit a period or a symmetry of the function)
+        const real tTranslationProbeFraction = 0.1234567;
+
+        //------------------------------------------------------------------------------
+
+        /**
+         * true if the two matrices have the same size and bitwise equal entries
+         */
+        bool
+        is_identical(
+                const Matrix< DDRMat >& aA,
+                const Matrix< DDRMat >& aB )
+        {
+            if ( aA.n_rows() != aB.n_rows() || aA.n_cols() != aB.n_cols() )
+            {
+                return false;
+            }
+
+            for ( uint iEntry = 0; iEntry < aA.numel(); iEntry++ )
+            {
+                if ( aA( iEntry ) != aB( iEntry ) )
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        //------------------------------------------------------------------------------
+
+        /**
+         * true if the value function of the property returns the same value when the evaluation point is translated by
+         * +/- tTranslationProbeFraction * ( IG cell size ) in each space direction. The IP and IG geometry coefficients are
+         * translated together (the parametric point, the Jacobians and the field interpolators are unchanged) and restored.
+         * A value function can only see the evaluation point through the field interpolator manager, so a function of its
+         * parameters only passes, and a space dependent function fails unless it takes bitwise identical values at all
+         * three points of every direction.
+         */
+        bool
+        is_invariant_under_translation( Property& aProperty )
+        {
+            // get the field interpolator manager and the geometry interpolators
+            Field_Interpolator_Manager* tFIManager = aProperty.get_field_interpolator_manager();
+
+            if ( tFIManager == nullptr )
+            {
+                return false;
+            }
+
+            Geometry_Interpolator* tIGGI = tFIManager->get_IG_geometry_interpolator();
+            Geometry_Interpolator* tIPGI = tFIManager->get_IP_geometry_interpolator();
+
+            if ( tIGGI == nullptr || tIPGI == nullptr )
+            {
+                return false;
+            }
+
+            // reference value at the evaluation point
+            const Matrix< DDRMat > tValue = aProperty.val();
+
+            // unperturbed geometry coefficients ( number of bases x number of space dimensions )
+            const Matrix< DDRMat > tXHatIG = tIGGI->get_space_coeff();
+            const Matrix< DDRMat > tXHatIP = tIPGI->get_space_coeff();
+
+            const uint tSpaceDim = tXHatIG.n_cols();
+
+            if ( tXHatIP.n_cols() != tSpaceDim )
+            {
+                return false;
+            }
+
+            // size of the IG cell: largest extent of its vertex coordinates
+            real tCellSize = 0.0;
+            for ( uint iDim = 0; iDim < tSpaceDim; iDim++ )
+            {
+                real tMin = tXHatIG( 0, iDim );
+                real tMax = tXHatIG( 0, iDim );
+                for ( uint iVertex = 1; iVertex < tXHatIG.n_rows(); iVertex++ )
+                {
+                    tMin = std::min( tMin, tXHatIG( iVertex, iDim ) );
+                    tMax = std::max( tMax, tXHatIG( iVertex, iDim ) );
+                }
+                tCellSize = std::max( tCellSize, tMax - tMin );
+            }
+
+            if ( !( tCellSize > 0.0 ) )
+            {
+                return false;
+            }
+
+            const real tShift = tTranslationProbeFraction * tCellSize;
+
+            // value function and a copy of its parameters (the function takes them by non-const reference)
+            const PropertyFunc&        tValFunction = aProperty.get_val_function();
+            Vector< Matrix< DDRMat > > tParameters  = aProperty.get_parameters();
+
+            bool             tIsInvariant = true;
+            Matrix< DDRMat > tProbeValue;
+
+            for ( uint iDim = 0; iDim < tSpaceDim && tIsInvariant; iDim++ )
+            {
+                for ( real tSign : { -1.0, 1.0 } )
+                {
+                    // translate the IG and IP geometry coefficients
+                    Matrix< DDRMat > tXHatIGShifted = tXHatIG;
+                    Matrix< DDRMat > tXHatIPShifted = tXHatIP;
+
+                    for ( uint iBase = 0; iBase < tXHatIGShifted.n_rows(); iBase++ )
+                    {
+                        tXHatIGShifted( iBase, iDim ) += tSign * tShift;
+                    }
+                    for ( uint iBase = 0; iBase < tXHatIPShifted.n_rows(); iBase++ )
+                    {
+                        tXHatIPShifted( iBase, iDim ) += tSign * tShift;
+                    }
+
+                    tIGGI->set_space_coeff( tXHatIGShifted );
+                    tIPGI->set_space_coeff( tXHatIPShifted );
+
+                    // evaluate the value function at the translated point
+                    tValFunction( tProbeValue, tParameters, tFIManager );
+
+                    if ( !is_identical( tProbeValue, tValue ) )
+                    {
+                        tIsInvariant = false;
+                        break;
+                    }
+                }
+            }
+
+            // restore the geometry coefficients
+            tIGGI->set_space_coeff( tXHatIG );
+            tIPGI->set_space_coeff( tXHatIP );
+
+            return tIsInvariant;
+        }
+
+        //------------------------------------------------------------------------------
+
         /**
          * cross product of rows aRowA and aRowB of the matrices aA and aB (3D), as a column vector
          */
@@ -340,6 +482,129 @@ namespace moris::fem
             }
         }
         return false;
+    }
+
+    //------------------------------------------------------------------------------
+    Property_Spatial_Variation
+    classify_property_spatial_variation( const std::shared_ptr< Property >& aProperty )
+    {
+        // no property: nothing varies
+        if ( aProperty == nullptr )
+        {
+            return Property_Spatial_Variation::CONSTANT;
+        }
+
+        // a dof, dv or field dependent property varies in space with its field; its total spatial derivative is not provided
+        if ( aProperty->get_dof_type_list().size() > 0 ||      //
+                aProperty->get_dv_type_list().size() > 0 ||    //
+                aProperty->get_field_type_list().size() > 0 )
+        {
+            return Property_Spatial_Variation::UNKNOWN;
+        }
+
+        // the space derivative is provided
+        if ( aProperty->check_space_dependency() )
+        {
+            return Property_Spatial_Variation::DIFFERENTIABLE;
+        }
+
+        // default constant value function: the value is the first parameter
+        if ( !aProperty->has_val_function() )
+        {
+            return Property_Spatial_Variation::CONSTANT;
+        }
+
+        // user value function: constant if it does not see a translation of the evaluation point
+        if ( is_invariant_under_translation( *aProperty ) )
+        {
+            return Property_Spatial_Variation::CONSTANT;
+        }
+
+        return Property_Spatial_Variation::UNKNOWN;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    has_known_spatial_variation( const std::shared_ptr< Property >& aProperty )
+    {
+        return classify_property_spatial_variation( aProperty ) != Property_Spatial_Variation::UNKNOWN;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    is_spatially_constant( const std::shared_ptr< Property >& aProperty )
+    {
+        return classify_property_spatial_variation( aProperty ) == Property_Spatial_Variation::CONSTANT;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    has_known_spatial_variation_nonzero( const std::shared_ptr< Property >& aProperty )
+    {
+        const Property_Spatial_Variation tVariation = classify_property_spatial_variation( aProperty );
+
+        if ( tVariation == Property_Spatial_Variation::DIFFERENTIABLE )
+        {
+            return aProperty->val()( 0 ) != 0.0;
+        }
+
+        return tVariation == Property_Spatial_Variation::CONSTANT;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    eval_property_space_derivative(
+            const std::shared_ptr< Property >& aProperty,
+            uint                               aDirection,
+            Matrix< DDRMat >&                  adPropdxk )
+    {
+        // no property
+        if ( aProperty == nullptr )
+        {
+            adPropdxk.set_size( 1, 1, 0.0 );
+            return;
+        }
+
+        // number of entries of the property value
+        const uint tNumEntries = aProperty->val().numel();
+
+        adPropdxk.set_size( tNumEntries, 1, 0.0 );
+
+        // constant property (the supports_analytical_* hooks exclude properties of unknown spatial variation)
+        if ( !aProperty->check_space_dependency() )
+        {
+            return;
+        }
+
+        // space derivative, layout of Field_Interpolator::gradx: ( number of space dimensions x number of entries )
+        const Matrix< DDRMat >& tdPropdx = aProperty->dPropdx( 1 );
+
+        if ( tdPropdx.n_cols() == tNumEntries && aDirection < tdPropdx.n_rows() )
+        {
+            for ( uint iEntry = 0; iEntry < tNumEntries; iEntry++ )
+            {
+                adPropdxk( iEntry ) = tdPropdx( aDirection, iEntry );
+            }
+        }
+        else if ( tNumEntries == 1 && aDirection < tdPropdx.numel() )
+        {
+            // scalar property given as a row vector
+            adPropdxk( 0 ) = tdPropdx( aDirection );
+        }
+        else
+        {
+            MORIS_ERROR( false,
+                    "eval_property_space_derivative - property %s: the space derivative ( %zu x %zu ) does not match "
+                    "the layout ( number of space dimensions x %u ).",
+                    aProperty->get_name().c_str(),
+                    static_cast< size_t >( tdPropdx.n_rows() ),
+                    static_cast< size_t >( tdPropdx.n_cols() ),
+                    tNumEntries );
+        }
     }
 
     //------------------------------------------------------------------------------

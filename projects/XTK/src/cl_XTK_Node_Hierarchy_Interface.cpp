@@ -789,6 +789,12 @@ namespace moris::xtk
             ( *aSortedNodeInds )( 2 ) = tVertices( 2 );
             ( *aSortedNodeInds )( 3 ) = ( *aCellIndexIntersectedEdgeVertex )( tIndices( 0 ) );
         }
+        else
+        {
+            // a linear cut crosses 1 or 2 edges of a triangle; any other count means inconsistent cut decisions (MB-040)
+            MORIS_ERROR( false, "Node_Hierarchy_Interface::sort_nodes_2d() - %lu intersected edges on one TRI3, expected 1 or 2",
+                    (unsigned long)aCellIndexIntersectedEdgeOrdinals->size() );
+        }
     }
 
     // ----------------------------------------------------------------------------------
@@ -965,6 +971,12 @@ namespace moris::xtk
             ( *aSortedNodeInds )( 3 ) = tVertices( 3 );
             ( *aSortedNodeInds )( 4 ) = ( *aCellIndexIntersectedEdgeVertex )( tIndices( 0 ) );
             aPermutation              = 10000 + ( *aCellIndexIntersectedEdgeOrdinals )( tIndices( 0 ) );
+        }
+        else
+        {
+            // a linear cut crosses 1 to 4 edges of a tet; any other count means inconsistent cut decisions (MB-040)
+            MORIS_ERROR( false, "Node_Hierarchy_Interface::sort_nodes_3d() - %lu intersected edges on one TET4, expected 1 to 4",
+                    (unsigned long)aCellIndexIntersectedEdgeOrdinals->size() );
         }
     }
     // ----------------------------------------------------------------------------------

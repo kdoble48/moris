@@ -11,6 +11,8 @@
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_IQI_J_Integral.hpp"
+#include "fn_dot.hpp"
+#include "fn_trans.hpp"
 
 namespace moris::fem
 {
@@ -29,23 +31,26 @@ namespace moris::fem
 
     void IQI_J_Integral::compute_QI( Matrix< DDRMat > &aQI )
     {
-        /*
-         * TODO: implement switch case for 2D or 3D
-         */
-        Matrix< DDRMat > tN = { { 1.0 },
-            { 0.0 } };
-
-        // get indices for properties, CM and SP
-        uint tElastLinIsoIndex = static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO );
-
-        /* evaluate the QI:
-         * when crack grows straight ahead, G = J = int_{\Gamma} W n_1 - t_i \frac{\partial u_i}{\partial x_1}
+        /* evaluate the QI, crack growing straight ahead in x_1:
+         * G = J = int_{\Gamma} ( W n_1 - t_i \frac{\partial u_i}{\partial x_1} ),
+         * with W = 1/2 sigma : epsilon, t = sigma n and n the outward facet normal
          */
 
-        // 2D
-        aQI = ( trans( mLeaderCM( tElastLinIsoIndex )->flux() ) * mLeaderCM( tElastLinIsoIndex )->strain() ) * tN( 0 )
-            - mLeaderCM( tElastLinIsoIndex )->traction( tN )( 0 ) * mLeaderCM( tElastLinIsoIndex )->strain()( 0 )
-            - mLeaderCM( tElastLinIsoIndex )->traction( tN )( 1 ) * mLeaderFIManager->get_field_interpolators_for_type( MSI::Dof_Type::UX )->gradx( 1 )( 1, 0 );    // FIXME: need to ask for displacement dof
+        // get the elasticity CM
+        const std::shared_ptr< Constitutive_Model > &tCM =
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) );
+
+        // get the displacement field interpolator
+        Field_Interpolator *tFIDispl =
+                mLeaderFIManager->get_field_interpolators_for_type( MSI::Dof_Type::UX );
+
+        // strain energy density (the Voigt strain carries the engineering shear strain)
+        real tW = 0.5 * dot( tCM->flux(), tCM->strain() );
+
+        // derivatives of the displacement components in x_1
+        Matrix< DDRMat > tdUdX1 = trans( tFIDispl->gradx( 1 ).get_row( 0 ) );
+
+        aQI = { { tW * mNormal( 0 ) - dot( tCM->traction( mNormal ), tdUdX1 ) } };
     }
 
     //------------------------------------------------------------------------------
@@ -55,23 +60,11 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
-        /*
-         * TODO: implement switch case for 2D or 3D
-         */
-        Matrix< DDRMat > tN = { { 1.0 }, { 0.0 } };
-
-        // get indices for properties, CM and SP
-        uint tElastLinIsoIndex = static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO );
-
-        /* evaluate the QI:
-         * when crack grows straight ahead, G = J = int_{\Gamma} W n_1 - t_i \frac{\partial u_i}{\partial x_1}
-         */
-
-        // 2D
         // evaluate the QI
-        mSet->get_QI()( tQIIndex ) += aWStar * ( trans( mLeaderCM( tElastLinIsoIndex )->flux() ) * mLeaderCM( tElastLinIsoIndex )->strain() ) * tN( 0 )
-                                    - mLeaderCM( tElastLinIsoIndex )->traction( tN )( 0 ) * mLeaderCM( tElastLinIsoIndex )->strain()( 0 )
-                                    - mLeaderCM( tElastLinIsoIndex )->traction( tN )( 1 ) * mLeaderFIManager->get_field_interpolators_for_type( MSI::Dof_Type::UX )->gradx( 1 )( 1, 0 );    // FIXME: need to ask for displacement dof
+        Matrix< DDRMat > tQI;
+        this->compute_QI( tQI );
+
+        mSet->get_QI()( tQIIndex ) += aWStar * tQI( 0 );
     }
 
     //------------------------------------------------------------------------------

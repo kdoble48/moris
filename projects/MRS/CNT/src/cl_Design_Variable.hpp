@@ -20,14 +20,14 @@ namespace moris
     class Design_Variable
     {
       private:
-        char mID;
+        sint mID;
         real mValue;
         real mLowerBound;
         real mUpperBound;
         bool mIsConstant;
 
         // How many design variables have been created, used for having a unique ID
-        inline static char mCount = 0;
+        inline static sint mCount = 0;
 
       public:
         /**
@@ -63,7 +63,7 @@ namespace moris
          *
          * @return ID
          */
-        char get_id() const;
+        sint get_id() const;
 
         /**
          * Gets the value of this design variable.

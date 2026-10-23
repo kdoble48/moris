@@ -83,6 +83,16 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * get the field component the IQI evaluates: vectorial_field_index if set; 0 for a
+         * scalar field; for a single dof_quantity in a vector group (e.g. "UY" of {UX,UY}),
+         * its position in the group; -1 for a vector field without an index (whole vector)
+         * @param[ in ] aFI field interpolator of the quantity dof type
+         * @return component index, or -1
+         */
+        sint get_dof_component_index( Field_Interpolator* aFI ) const;
+
+        //------------------------------------------------------------------------------
+        /**
          * compute the derivative of the quantity of interest wrt dof types
          * @param[ in ] aWStar weight associated to the evaluation point
          */

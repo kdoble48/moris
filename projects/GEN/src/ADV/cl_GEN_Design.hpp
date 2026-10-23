@@ -105,6 +105,16 @@ namespace moris::gen
         virtual bool intended_discretization() = 0;
 
         /**
+         * Gets if this design is discretized additively (analytic field + B-spline correction).
+         *
+         * @return Additive discretization flag (false unless overridden)
+         */
+        virtual bool uses_additive_discretization() const
+        {
+            return false;
+        }
+
+        /**
          * Gets a discretization mesh index for a discretized field.
          *
          * @return Mesh index
@@ -131,6 +141,18 @@ namespace moris::gen
          * @return Underlying field
          */
         virtual std::shared_ptr< Field > get_field() = 0;
+
+        /**
+         * Radius of the Kreissl-Maute linear filter applied to this design's B-spline coefficients (ADVs) by the
+         * geometry engine (parameter adv_filter_radius). 0 = no filter, the default for every design type.
+         *
+         * @return Filter radius in physical units
+         */
+        virtual real
+        get_adv_filter_radius()
+        {
+            return 0.0;
+        }
 
         /**
          * Sets the ADVs and grabs the field variables needed from the ADV vector

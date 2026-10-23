@@ -37,6 +37,21 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
+    Matrix< DDRMat >
+    IQI_Power_Dissipation_Bulk::shear_weight( uint aSpaceDim )
+    {
+        // Voigt order: normal components first, then the shear components
+        uint             tNumComps = ( aSpaceDim - 1 ) * 3;
+        Matrix< DDRMat > tWeight( tNumComps, tNumComps, 0.0 );
+        for ( uint iComp = 0; iComp < tNumComps; iComp++ )
+        {
+            tWeight( iComp, iComp ) = iComp < aSpaceDim ? 1.0 : 2.0;
+        }
+        return tWeight;
+    }
+
+    //------------------------------------------------------------------------------
+
     void IQI_Power_Dissipation_Bulk::compute_QI( Matrix< DDRMat >& aQI )
     {
         // get the fluid CM
@@ -77,8 +92,11 @@ namespace moris::fem
             Matrix< DDRMat > tP( ( tSpaceDim - 1 ) * 3, 1, 0.0 );
             tP( { 0, tSpaceDim - 1 }, { 0, 0 } ) = tI * tFIPressure->val();
 
+            // the CM strain carries the tensor shear strain: weight the shear rows by 2 for sigma : epsilon
+            Matrix< DDRMat > tShearWeight = this->shear_weight( tSpaceDim );
+
             // evaluate the QI
-            aQI = tSelect * ( trans( tCMFluid->flux() + tP ) * tCMFluid->strain() +    //
+            aQI = tSelect * ( trans( tCMFluid->flux() + tP ) * tShearWeight * tCMFluid->strain() +    //
                               tPropDensity->val()( 0 ) * tFIVelocity->val_trans() * tFIVelocity->val() );
         }
         else
@@ -189,7 +207,7 @@ namespace moris::fem
                     mSet->get_residual()( tQIIndex )(
                             { tLeaderDepStartIndex, tLeaderDepStopIndex },
                             { 0, 0 } ) += aWStar * tSelect *    //
-                                          tFIVelocity->val_trans() * tFIVelocity->val() * tPropDensity->dPropdDOF( tDofType );
+                                          trans( tFIVelocity->val_trans() * tFIVelocity->val() * tPropDensity->dPropdDOF( tDofType ) );
                 }
 
                 // if fluid CM depends on dof type
@@ -203,12 +221,15 @@ namespace moris::fem
                     Matrix< DDRMat > tP( ( tSpaceDim - 1 ) * 3, 1, 0.0 );
                     tP( { 0, tSpaceDim - 1 }, { 0, 0 } ) = tI * tFIPressure->val();
 
+                    // the CM strain carries the tensor shear strain: weight the shear rows by 2
+                    Matrix< DDRMat > tShearWeight = this->shear_weight( tSpaceDim );
+
                     // add contribution to dQIdu
                     mSet->get_residual()( tQIIndex )(
                             { tLeaderDepStartIndex, tLeaderDepStopIndex },
                             { 0, 0 } ) += aWStar * tSelect *    //
-                                          ( trans( tCMFluid->dFluxdDOF( tDofType ) ) * tCMFluid->strain()
-                                                  + trans( tCMFluid->dStraindDOF( tDofType ) ) * ( tCMFluid->flux() + tP ) );
+                                          ( trans( tCMFluid->dFluxdDOF( tDofType ) ) * tShearWeight * tCMFluid->strain()
+                                                  + trans( tCMFluid->dStraindDOF( tDofType ) ) * tShearWeight * ( tCMFluid->flux() + tP ) );
                 }
             }
         }

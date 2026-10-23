@@ -253,6 +253,13 @@ namespace moris::gen
         bool intended_discretization() override;
 
         /**
+         * Gets if this design is discretized additively (analytic field + B-spline correction).
+         *
+         * @return Additive discretization flag
+         */
+        bool uses_additive_discretization() const override;
+
+        /**
          * Gets a discretization mesh index for a discretized field.
          *
          * @return Mesh index
@@ -265,6 +272,13 @@ namespace moris::gen
          * @return Lower bound
          */
         real get_discretization_lower_bound() override;
+
+        /**
+         * Radius of the Kreissl-Maute linear filter of this level set's B-spline coefficients (adv_filter_radius)
+         *
+         * @return Filter radius in physical units (0 = off)
+         */
+        real get_adv_filter_radius() override;
 
         /**
          * Get the upper bound for a discretized field.

@@ -1,0 +1,62 @@
+#
+# Copyright (c) 2022 University of Colorado
+# Licensed under the MIT license. See LICENSE.txt file in the MORIS root for details.
+#
+#------------------------------------------------------------------------------------
+#
+
+namespace moris {
+
+/** \page EXA_LevelSet_ADV_Filter Level-Set Design Variable Filter
+
+# Problem Description
+This example shows the linear filter of the level-set design variables (Kreissl and Maute 2012), set with the level-set
+geometry parameter `adv_filter_radius`. It highlights:
+
+- B-spline discretized level-set geometry (`discretization_mesh_index`)
+- Design-variable filter: the design field uses filtered B-spline coefficients F psi, where
+  F_ij = max( 0, r - |x_i - x_j| ) / sum_j max( 0, r - |x_i - x_j| ) on the Greville points of the coefficients
+- Sensitivity sweep (OPT SWEEP) comparing analytic and finite-difference sensitivities
+- Level-set topology optimization of a cantilever without and with the filter (in-tree MMA)
+- Cut on the cell's own-order interpolant of the level set (use_cell_order_intersection)
+
+Each optimizer variable psi_j then moves the design field over a neighbourhood of radius r instead of a single B-spline
+support. This removes interface wiggles on the scale of the mesh that coefficient-wise optimizer steps create on
+boundaries inclined to the grid. The optimizer keeps psi and its bounds; the sensitivities with respect to psi are
+F^T times the sensitivities with respect to the coefficients.
+
+# Problem Setup
+- 2 x 1 plate on [0, 2] x [0, 1], 12 x 6 cells (h = 1/6), quadratic Lagrange and B-spline meshes
+- Design: circular hole of radius 0.3 at (1.0, 0.5), discretized on the B-splines (112 design variables)
+- Linear elasticity (E = 1, nu = 0.3), clamped at x = 0 by Nitsche's method, traction (0, -1) at x = 2, ghost stabilization
+- Criteria: strain energy (objective) and volume (constraint)
+- Case 0: no filter. Case 1: `adv_filter_radius` = 1.5 h (each filtered coefficient averages its 3 x 3 neighbourhood)
+
+Cases 0 and 1 run an OPT SWEEP at the initial design with analytic and finite-difference sensitivities for every
+design variable; the check uses the central differences.
+
+Cases 2 and 3: 40 x 20 cells, a staggered grid of 13 holes as the seed (924 design variables), traction (0, -10) on
+x = 2, y in [0.45, 0.55]; minimum strain energy with volume <= 1.0, 100 MMA iterations; case 2 without, case 3 with
+the filter (radius 1.5 h). Documentation with figures: doc/examples/exa/optimization/LevelSet_ADV_Filter.md.
+
+# Checks
+- Analytic and finite-difference sensitivities agree for every design variable (relative to the largest entry, 1e-5)
+- The criteria at the initial design match reference values; the filtered case differs from the unfiltered one
+- Cases 2 and 3: the final design meets the volume limit; final strain energy and volume match reference values
+
+# Literature
+- Kreissl, S. and Maute, K. (2012), Levelset based fluid topology optimization using the extended finite element method,
+  Structural and Multidisciplinary Optimization 46(3), 311-326, doi:10.1007/s00158-012-0782-8. The filter is their
+  Eq. (12) on nodal level-set values, with radius r_s h; adv_filter_radius = r_s h, applied to B-spline coefficients.
+- Barrera, J. L., Geiss, M. J. and Maute, K. (2022), Minimum feature size control in level set topology optimization via
+  density fields, Structural and Multidisciplinary Optimization 65(3), 94, doi:10.1007/s00158-021-03096-7
+  (the filter is their Eq. 1; radius 1.5 h in 2D, 1.8 h in 3D).
+
+# Developer Notes
+- The filter is serial only, and is incompatible with the in-place SDF reinitialization, which writes coefficient space
+  (the workflow stops with an error if both are set).
+- Unit tests: `GEN-test.exe "[adv_filter]"`.
+
+*/
+
+}

@@ -18,6 +18,7 @@ namespace moris::fem
         this->create_fields();
         this->create_material_models();
         this->create_constitutive_models();
+        this->create_follower_side_models();
         this->create_stabilization_parameters();
         this->create_iwgs();
         this->create_iqis();

@@ -12,6 +12,9 @@
  * centres in 3D) and at the intersection vertices of earlier geometries, so a sub-cell feature can change sign
  * there while every background corner keeps one sign.
  *
+ * MB-040: the region of such a vertex must also agree with its exact value, otherwise the node hierarchy cuts edges
+ * inconsistently with the vertex labels.
+ *
  */
 
 #include "catch.hpp"
@@ -21,6 +24,7 @@
 #include "cl_XTK_Model.hpp"
 #include "cl_XTK_Cut_Integration_Mesh.hpp"
 #include "cl_MTK_Cell.hpp"
+#include "cl_MTK_Vertex.hpp"
 #include "cl_MTK_Interpolation_Mesh.hpp"
 #include "cl_HMR.hpp"
 #include "cl_HMR_Mesh_Interpolation.hpp"
@@ -81,6 +85,32 @@ namespace moris::xtk
             return std::min(
                     distance_minus_radius( aPoint, { 1.0, 0.4 }, 0.1 ),
                     distance_minus_radius( aPoint, { 0.0, 0.0 }, 0.1 ) );
+        }
+
+        // 3D, geometry 0 of the MB-040 case: plane x + y + z = 1 through the corners (1,0,0), (0,1,0), (0,0,1)
+        real
+        mb040_plane( const Matrix< DDRMat >& aPoint, const Vector< real >& aParameters )
+        {
+            return aPoint( 0 ) + aPoint( 1 ) + aPoint( 2 ) - 1.0;
+        }
+
+        // 3D, geometry 1 of the MB-040 case: trilinear interpolant on [0,1]^3 of the corner values
+        // [ -1, 1, 1, -1, 1, -1, 0, 0 ], corner i at ( i & 1, ( i >> 1 ) & 1, ( i >> 2 ) & 1 )
+        real
+        mb040_trilinear( const Matrix< DDRMat >& aPoint, const Vector< real >& aParameters )
+        {
+            const real tCorners[ 8 ] = { -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 0.0, 0.0 };
+            real       tValue        = 0.0;
+            for ( uint iCorner = 0; iCorner < 8; iCorner++ )
+            {
+                real tWeight = 1.0;
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    tWeight *= ( ( iCorner >> iDim ) & 1 ) ? aPoint( iDim ) : 1.0 - aPoint( iDim );
+                }
+                tValue += tCorners[ iCorner ] * tWeight;
+            }
+            return tValue;
         }
 
         // finalized interpolation mesh of a linear HMR mesh
@@ -291,6 +321,65 @@ namespace moris::xtk
                 tTotal += bulk_phase_measure( tCutMesh, iPhase );
             }
             CHECK( tTotal == Approx( 2.0 ).epsilon( 1e-10 ) );
+
+            delete tInterpMesh;
+        }
+    }
+
+    TEST_CASE( "MB-040 3D analytic second geometry: cut decisions agree with the vertex labels", "[XTK][MB-040]" )
+    {
+        if ( par_size() == 1 )
+        {
+            // one hex [0,1]^3. Geometry 0 (x + y + z = 1) puts cut vertices on tet edges whose other end is on its
+            // interface; geometry 1 (analytic trilinear) is evaluated exactly there. The 2-locator region shortcut
+            // labelled such vertices by the other parent while the intersection test used the exact value: cut edges
+            // forming a whole tet face, undefined node-hierarchy templates and an out-of-bounds cell write.
+            hmr::Parameters              tParameters = mesh_parameters( { 1, 1, 1 }, { 1.0, 1.0, 1.0 } );
+            hmr::HMR                     tHMR( tParameters );
+            hmr::Interpolation_Mesh_HMR* tInterpMesh = create_mesh( tHMR );
+
+            gen::Geometry_Engine_Parameters tGeometryEngineParameters;
+            tGeometryEngineParameters.mGeometries = {
+                std::make_shared< gen::Level_Set_Geometry >( std::make_shared< gen::User_Defined_Field >( &mb040_plane ) ),
+                std::make_shared< gen::Level_Set_Geometry >( std::make_shared< gen::User_Defined_Field >( &mb040_trilinear ) )
+            };
+            gen::Geometry_Engine tGeometryEngine( tInterpMesh, tGeometryEngineParameters );
+
+            Model tXTKModel( 3, tInterpMesh, &tGeometryEngine );
+            tXTKModel.mVerbose = false;
+            REQUIRE_NOTHROW( tXTKModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8, Subdivision_Method::C_HIERARCHY_TET4 } ) );
+
+            Cut_Integration_Mesh* tCutMesh = tXTKModel.get_cut_integration_mesh();
+
+            // the four phases tile the cell
+            real tTotal = 0.0;
+            for ( moris_index iPhase = 0; iPhase < 4; iPhase++ )
+            {
+                tTotal += bulk_phase_measure( tCutMesh, iPhase );
+            }
+            CHECK( tTotal == Approx( 1.0 ).epsilon( 1e-10 ) );
+
+            // no integration cell has both a positive and a negative vertex for either geometry
+            uint tNumMixed = 0;
+            for ( uint iSP = 0; iSP < tCutMesh->get_num_subphases(); iSP++ )
+            {
+                for ( mtk::Cell* iCell : tCutMesh->get_subphase_ig_cells( iSP )->mIgCellGroup )
+                {
+                    for ( uint iGeom = 0; iGeom < 2; iGeom++ )
+                    {
+                        bool tPositive = false;
+                        bool tNegative = false;
+                        for ( mtk::Vertex* iVertex : iCell->get_vertex_pointers() )
+                        {
+                            gen::Geometric_Region tRegion = tGeometryEngine.get_geometric_region( iGeom, iVertex->get_index(), iVertex->get_coords() );
+                            tPositive = tPositive or tRegion == gen::Geometric_Region::POSITIVE;
+                            tNegative = tNegative or tRegion == gen::Geometric_Region::NEGATIVE;
+                        }
+                        tNumMixed += tPositive and tNegative;
+                    }
+                }
+            }
+            CHECK( tNumMixed == 0 );
 
             delete tInterpMesh;
         }

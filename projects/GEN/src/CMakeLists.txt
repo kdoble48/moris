@@ -69,6 +69,7 @@ set(HEADERS
 	ADV/fields/cl_GEN_Signed_Distance_Field.hpp
 	ADV/fields/cl_GEN_Image_Signed_Distance_Field.hpp
 	ADV/fields/cl_GEN_Combined_Fields.hpp
+	ADV/fields/cl_GEN_Summed_Fields.hpp
 	ADV/fields/cl_GEN_User_Defined_Field.hpp
 	ADV/fields/fn_GEN_create_field.hpp
 	ADV/fields/cl_GEN_Field_Array_Factory.hpp
@@ -131,6 +132,7 @@ set(LIB_SOURCES
 	ADV/fields/cl_GEN_Signed_Distance_Field.cpp
 	ADV/fields/cl_GEN_Image_Signed_Distance_Field.cpp
 	ADV/fields/cl_GEN_Combined_Fields.cpp
+	ADV/fields/cl_GEN_Summed_Fields.cpp
 	ADV/fields/cl_GEN_User_Defined_Field.cpp
 	ADV/fields/fn_GEN_create_field.cpp
 	ADV/fields/cl_GEN_Field_Array_Factory.cpp

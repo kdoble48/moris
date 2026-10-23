@@ -44,6 +44,7 @@ namespace moris::fem
       protected:
         void create_material_models() override;
         void create_constitutive_models() override;
+        void create_follower_side_models() override;
         void create_stabilization_parameters() override;
         void create_iwgs() override;
         void create_iqis() override;
@@ -62,8 +63,17 @@ namespace moris::fem
                 bool                   aIsGhost,
                 Vector< std::string > &aMeshSetNames );
 
+        // property of the given index, and the phase info holding the MMs and CMs, for the leader or the follower side
+        std::shared_ptr< Property > const &get_property( uint aIndex, mtk::Leader_Follower aLeaderFollowerType ) const;
+        fem::Phase_User_Info               &get_phase_info( uint aPhaseIndex, mtk::Leader_Follower aLeaderFollowerType );
+
         Vector< fem::Phase_User_Info > mPhaseInfo;
         std::map< std::string, uint >  mPhaseMap;
+
+        // follower-side instances (MB-047): properties, and per phase the MMs and CMs, built from the same parameter
+        // lists as mProperties and mPhaseInfo. The DOF and DV type lists of a phase stay in mPhaseInfo.
+        PointerCell< fem::Property >   mFollowerProperties;
+        Vector< fem::Phase_User_Info > mFollowerPhaseInfo;
     };
 }    // namespace moris::fem
 

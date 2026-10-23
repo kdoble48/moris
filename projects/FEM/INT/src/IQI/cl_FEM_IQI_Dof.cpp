@@ -66,19 +66,14 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
-        // check if dof index was set (for the case of vector field)
-        if ( mQuantityDofType.size() > 1 )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1, "IQI_Dof::compute_QI - mIQITypeIndex not set." );
-        }
-        else
-        {
-            mIQITypeIndex = 0;
-        }
-
         Matrix< DDRMat > tMat;
 
         this->evaluate_QI( tMat );
+
+        // a vector field needs a component index for a scalar QI
+        MORIS_ERROR( tMat.numel() == 1,
+                "IQI_Dof::compute_QI - IQI %s: vectorial_field_index not set for a vector field.",
+                mName.c_str() );
 
         mSet->get_QI()( tQIIndex ) += aWStar * tMat;
     }
@@ -97,6 +92,44 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
+    sint
+    IQI_Dof::get_dof_component_index( Field_Interpolator* aFI ) const
+    {
+        // number of field components
+        uint tNumComps = aFI->get_number_of_fields();
+
+        // a set index is used as given
+        if ( mIQITypeIndex != -1 )
+        {
+            return this->get_component_index( tNumComps );
+        }
+
+        // scalar field
+        if ( tNumComps == 1 )
+        {
+            return 0;
+        }
+
+        // single dof type of a vector group: its position in the group
+        if ( mQuantityDofType.size() == 1 )
+        {
+            const Vector< MSI::Dof_Type >& tGroup = aFI->get_dof_type();
+
+            for ( uint iComp = 0; iComp < tGroup.size(); iComp++ )
+            {
+                if ( tGroup( iComp ) == mQuantityDofType( 0 ) )
+                {
+                    return iComp;
+                }
+            }
+        }
+
+        // vector field without an index
+        return -1;
+    }
+
+    //------------------------------------------------------------------------------
+
     void
     IQI_Dof::evaluate_QI( Matrix< DDRMat >& aMat )
     {
@@ -108,25 +141,36 @@ namespace moris::fem
         MORIS_ASSERT( tFI != nullptr,
                 "IQI_Dof::evaluate_QI - field interpolator does not exist." );
 
+        // get the field component
+        sint tIndex = this->get_dof_component_index( tFI );
+
         // evaluate spatial derivative of dof
         if ( mSpatialDerivativeOrder > 0 )
         {
+            MORIS_ERROR( tIndex != -1,
+                    "IQI_Dof::evaluate_QI - IQI %s: vectorial_field_index not set for a vector field.",
+                    mName.c_str() );
+
             const Matrix< DDRMat >& tSpatialGradient = tFI->gradx( mSpatialDerivativeOrder );
 
-            aMat = { tSpatialGradient( mSpatialDerivativeDirection, mIQITypeIndex ) };
+            aMat = { tSpatialGradient( mSpatialDerivativeDirection, tIndex ) };
         }
 
         // evaluate time derivative of dof
         else if ( mTimeDerivativeOrder > 0 )
         {
+            MORIS_ERROR( tIndex != -1,
+                    "IQI_Dof::evaluate_QI - IQI %s: vectorial_field_index not set for a vector field.",
+                    mName.c_str() );
+
             const Matrix< DDRMat >& tTemporalGradient = tFI->gradt( mTimeDerivativeOrder );
 
-            aMat = { tTemporalGradient( mIQITypeIndex ) };
+            aMat = { tTemporalGradient( tIndex ) };
         }
-        else if ( mQuantityDofType.size() > 1 && mIQITypeIndex != -1 )
+        else if ( tIndex != -1 )
         {
             // evaluate DOF value
-            aMat = { tFI->val()( mIQITypeIndex ) };
+            aMat = { tFI->val()( tIndex ) };
         }
         // DO NOT DELETE THIS FUNCTIONALITY AGAIN
         else
@@ -147,6 +191,13 @@ namespace moris::fem
         // get the column index to assemble in residual
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
+        // get the field component; derivatives need one
+        sint tIndex = this->get_dof_component_index( tFI );
+
+        MORIS_ERROR( tIndex != -1,
+                "IQI_Dof::compute_dQIdu - IQI %s: vectorial_field_index not set for a vector field.",
+                mName.c_str() );
+
         // get the number of leader dof type dependencies
         uint tNumDofDependencies = mRequestedLeaderGlobalDofTypes.size();
 
@@ -161,8 +212,8 @@ namespace moris::fem
             uint tLeaderDepStartIndex = mSet->get_res_dof_assembly_map()( tLeaderDofIndex )( 0, 0 );
             uint tLeaderDepStopIndex  = mSet->get_res_dof_assembly_map()( tLeaderDofIndex )( 0, 1 );
 
-            // if derivative dof type is max dof type
-            if ( tDofType( 0 ) == mQuantityDofType( 0 ) )
+            // if derivative dof type is the group of the quantity dof type
+            if ( tDofType( 0 ) == tFI->get_dof_type()( 0 ) )
             {
                 // evaluate spatial derivative of dof
                 if ( mSpatialDerivativeOrder > 0 )
@@ -176,8 +227,8 @@ namespace moris::fem
 
                     const Matrix< DDRMat >& tdSpatialGradientdu = tFI->dnNdxn( mSpatialDerivativeOrder );
 
-                    tSpatialDerivativeShapeFunction( { 0, 0 },                                          //
-                            { mIQITypeIndex * tNumBasis, ( mIQITypeIndex + 1 ) * tNumBasis - 1 } ) =    //
+                    tSpatialDerivativeShapeFunction( { 0, 0 },                            //
+                            { tIndex * tNumBasis, ( tIndex + 1 ) * tNumBasis - 1 } ) =    //
                             tdSpatialGradientdu.get_row( mSpatialDerivativeDirection );
 
                     mSet->get_residual()( tQIIndex )(
@@ -195,8 +246,8 @@ namespace moris::fem
 
                     Matrix< DDRMat > tTimeDerivativeShapeFunction( 1, tNumVecFieldComps * tNumBasis, 0.0 );
 
-                    tTimeDerivativeShapeFunction( { 0, 0 },                                             //
-                            { mIQITypeIndex * tNumBasis, ( mIQITypeIndex + 1 ) * tNumBasis - 1 } ) =    //
+                    tTimeDerivativeShapeFunction( { 0, 0 },                               //
+                            { tIndex * tNumBasis, ( tIndex + 1 ) * tNumBasis - 1 } ) =    //
                             tFI->dnNdtn( mTimeDerivativeOrder ).matrix_data();
 
                     // get dof derivative of time derivative
@@ -205,25 +256,19 @@ namespace moris::fem
                             { tLeaderDepStartIndex, tLeaderDepStopIndex }, { 0, 0 } ) +=    //
                             aWStar * trans( tTimeDerivativeShapeFunction );
                 }
-                else if ( mQuantityDofType.size() > 1 && mIQITypeIndex != -1 )
+                else
                 {
                     // build selection matrix
                     uint tNumVecFieldComps = tFI->val().numel();
 
                     Matrix< DDRMat > tSelect( tNumVecFieldComps, 1, 0.0 );
 
-                    tSelect( mIQITypeIndex, 0 ) = 1.0;
+                    tSelect( tIndex, 0 ) = 1.0;
 
                     // assemble into residual vector
                     mSet->get_residual()( tQIIndex )(
                             { tLeaderDepStartIndex, tLeaderDepStopIndex }, { 0, 0 } ) +=
                             aWStar * tFI->N_trans() * tSelect;
-                }
-                // IQI dof type not properly defined
-                else
-                {
-                    MORIS_ERROR( false,
-                            "IQI_Dof::compute_dQIdu - derivative cannot be computed as mIQITypeIndex not set." );
                 }
             }
         }
@@ -240,8 +285,15 @@ namespace moris::fem
         Field_Interpolator* tFI =
                 mLeaderFIManager->get_field_interpolators_for_type( mQuantityDofType( 0 ) );
 
-        // if derivative dof type is max dof type
-        if ( aDofType( 0 ) == mQuantityDofType( 0 ) )
+        // get the field component; derivatives need one
+        sint tIndex = this->get_dof_component_index( tFI );
+
+        MORIS_ERROR( tIndex != -1,
+                "IQI_Dof::compute_dQIdu - IQI %s: vectorial_field_index not set for a vector field.",
+                mName.c_str() );
+
+        // if derivative dof type is the group of the quantity dof type
+        if ( aDofType( 0 ) == tFI->get_dof_type()( 0 ) )
         {
             // evaluate spatial derivative of dof
             if ( mSpatialDerivativeOrder > 0 )
@@ -255,8 +307,8 @@ namespace moris::fem
 
                 const Matrix< DDRMat >& tdSpatialGradientdu = tFI->dnNdxn( mSpatialDerivativeOrder );
 
-                tSpatialDerivativeShapeFunction( { 0, 0 },                                          //
-                        { mIQITypeIndex * tNumBasis, ( mIQITypeIndex + 1 ) * tNumBasis - 1 } ) =    //
+                tSpatialDerivativeShapeFunction( { 0, 0 },                            //
+                        { tIndex * tNumBasis, ( tIndex + 1 ) * tNumBasis - 1 } ) =    //
                         tdSpatialGradientdu.get_row( mSpatialDerivativeDirection );
 
                 // assemble into dof derivative of IQI
@@ -273,30 +325,24 @@ namespace moris::fem
 
                 Matrix< DDRMat > tTimeDerivativeShapeFunction( 1, tNumVecFieldComps * tNumBasis, 0.0 );
 
-                tTimeDerivativeShapeFunction( { 0, 0 },                                             //
-                        { mIQITypeIndex * tNumBasis, ( mIQITypeIndex + 1 ) * tNumBasis - 1 } ) =    //
+                tTimeDerivativeShapeFunction( { 0, 0 },                               //
+                        { tIndex * tNumBasis, ( tIndex + 1 ) * tNumBasis - 1 } ) =    //
                         tFI->dnNdtn( mTimeDerivativeOrder ).matrix_data();
 
                 // assemble into dof derivative of IQI
                 adQIdu = tTimeDerivativeShapeFunction;
             }
-            else if ( mQuantityDofType.size() > 1 && mIQITypeIndex != -1 )
+            else
             {
                 // build selection matrix
                 uint tNumVecFieldComps = tFI->val().numel();
 
                 Matrix< DDRMat > tSelect( tNumVecFieldComps, 1, 0.0 );
 
-                tSelect( mIQITypeIndex, 0 ) = 1.0;
+                tSelect( tIndex, 0 ) = 1.0;
 
                 // assemble into dof derivative of IQI
                 adQIdu = tFI->N_trans() * tSelect;
-            }
-            // IQI dof type not properly defined
-            else
-            {
-                MORIS_ERROR( false,
-                        "IQI_Dof::compute_dQIdu - derivative cannot be computed as mIQITypeIndex not set." );
             }
         }
     }

@@ -73,6 +73,13 @@ namespace moris::gen
         bool is_on_interface( const Geometry& aGeometry ) const override;
 
         /**
+         * Gets the decomposition index of the geometry whose interface created this node (Geometry::get_decomposition_index()).
+         *
+         * @return Decomposition index of the interface geometry
+         */
+        uint get_interface_decomposition_index() const;
+
+        /**
          * Returns if the parent edge is intersected (if the local coordinate of the intersection lies between
          * -1 and 1)
          *

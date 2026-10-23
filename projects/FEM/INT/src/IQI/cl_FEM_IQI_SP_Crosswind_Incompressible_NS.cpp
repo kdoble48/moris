@@ -53,25 +53,6 @@ namespace moris::fem
     void
     IQI_SP_Crosswind_Incompressible_NS::compute_QI( Matrix< DDRMat >& aQI )
     {
-        // check if index was set
-        if ( mQuantityDofType.size() > 1 )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_SP_Crosswind_Incompressible_NS::compute_QI - mIQITypeIndex not set." );
-        }
-        else
-        {
-            mIQITypeIndex = 0;
-        }
-
-        // check if IQI should be computed
-        if ( mIQITypeIndex < 0 )
-        {
-            aQI = MORIS_REAL_MAX;
-
-            return;
-        }
-
         // get the velocity and pressure FIs
         Field_Interpolator* tVelocityFI =
                 mLeaderFIManager->get_field_interpolators_for_type( MSI::Dof_Type::VX );
@@ -79,9 +60,8 @@ namespace moris::fem
         // get space dimension
         uint tSpaceDim = tVelocityFI->get_number_of_fields();
 
-        // check for proper value of IQITypeIndex
-        MORIS_ASSERT( (uint)mIQITypeIndex < tSpaceDim,
-                "IQI_SP_Crosswind_Incompressible_NS::compute_QI - incorrect vectorial index." );
+        // get the requested component (vectorial_field_index, default 0); a set index is never reset
+        uint tIndex = this->get_component_index( tSpaceDim );
 
         // get the incompressible fluid constitutive model
         const std::shared_ptr< Constitutive_Model >& tIncFluidCM =
@@ -103,10 +83,10 @@ namespace moris::fem
         this->compute_residual_strong_form_momentum( tRM );
 
         // compute the norm of the gradient of v in direction
-        real tNormDir = std::max( norm( tVelocityFI->gradx( 1 )( { 0, tSpaceDim - 1 }, { mIQITypeIndex, mIQITypeIndex } ) ), tEpsilon );
+        real tNormDir = std::max( norm( tVelocityFI->gradx( 1 )( { 0, tSpaceDim - 1 }, { tIndex, tIndex } ) ), tEpsilon );
 
         // compute the abs of the strong form of the residual
-        real tRAbsDir = std::max( std::abs( tRM( mIQITypeIndex ) ), tEpsilon );
+        real tRAbsDir = std::max( std::abs( tRM( tIndex ) ), tEpsilon );
 
         // compute full crosswind stabilization parameter value
         aQI = std::max( tSPCrosswind->val()( 0 ) * tRAbsDir / tNormDir - tDynViscosityProp->val()( 0 ), 0.0 );

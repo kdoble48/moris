@@ -52,16 +52,6 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
-        // check if dof index was set (for the case of vector field)
-        if ( mQuantityDofType.size() > 1 )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1, "IQI_Eigen_Value::compute_QI - mIQITypeIndex not set." );
-        }
-        else
-        {
-            mIQITypeIndex = 0;
-        }
-
         Matrix< DDRMat > tMat;
 
         this->evaluate_QI( tMat );
@@ -83,23 +73,19 @@ namespace moris::fem
     void
     IQI_Eigen_Value::evaluate_QI( Matrix< DDRMat >& aMat )
     {
-        // get field interpolator for a given dof type
+        // get the eigen values
         std::shared_ptr< Vector< real > >& tEigenVals =
                 mSet->get_fem_model()->get_eigen_values();
 
-        // check that field interpolator exists
-        MORIS_ASSERT( tEigenVals->size() != 0,
-                "IQI_Eigen_Value::evaluate_QI - field interpolator does not exist." );
+        // check that eigen values exist
+        MORIS_ERROR( tEigenVals != nullptr && tEigenVals->size() != 0,
+                "IQI_Eigen_Value::evaluate_QI - eigen values do not exist." );
 
-        if ( mQuantityDofType.size() > 1 && mIQITypeIndex != -1 )
-        {
-            // evaluate DOF value
-            aMat = { tEigenVals->operator()( mIQITypeIndex ) };
-        }
-        else
-        {
-            aMat = { tEigenVals->operator()( mIQITypeIndex ) };
-        }
+        // the eigenvalue is selected by vectorial_field_index, independent of dof_quantity;
+        // if that is unset, by the eigen vector index (function_parameters)
+        uint tIndex = this->get_component_index( tEigenVals->size(), mEigenVectorIndex );
+
+        aMat = { ( *tEigenVals )( tIndex ) };
     }
 
     //------------------------------------------------------------------------------
