@@ -20,6 +20,8 @@
 // MTK
 #include "cl_MTK_Enums.hpp"
 #include <unordered_map>
+#include <map>
+#include <array>
 
 namespace moris::gen
 {
@@ -65,6 +67,24 @@ namespace moris::gen
         Matrix< IdMat >   mFullijklIDs;
         sol::Dist_Vector* mOwnedADVs     = nullptr;
         sol::Dist_Vector* mPrimitiveADVs = nullptr;
+
+        // Kreissl-Maute ADV filter (adv_filter_radius; Kreissl and Maute 2012, SMO 46:311-326, Eq. 12, with r = r_s h): the
+        // filtered rows of F (coefficients = F * ADVs) on the full ADV vector; positions without a row are identity rows.
+        // Built on processor 0 by build_adv_filter().
+        struct ADV_Filter_Row
+        {
+            uint           mPosition;    // position of the filtered coefficient in the full ADV vector
+            Vector< uint > mColumns;     // positions of the ADVs it averages
+            Vector< real > mWeights;     // normalized weights max( 0, r - |x_i - x_j| ) / sum
+        };
+
+        // Neighbor search of the ADV filter: coefficients are sorted into buckets of edge length r (integer bucket
+        // coordinates), and global ADV IDs are mapped to positions in the full ADV vector
+        using Filter_Bucket_Key = std::array< sint, 3 >;
+        using Filter_Buckets    = std::map< Filter_Bucket_Key, Vector< uint > >;
+        using ADV_Position_Map  = std::unordered_map< sint, uint >;
+        Vector< ADV_Filter_Row > mADVFilterRows;
+        Vector< real >           mUnfilteredADVs;    // the optimizer's ADVs last passed to set_advs()
 
         // IQIs
         Vector< std::string > mRequestedIQIs;
@@ -126,6 +146,31 @@ namespace moris::gen
          * @return vector of advs
          */
         Vector< real >& get_advs();
+
+        /**
+         * Whether any design filters its B-spline coefficients (adv_filter_radius > 0). With a filter, set_advs() and
+         * get_advs() exchange the optimizer's variables psi, the fields use F * psi, and get_dcriteria_dadv() returns
+         * F^T times the coefficient sensitivities.
+         *
+         * @return true if an ADV filter is active
+         */
+        bool has_adv_filter() const;
+
+        /**
+         * Applies the ADV filter to a full ADV vector: F * aADVs (identity outside the filtered designs).
+         *
+         * @param aADVs Full ADV vector (processor 0)
+         * @return Filtered vector
+         */
+        Vector< real > apply_adv_filter( const Vector< real >& aADVs ) const;
+
+        /**
+         * Applies the transposed ADV filter to a full vector of sensitivities: F^T * aValues.
+         *
+         * @param aValues Derivatives with respect to the filtered coefficients (processor 0)
+         * @return Derivatives with respect to the ADVs
+         */
+        Vector< real > apply_adv_filter_transpose( const Vector< real >& aValues ) const;
 
         /**
          * Gets the global ADV IDs owned by a named design's field, in coefficient order. Lets a
@@ -542,6 +587,28 @@ namespace moris::gen
         //-------------------------------------------------------------------------------
 
       private:
+        /**
+         * Builds the ADV filter rows (mADVFilterRows) for every geometry with adv_filter_radius > 0 from the Greville
+         * coordinates of its B-spline coefficients. Called at the end of distribute_advs(); serial only.
+         */
+        void build_adv_filter();
+
+        /**
+         * Appends the filter rows of one B-spline field to mADVFilterRows: for each coefficient i with an ADV, the
+         * normalized weights max( 0, r - |x_i - x_j| ) of all coefficients j within the radius (Kreissl and Maute 2012,
+         * Eq. 12).
+         *
+         * @param aCoordinates Greville coordinates of the field's coefficients, one row per coefficient
+         * @param aADVIds Global ADV ID of each coefficient
+         * @param aRadius Filter radius in physical units
+         * @param aPositionOfId Position of each global ADV ID in the full ADV vector
+         * @return Number of nonzero filter weights added
+         */
+        uint add_adv_filter_rows(
+                const Matrix< DDRMat >& aCoordinates,
+                const Vector< sint >&   aADVIds,
+                real                    aRadius,
+                const ADV_Position_Map& aPositionOfId );
 
         static void communicate_missing_owned_coefficients(
                 mtk::Mesh_Pair&  aMeshPair,

@@ -26,15 +26,15 @@ namespace moris::gen
         sol::Dist_Vector* mSharedNodalValues = nullptr;
 
     public:
-        /**
-         * Constructor where ADVs are added based on an input field and a B-spline mesh.
-         *
-         * @param aOwnedADVs Pointer to the owned distributed ADVs
-         * @param aSharedADVIds All owned and shared ADV IDs for this B-spline field
-         * @param aADVOffsetID Offset in the owned ADV IDs for pulling ADV IDs
-         * @param aMeshPair The mesh pair where the discretization information can be obtained
-         * @param aField Field for initializing the B-spline level set discretization
-         */
+      /**
+       * Constructor where ADVs are added based on an input field and a B-spline mesh.
+       *
+       * @param aOwnedADVs Pointer to the owned distributed ADVs
+       * @param aSharedADVIds All owned and shared ADV IDs for this B-spline field
+       * @param aADVOffsetID Offset in the owned ADV IDs for pulling ADV IDs
+       * @param aMeshPair The mesh pair where the discretization information can be obtained
+       * @param aField Field for initializing the B-spline level set discretization
+       */
       BSpline_Field(
               const mtk::Mesh_Pair&           aMeshPair,
               sol::Dist_Vector*               aOwnedADVs,
@@ -55,6 +55,19 @@ namespace moris::gen
        * Destructor
        */
       ~BSpline_Field() override;
+
+      /**
+       * Greville coordinates of this field's B-spline coefficients and their global ADV IDs, in local coefficient
+       * order. The coordinate fields x, y (, z) are mapped NODE -> BSPLINE with this field's own mapper; B-splines
+       * reproduce linear functions, so the mapped coefficients are the Greville abscissae. Used by the geometry
+       * engine's ADV filter (adv_filter_radius).
+       *
+       * @param aCoordinates Coordinates, one row per coefficient
+       * @param aADVIds Global ADV ID of each coefficient
+       */
+      void get_coefficient_coordinates(
+              Matrix< DDRMat >& aCoordinates,
+              Vector< sint >&   aADVIds );
 
       /**
        * Given a node index, returns the field value.

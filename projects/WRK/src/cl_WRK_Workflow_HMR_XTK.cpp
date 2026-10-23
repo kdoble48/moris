@@ -393,6 +393,10 @@ namespace moris::wrk
 
             if ( tOptIter > 0 and tOptIter % tReinitFreq == 0 )
             {
+                // remeshing rebuilds the B-spline basis, but the optimizer's ADVs are the unfiltered variables psi of
+                // the old basis; there is no mapping of psi to the new basis
+                MORIS_ERROR( not mPerformerManager->mGENPerformer( 0 )->has_adv_filter(),
+                        "Workflow_HMR_XTK: remeshing during the optimization is not supported with adv_filter_radius > 0" );
 
                 // allocate auxiliary arrays
                 Vector< real >  tADVs;
@@ -529,6 +533,13 @@ namespace moris::wrk
                         MORIS_LOG_INFO( "Initializing design as SDF on first iteration (sdf_initialize_at_start)" );
                     }
                     Tracer tTracer( "GEN", "Levelset", "Interface-SDF-Reinitialize" );
+
+                    // the redistance writes B-spline coefficients into the ADV vector, but with an ADV filter the ADVs are the
+                    // unfiltered variables psi; writing the redistanced field into psi would filter it again at every
+                    // redistance, which acts as a curvature flow and moves the interface
+                    MORIS_ERROR( not mPerformerManager->mGENPerformer( 0 )->has_adv_filter(),
+                            "Workflow_HMR_XTK: in-place SDF reinitialization is not supported with adv_filter_radius > 0; "
+                            "turn the redistance off (reinitialization_frequency) or the filter off" );
 
                     // Get XTK cut integration mesh
                     xtk::Cut_Integration_Mesh* tCutMeshPtr = tXTKPerformer->get_cut_integration_mesh();

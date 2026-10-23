@@ -274,6 +274,13 @@ namespace moris::gen
         real get_discretization_lower_bound() override;
 
         /**
+         * Radius of the Kreissl-Maute linear filter of this level set's B-spline coefficients (adv_filter_radius)
+         *
+         * @return Filter radius in physical units (0 = off)
+         */
+        real get_adv_filter_radius() override;
+
+        /**
          * Get the upper bound for a discretized field.
          *
          * @return Upper bound

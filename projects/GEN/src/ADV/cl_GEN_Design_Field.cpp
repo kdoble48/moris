@@ -28,6 +28,7 @@ namespace moris::gen
             , mDiscretizationUpperBound( aParameterList.get< real >( "discretization_upper_bound" ) )
             , mUseMultilinearInterpolation( aParameterList.get< bool >( "use_multilinear_interpolation" ) )
             , mUseCellOrderIntersection( aParameterList.exists( "use_cell_order_intersection" ) and aParameterList.get< bool >( "use_cell_order_intersection" ) )
+            , mADVFilterRadius( aParameterList.exists( "adv_filter_radius" ) ? aParameterList.get< real >( "adv_filter_radius" ) : 0.0 )
             , mDiscretizationMode( aParameterList.exists( "discretization_mode" ) ? aParameterList.get< std::string >( "discretization_mode" ) : "replace" )
     {
         // (the keys are read only if present, so that decks compiled against older PRM headers keep working)
