@@ -124,25 +124,37 @@ namespace moris::fem
         MORIS_ASSERT( tFILeader != nullptr and tFIFollower != nullptr,
                 "IQI_Jump_Dof::compute_QI - field interpolator does not exist." );
 
+        // number of field components
+        uint tNumComps = tFILeader->get_number_of_fields();
+
         // evaluate spatial derivative of dof
         if ( mSpatialDerivativeOrder > 0 )
         {
+            // component: vectorial_field_index, or 0 for a scalar field
+            uint tIndex = this->get_component_index( tNumComps, tNumComps == 1 ? 0 : -1 );
+
             const Matrix< DDRMat >& tSpatialGradient = tFILeader->gradx( mSpatialDerivativeOrder ) - tFIFollower->gradx( mSpatialDerivativeOrder );
 
-            aMat = { tSpatialGradient( mSpatialDerivativeDirection, mIQITypeIndex ) };
+            aMat = { tSpatialGradient( mSpatialDerivativeDirection, tIndex ) };
         }
 
         // evaluate time derivative of dof
         else if ( mTimeDerivativeOrder > 0 )
         {
+            // component: vectorial_field_index, or 0 for a scalar field
+            uint tIndex = this->get_component_index( tNumComps, tNumComps == 1 ? 0 : -1 );
+
             const Matrix< DDRMat >& tTemporalGradient = tFILeader->gradt( mTimeDerivativeOrder ) - tFIFollower->gradt( mTimeDerivativeOrder );
 
-            aMat = { tTemporalGradient( mIQITypeIndex ) };
+            aMat = { tTemporalGradient( tIndex ) };
         }
-        else if ( mQuantityDofType.size() > 1 && mIQITypeIndex != -1 )
+        else if ( mIQITypeIndex != -1 )
         {
+            // component: vectorial_field_index
+            uint tIndex = this->get_component_index( tNumComps );
+
             // Jump
-            moris::real tJump = tFILeader->val()( mIQITypeIndex ) - tFIFollower->val()( mIQITypeIndex );
+            moris::real tJump = tFILeader->val()( tIndex ) - tFIFollower->val()( tIndex );
 
             // evaluate DOF value
             aMat = { tJump * tJump };

@@ -234,6 +234,30 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
+    uint
+    IQI::get_component_index(
+            uint aNumComponents,
+            sint aDefault ) const
+    {
+        // use the set index, or the default if unset
+        sint tIndex = mIQITypeIndex != -1 ? mIQITypeIndex : aDefault;
+
+        MORIS_ERROR( tIndex != -1,
+                "IQI::get_component_index - IQI %s: vectorial_field_index must be set (%d components).",
+                mName.c_str(),
+                aNumComponents );
+
+        MORIS_ERROR( tIndex >= 0 && tIndex < (sint)aNumComponents,
+                "IQI::get_component_index - IQI %s: vectorial_field_index %d out of range [0,%d).",
+                mName.c_str(),
+                tIndex,
+                aNumComponents );
+
+        return tIndex;
+    }
+
+    //------------------------------------------------------------------------------
+
     void
     IQI::set_reference_value( real aReferenceValue )
     {

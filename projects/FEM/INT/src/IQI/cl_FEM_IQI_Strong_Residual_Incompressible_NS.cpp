@@ -47,25 +47,6 @@ namespace moris::fem
     void
     IQI_Strong_Residual_Incompressible_NS::compute_QI( Matrix< DDRMat >& aQI )
     {
-        // check if index was set
-        if ( mQuantityDofType.size() > 1 )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_Strong_Residual_Incompressible_NS::compute_QI - mIQITypeIndex not set." );
-        }
-        else
-        {
-            mIQITypeIndex = 0;
-        }
-
-        // check if IQI should be computed
-        if ( mIQITypeIndex < 0 )
-        {
-            aQI = MORIS_REAL_MAX;
-
-            return;
-        }
-
         // get the velocity and pressure FIs
         Field_Interpolator* tVelocityFI =
                 mLeaderFIManager->get_field_interpolators_for_type( MSI::Dof_Type::VX );
@@ -101,11 +82,10 @@ namespace moris::fem
         // get the density value
         real tDensity = tDensityProp->val()( 0 );
 
-        // check for proper value of IQITypeIndex
-        MORIS_ASSERT( (uint)mIQITypeIndex <= tVelocityFI->get_space_dim(),
-                "IQI_Strong_Residual_Incompressible_NS::compute_QI - incorrect vectorial index." );
+        // get the requested component (vectorial_field_index, default 0); a set index is never reset
+        uint tIndex = this->get_component_index( tVelocityFI->get_space_dim() + 1 );
 
-        if ( mIQITypeIndex == 0 )
+        if ( tIndex == 0 )
         {
             // compute the residual strong form of continuity equation
             aQI = tVelocityFI->div();
@@ -158,7 +138,7 @@ namespace moris::fem
                 }
             }
 
-            aQI = tRes( mIQITypeIndex - 1 );
+            aQI = tRes( tIndex - 1 );
         }
     }
 

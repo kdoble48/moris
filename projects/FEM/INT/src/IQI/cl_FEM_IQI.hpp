@@ -428,6 +428,19 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * get the component selected by vectorial_field_index (mIQITypeIndex)
+         * a set index is always used as given; it is never overwritten by a default
+         * @param[ in ] aNumComponents number of components the index selects from
+         * @param[ in ] aDefault       index used when vectorial_field_index is unset (-1);
+         *                             -1 makes an unset index an error
+         * @return the component index, in [ 0, aNumComponents )
+         */
+        uint get_component_index(
+                uint aNumComponents,
+                sint aDefault = 0 ) const;
+
+        //------------------------------------------------------------------------------
+        /**
          * set normal
          * @param[ in ] aNormal normal vector
          */
