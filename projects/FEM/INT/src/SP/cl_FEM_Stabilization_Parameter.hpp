@@ -524,6 +524,33 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
         /**
+         * true if the derivative of the stabilization parameter value wrt the evaluation point location (eval_dSPdx)
+         * is available, with the cluster measures held fixed (their geometric sensitivity is added separately).
+         * Base class: false, the analytical geometric sensitivities of an IWG using this SP fall back to FD.
+         */
+        virtual bool
+        has_spatial_derivatives()
+        {
+            return false;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * evaluate the derivative of the stabilization parameter value wrt the evaluation point location x_k,
+         * same layout as val(); precondition: has_spatial_derivatives()
+         * @param[ in ]  aDirection spatial direction k
+         * @param[ out ] adSPdx     d SP / d x_k
+         */
+        virtual void
+        eval_dSPdx(
+                uint              aDirection,
+                Matrix< DDRMat > &adSPdx )
+        {
+            MORIS_ERROR( false, " Stabilization_Parameter::eval_dSPdx - Not implemented for base class. " );
+        }
+
+        //------------------------------------------------------------------------------
+        /**
          * get the penalty parameter derivative wrt leader dof
          * @param[ in ]  aDofTypes      a dof type wrt which the derivative is evaluated
          * @param[ out ] mdPPdLeaderDof penalty parameter derivative wrt leader dof

@@ -166,6 +166,17 @@ namespace moris::fem
                 Field_Interpolator_Manager* aFieldInterpolatorManager );
 
         //------------------------------------------------------------------------------
+        /**
+         * get field interpolator manager
+         * @param[ out ] mFIManager a field interpolator manager pointer
+         */
+        Field_Interpolator_Manager*
+        get_field_interpolator_manager() const
+        {
+            return mFIManager;
+        }
+
+        //------------------------------------------------------------------------------
         /*
          * set member set pointer
          * @param[ in ] aSetPointer a FEM set pointer
@@ -233,6 +244,17 @@ namespace moris::fem
         get_val_function() const
         {
             return mValFunction;
+        }
+
+        //------------------------------------------------------------------------------
+        /**
+         * true if a value function was set, false if the property uses the default constant
+         * value function ( Property_Function_Constant: the value is the first parameter )
+         */
+        bool
+        has_val_function() const
+        {
+            return mSetValFunction;
         }
 
         //------------------------------------------------------------------------------

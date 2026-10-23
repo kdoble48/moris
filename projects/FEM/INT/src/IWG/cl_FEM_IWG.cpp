@@ -3036,6 +3036,20 @@ namespace moris::fem
             Vector< Matrix< DDRMat > > tdRdn;
             this->compute_dRdx_geometry_integrand( aWStar, tdRdx, tdRdn );
 
+            // spatial variation of a thickness that scales the whole residual contribution: R ( dt/dx_k ) / t
+            const std::shared_ptr< Property > tPropThickness = this->get_geometric_sensitivity_thickness_property();
+            if ( tPropThickness != nullptr && tPropThickness->check_space_dependency() )
+            {
+                const real tThickness = tPropThickness->val()( 0 );
+
+                Matrix< DDRMat > tdThicknessdx;
+                for ( uint iDir = 0; iDir < tdRdx.size(); iDir++ )
+                {
+                    eval_property_space_derivative( tPropThickness, iDir, tdThicknessdx );
+                    tdRdx( iDir ) += tResidual * ( tdThicknessdx( 0 ) / tThickness );
+                }
+            }
+
             // relative derivative of the integration measure wrt the IG vertex coordinates
             Matrix< DDRMat > tdMeasure;
             eval_ig_measure_derivatives( tIGGI, tIsSide, tdMeasure );

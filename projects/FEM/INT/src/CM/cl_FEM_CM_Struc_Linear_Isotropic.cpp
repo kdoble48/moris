@@ -9,6 +9,7 @@
  */
 
 #include "cl_FEM_CM_Struc_Linear_Isotropic.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 
 #include "fn_trans.hpp"
@@ -240,6 +241,124 @@ namespace moris::fem
             }
         }
         return tEPrime;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    CM_Struc_Linear_Isotropic::has_spatial_constitutive_derivatives()
+    {
+        // the Young's modulus and the Poisson ratio may vary in space with a known derivative
+        if ( !has_known_spatial_variation( mPropEMod ) || !has_known_spatial_variation( mPropPoisson ) )
+        {
+            return false;
+        }
+
+        // the remaining properties (thermal, eigen strain, rotation axis) must be constant
+        for ( const std::shared_ptr< Property >& tProperty : mProperties )
+        {
+            if ( tProperty != mPropEMod && tProperty != mPropPoisson && !is_spatially_constant( tProperty ) )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    CM_Struc_Linear_Isotropic::eval_dConstdx(
+            uint              aDirection,
+            Matrix< DDRMat >& adConstdx )
+    {
+        // constitutive matrix
+        const Matrix< DDRMat >& tConst = this->constitutive();
+
+        adConstdx.set_size( tConst.n_rows(), tConst.n_cols(), 0.0 );
+
+        // spatial derivatives of the Young's modulus and the Poisson ratio
+        Matrix< DDRMat > tdEdx;
+        eval_property_space_derivative( mPropEMod, aDirection, tdEdx );
+
+        Matrix< DDRMat > tdNudx;
+        eval_property_space_derivative( mPropPoisson, aDirection, tdNudx );
+
+        // C is linear in E
+        if ( tdEdx( 0 ) != 0.0 )
+        {
+            adConstdx += tConst * ( tdEdx( 0 ) / mPropEMod->val()( 0 ) );
+        }
+
+        // Poisson ratio contribution
+        if ( tdNudx( 0 ) != 0.0 )
+        {
+            Matrix< DDRMat > tdConstdNu;
+            this->eval_dConstdNu( tdConstdNu );
+
+            adConstdx += tdConstdNu * tdNudx( 0 );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    CM_Struc_Linear_Isotropic::eval_dConstdNu( Matrix< DDRMat >& adConstdNu )
+    {
+        MORIS_ERROR( mPlaneType != Model_Type::AXISYMMETRIC,
+                "CM_Struc_Linear_Isotropic::eval_dConstdNu - axisymmetric model not supported." );
+
+        // constitutive matrix, Young's modulus and Poisson ratio
+        const Matrix< DDRMat >& tConst = this->constitutive();
+
+        const real tEmod = mPropEMod->val()( 0 );
+        const real tNu   = mPropPoisson->val()( 0 );
+
+        // deviatoric tensors: C = E / ( c ( 1 + nu ) ) * const, so dC/dnu = - C / ( 1 + nu )
+        if ( mTensorType == Model_Type::DEVIATORIC )
+        {
+            adConstdNu = tConst * ( -1.0 / ( 1.0 + tNu ) );
+            return;
+        }
+
+        // full tensors: C = E ( a(nu) on the normal diagonal, b(nu) off the normal diagonal, s(nu) on the shear diagonal )
+        real tdA;
+        real tdB;
+        if ( mSpaceDim == 2 && mPlaneType == Model_Type::PLANE_STRESS )
+        {
+            // a = 1 / ( 1 - nu^2 ), b = nu / ( 1 - nu^2 )
+            const real tDen = ( 1.0 - tNu * tNu ) * ( 1.0 - tNu * tNu );
+
+            tdA = 2.0 * tNu / tDen;
+            tdB = ( 1.0 + tNu * tNu ) / tDen;
+        }
+        else
+        {
+            // plane strain and 3D: a = ( 1 - nu ) / D, b = nu / D, D = ( 1 + nu ) ( 1 - 2 nu )
+            const real tD   = ( 1.0 + tNu ) * ( 1.0 - 2.0 * tNu );
+            const real tDen = tD * tD;
+
+            tdA = 2.0 * tNu * ( 2.0 - tNu ) / tDen;
+            tdB = ( 1.0 + 2.0 * tNu * tNu ) / tDen;
+        }
+
+        // s = 1 / ( 2 ( 1 + nu ) ) for all full tensors
+        const real tdS = -0.5 / ( ( 1.0 + tNu ) * ( 1.0 + tNu ) );
+
+        adConstdNu.set_size( tConst.n_rows(), tConst.n_cols(), 0.0 );
+
+        for ( uint iRow = 0; iRow < mNumNormalStress; iRow++ )
+        {
+            for ( uint iCol = 0; iCol < mNumNormalStress; iCol++ )
+            {
+                adConstdNu( iRow, iCol ) = tEmod * ( iRow == iCol ? tdA : tdB );
+            }
+        }
+
+        for ( uint iRow = mNumNormalStress; iRow < tConst.n_rows(); iRow++ )
+        {
+            adConstdNu( iRow, iRow ) = tEmod * tdS;
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------

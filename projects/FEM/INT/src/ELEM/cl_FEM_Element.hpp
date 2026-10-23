@@ -219,13 +219,16 @@ namespace moris::fem
             {
                 m_compute_dRdp  = &Element::select_dRdp_FD;
                 m_compute_dQIdp = &Element::select_dQIdp_FD;
-
-                // get finite difference scheme type
-                mSAFDScheme = mSet->get_finite_difference_scheme_for_sensitivity_analysis();
-
-                // get the finite difference perturbation size
-                mSAFDPerturbation = mSet->get_finite_difference_perturbation_size();
             }
+
+            // finite difference scheme and perturbation size, also used by the analytical path for the material pdvs,
+            // the FD geometry fallback and the cluster measures (mixed mode)
+
+            // get finite difference scheme type
+            mSAFDScheme = mSet->get_finite_difference_scheme_for_sensitivity_analysis();
+
+            // get the finite difference perturbation size
+            mSAFDPerturbation = mSet->get_finite_difference_perturbation_size();
         }
 
         //------------------------------------------------------------------------------

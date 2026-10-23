@@ -232,9 +232,26 @@ namespace moris::fem
                     mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) );
 
             // the spatial derivatives are implemented for the linear structural CMs
-            const CM_Struc_Linear* tCMStrucLinear = dynamic_cast< const CM_Struc_Linear* >( tCMElasticity.get() );
+            CM_Struc_Linear* tCMStrucLinear = dynamic_cast< CM_Struc_Linear* >( tCMElasticity.get() );
 
-            return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+            if ( tCMStrucLinear == nullptr || !tCMStrucLinear->has_spatial_strain_derivatives() )
+            {
+                return false;
+            }
+
+            // the spatial variation of the CM and IWG properties must be known (MB-062)
+            return tCMStrucLinear->has_spatial_constitutive_derivatives()                                             //
+                && has_known_spatial_variation( mLeaderProp( static_cast< uint >( IWG_Property_Type::LOAD ) ) )       //
+                && has_known_spatial_variation( mLeaderProp( static_cast< uint >( IWG_Property_Type::BEDDING ) ) )    //
+                && has_known_spatial_variation_nonzero( mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) ) );
+        }
+
+        //------------------------------------------------------------------------------
+
+        std::shared_ptr< Property >
+        IWG_Isotropic_Struc_Linear_Bulk::get_geometric_sensitivity_thickness_property()
+        {
+            return mLeaderProp( static_cast< uint >( IWG_Property_Type::THICKNESS ) );
         }
 
         //------------------------------------------------------------------------------
@@ -289,12 +306,15 @@ namespace moris::fem
             adRdn.clear();
 
             Matrix< DDRMat > tdBdx;
+            Matrix< DDRMat > tdConstdx;
+            Matrix< DDRMat > tdPropdx;
             Matrix< DDRMat > tNk;
             for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
             {
-                // derivative of the strain-displacement matrix and the flux wrt x_k
+                // derivative of the strain-displacement matrix and the flux wrt x_k: d sigma = C dB u + dC eps
                 tCMElasticity->eval_dTestStraindx( iDir, tdBdx );
-                Matrix< DDRMat > tdFluxdx = tConst * ( tdBdx * tUHat );
+                tCMElasticity->eval_dConstdx( iDir, tdConstdx );
+                Matrix< DDRMat > tdFluxdx = tConst * ( tdBdx * tUHat ) + tdConstdx * tCMElasticity->strain();
 
                 // d/dx_k ( B^T sigma ) = dB^T sigma + B^T C dB u
                 adRdx( iDir ) = aWStar * ( trans( tdBdx ) * tFlux + trans( tTestStrain ) * tdFluxdx );
@@ -306,17 +326,22 @@ namespace moris::fem
                     build_vector_shape_function_matrix( tdNdxk, tNumFields, tNk );
                 }
 
-                // if body load (held fixed in space)
+                // if body load: d/dx_k ( N^T f ) = dN^T f + N^T df/dx_k
                 if ( tPropLoad != nullptr )
                 {
-                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * tPropLoad->val() );
+                    eval_property_space_derivative( tPropLoad, iDir, tdPropdx );
+
+                    adRdx( iDir ) -= aWStar * ( trans( tNk ) * tPropLoad->val() + tDisplacementFI->N_trans() * tdPropdx );
                 }
 
-                // if bedding: d/dx_k ( N^T N u k ) = ( dN^T N + N^T dN ) u k
+                // if bedding: d/dx_k ( N^T N u k ) = ( dN^T N + N^T dN ) u k + N^T N u dk/dx_k
                 if ( tPropBedding != nullptr )
                 {
+                    eval_property_space_derivative( tPropBedding, iDir, tdPropdx );
+
                     adRdx( iDir ) += aWStar * tPropBedding->val()( 0 ) *    //
                                      ( trans( tNk ) * tDisplacementFI->val() + tDisplacementFI->N_trans() * ( tNk * tUHat ) );
+                    adRdx( iDir ) += aWStar * tdPropdx( 0 ) * ( tDisplacementFI->N_trans() * tDisplacementFI->val() );
                 }
             }
         }
