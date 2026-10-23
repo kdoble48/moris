@@ -33,18 +33,11 @@ namespace moris::fem
         const std::shared_ptr< Stabilization_Parameter > &tSP =
                 mStabilizationParam( static_cast< uint >( IQI_Stabilization_Type::STABILIZATION ) );
 
-        // check if index was set
-        if ( mQuantityDofType.size() > 1 )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1, "IQI_Stabilization::compute_QI - mIQITypeIndex not set." );
-        }
-        else
-        {
-            mIQITypeIndex = 0;
-        }
+        // get the requested SP value (vectorial_field_index, default 0), independent of dof_quantity
+        uint tIndex = this->get_component_index( tSP->val().numel() );
 
         // evaluate the QI
-        aQI = { { tSP->val()( mIQITypeIndex ) } };
+        aQI = { { tSP->val()( tIndex ) } };
     }
 
     //------------------------------------------------------------------------------
@@ -58,18 +51,11 @@ namespace moris::fem
         const std::shared_ptr< Stabilization_Parameter > &tSP =
                 mStabilizationParam( static_cast< uint >( IQI_Stabilization_Type::STABILIZATION ) );
 
-        // check if index was set
-        if ( mQuantityDofType.size() > 1 )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1, "IQI_Stabilization::compute_QI - mIQITypeIndex not set." );
-        }
-        else
-        {
-            mIQITypeIndex = 0;
-        }
+        // get the requested SP value (vectorial_field_index, default 0), independent of dof_quantity
+        uint tIndex = this->get_component_index( tSP->val().numel() );
 
         // evaluate the QI
-        mSet->get_QI()( tQIIndex ) += { { aWStar * tSP->val()( mIQITypeIndex ) } };
+        mSet->get_QI()( tQIIndex ) += { { aWStar * tSP->val()( tIndex ) } };
     }
 
     //------------------------------------------------------------------------------
@@ -100,10 +86,13 @@ namespace moris::fem
             // Dof dependency
             if ( tSP != nullptr && tSP->check_dof_dependency( tDofType ) )
             {
-                // compute dQIdu
+                // get the requested SP value (vectorial_field_index, default 0)
+                uint tIndex = this->get_component_index( tSP->val().numel() );
+
+                // compute dQIdu of the requested SP value
                 mSet->get_residual()( tQIIndex )(
                         { tLeaderDepStartIndex, tLeaderDepStopIndex },
-                        { 0, 0 } ) += aWStar * trans( tSP->dSPdLeaderDOF( tDofType ) );
+                        { 0, 0 } ) += aWStar * trans( tSP->dSPdLeaderDOF( tDofType ).get_row( tIndex ) );
             }
         }
     }
@@ -121,8 +110,11 @@ namespace moris::fem
         // Dof dependency
         if ( tSP != nullptr && tSP->check_dof_dependency( aDofType ) )
         {
-            // compute dQIdu
-            adQIdu = trans( tSP->dSPdLeaderDOF( aDofType ) );
+            // get the requested SP value (vectorial_field_index, default 0)
+            uint tIndex = this->get_component_index( tSP->val().numel() );
+
+            // compute dQIdu of the requested SP value
+            adQIdu = trans( tSP->dSPdLeaderDOF( aDofType ).get_row( tIndex ) );
         }
     }
 

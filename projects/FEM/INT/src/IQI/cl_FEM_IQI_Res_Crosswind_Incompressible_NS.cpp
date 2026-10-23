@@ -62,9 +62,8 @@ namespace moris::fem
         // get space dimension
         uint tSpaceDim = tVelocityFI->get_number_of_fields();
 
-        // check for proper value of IQITypeIndex
-        MORIS_ASSERT( (uint)mIQITypeIndex < tSpaceDim,
-                "IQI_SP_Crosswind_Incompressible_NS::compute_QI - incorrect vectorial index." );
+        // get the requested component (vectorial_field_index, default 0)
+        uint tIndex = this->get_component_index( tSpaceDim );
 
         // get the incompressible fluid constitutive model
         const std::shared_ptr< Constitutive_Model >& tIncFluidCM =
@@ -119,17 +118,17 @@ namespace moris::fem
                 tcgradxv );
 
         // compute the norm of the gradient of v in direction
-        real tNormDir = std::max( norm( tVelocityFI->gradx( 1 )( { 0, tSpaceDim - 1 }, { mIQITypeIndex, mIQITypeIndex } ) ), tEpsilon );
+        real tNormDir = std::max( norm( tVelocityFI->gradx( 1 )( { 0, tSpaceDim - 1 }, { tIndex, tIndex } ) ), tEpsilon );
 
         // compute the abs of the strong form of the residual
-        real tRAbsDir = std::max( std::abs( tRM( mIQITypeIndex ) ), tEpsilon );
+        real tRAbsDir = std::max( std::abs( tRM( tIndex ) ), tEpsilon );
 
         // compute full crosswind stabilization parameter value
         real tCrosswindDir = std::max( tSPValue * tRAbsDir / tNormDir - tDynViscosityProp->val()( 0 ), 0.0 );
 
         // add contribution to residual per space direction
         aQI = norm( trans( tVelocityFI->dnNdxn( 1 ) ) * tCrosswindDir *    //
-                    tcgradxv( { mIQITypeIndex * tSpaceDim, ( mIQITypeIndex + 1 ) * tSpaceDim - 1 }, { 0, 0 } ) );
+                    tcgradxv( { tIndex * tSpaceDim, ( tIndex + 1 ) * tSpaceDim - 1 }, { 0, 0 } ) );
     }
 
     //------------------------------------------------------------------------------
