@@ -253,7 +253,7 @@ namespace moris::gen
          *
          * @return Determining ADV IDs of this field's coefficients
          */
-        Vector< sint > get_coefficient_adv_ids()
+        virtual Vector< sint > get_coefficient_adv_ids()
         {
             return mADVHandler.get_determining_adv_ids();
         }
@@ -299,7 +299,7 @@ namespace moris::gen
          *
          * @return if this manager has ADVs
          */
-        bool has_advs();
+        virtual bool has_advs();
 
         /**
          * Updates the potential dependencies of this field. By default does nothing.

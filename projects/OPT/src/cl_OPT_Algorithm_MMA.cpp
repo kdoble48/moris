@@ -12,6 +12,7 @@
  * criteria evaluation, so MORIS owns the optimization loop.
  */
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include <string>
@@ -41,6 +42,42 @@ namespace moris::opt
         mReinitHook           = aParameterList.get< bool >( "reinit_in_place" );
         mReinitOnAcceptOnly   = aParameterList.get< bool >( "reinit_on_accept_only" );
         mDebugInnerTrials     = aParameterList.get< bool >( "debug_inner_trials" );
+
+        mMoveAdapt  = aParameterList.get< bool >( "move_adapt" );
+        mMoveShrink = aParameterList.get< real >( "move_adapt_shrink" );
+        mMoveGrow   = aParameterList.get< real >( "move_adapt_grow" );
+        mMoveMin    = aParameterList.get< real >( "move_adapt_min" );
+        mMoveMax    = aParameterList.get< real >( "move_adapt_max" );
+        mMoveInit   = aParameterList.get< real >( "move_adapt_init" );
+        mMoveGate   = aParameterList.get< bool >( "move_adapt_gate" );
+
+        mGuardRise   = aParameterList.get< real >( "move_guard_rise" );
+        mGuardFeas   = aParameterList.get< real >( "move_guard_feas" );
+        mGuardShrink = aParameterList.get< real >( "move_guard_shrink" );
+        mGuardMaxBt  = aParameterList.get< sint >( "move_guard_max_backtracks" );
+        MORIS_ERROR( mGuardRise < 0.0 || ( mGuardShrink > 0.0 && mGuardShrink < 1.0 && mGuardMaxBt >= 1 ),
+                "Native MMA: move_guard needs 0 < move_guard_shrink < 1 and move_guard_max_backtracks >= 1." );
+        if ( mGuardRise >= 0.0 )
+        {
+            MORIS_LOG_INFO( "Native MMA: rise guard ON (reject a step that raises the objective by > %.3g from a design "
+                            "feasible to %.3g; box x%.3g per rejection, max %d)",
+                    mGuardRise, mGuardFeas, mGuardShrink, (int)mGuardMaxBt );
+        }
+        if ( mMoveMax < 0.0 ) mMoveMax = mStepSize;
+        if ( mMoveInit < 0.0 ) mMoveInit = mStepSize;
+
+        MORIS_ERROR( !mMoveAdapt || ( mMoveShrink > 0.0 && mMoveShrink <= 1.0 && mMoveGrow >= 1.0 ),
+                "Native MMA: move_adapt needs 0 < move_adapt_shrink <= 1 <= move_adapt_grow." );
+        MORIS_ERROR( !mMoveAdapt || ( mMoveMin > 0.0 && mMoveMin <= mMoveMax ),
+                "Native MMA: move_adapt needs 0 < move_adapt_min <= move_adapt_max." );
+
+        if ( mMoveAdapt )
+        {
+            MORIS_LOG_INFO( "Native MMA: adaptive move limit ON (init %.4g, shrink %.3g on a sign flip, grow %.3g, "
+                            "clamp [%.3g, %.3g] of range, %s)",
+                    mMoveInit, mMoveShrink, mMoveGrow, mMoveMin, mMoveMax,
+                    mMoveGate ? "gated on move-bound hits" : "ungated" );
+        }
 
         MORIS_LOG_INFO( "Native MMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f%s%s%s",
                 (int)mMaxIterations, mStepSize, mPenalty, mReinitHook ? ", in-place reinit hook ON" : "",
@@ -463,6 +500,59 @@ namespace moris::opt
             a[ j ] = 0.0;
             d[ j ] = 0.0;
         }
+
+        // per-ADV move limit (fraction of range); without move_adapt every entry stays mStepSize
+        mMove.assign( mNumVar, mMoveAdapt ? mn( mx( mMoveInit, mMoveMin ), mMoveMax ) : mStepSize );
+        mMoveHit.assign( mNumVar, 0 );
+        mMoveHitPrev.assign( mNumVar, 0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::guard_rejects( real aF0, real aF0New, const std::vector< double >& aCon, real aRise, real aFeas )
+    {
+        if ( aRise < 0.0 ) return false;
+        for ( double tC : aCon )
+            if ( !( tC <= aFeas ) ) return false;
+        return aF0New > aF0 + aRise * std::abs( aF0 );
+    }
+
+    //------------------------------------------------------------------------------
+
+    int
+    Algorithm_MMA::adapt_move_limits(
+            std::vector< double >&       aMove,
+            const std::vector< double >& aX,
+            const std::vector< double >& aXOld1,
+            const std::vector< double >& aXOld2,
+            const std::vector< double >& aRange,
+            const std::vector< int >&    aHit,
+            real                         aShrink,
+            real                         aGrow,
+            real                         aMin,
+            real                         aMax )
+    {
+        int tShrunk = 0;
+        for ( std::size_t i = 0; i < aMove.size(); ++i )
+        {
+            if ( aHit[ i ] )
+            {
+                double tD1   = aX[ i ] - aXOld1[ i ];
+                double tProd = tD1 * ( aXOld1[ i ] - aXOld2[ i ] );
+                if ( tProd < 0.0 )
+                {
+                    aMove[ i ] = aShrink * std::min( aMove[ i ], std::abs( tD1 ) / aRange[ i ] );
+                    tShrunk++;
+                }
+                else if ( tProd > 0.0 )
+                {
+                    aMove[ i ] *= aGrow;
+                }
+            }
+            aMove[ i ] = std::min( std::max( aMove[ i ], (double)aMin ), (double)aMax );
+        }
+        return tShrunk;
     }
 
     //------------------------------------------------------------------------------
@@ -535,9 +625,10 @@ namespace moris::opt
     Algorithm_MMA::gcmmasub( int iter )
     {
         // move limit honors mMoveScale (shrunk by the NaN guard while backtracking off a bad step)
-        const real tStep = mStepSize * mMoveScale;
         for ( int i = 0; i < mNumVar; ++i )
         {
+            const real tStep = mMove[ i ] * mMoveScale;
+
             alfa[ i ] = mx( xmin[ i ], low[ i ] + 0.1 * ( xval[ i ] - low[ i ] ) );
             alfa[ i ] = mx( alfa[ i ], xval[ i ] - tStep * ( xmax[ i ] - xmin[ i ] ) );
 
@@ -1189,6 +1280,52 @@ namespace moris::opt
                 return istop;
             }
 
+            // rise guard: a feasible design whose trial step raises the objective sharply has most likely severed a
+            // member; reject it and re-solve in a smaller box (finite trials only). Guard trials are labelled
+            // -101, -102, ... in the inner-trial diagnostics. A guard trial that cannot be made finite fails the
+            // iteration like any other (restore the accepted state, hold the design)
+            if ( tTrialStatus == Trial_Status::finite )
+            {
+                int tGuardBt = 0;
+                while ( tGuardBt < mGuardMaxBt && guard_rejects( f0val, f0valnew, fval, mGuardRise, mGuardFeas ) )
+                {
+                    tGuardBt++;
+                    MORIS_LOG_INFO( "Native MMA iter %d: rise guard rejects the step (objective %.6e -> %.6e); "
+                                    "move box x%.4g (backtrack %d/%d).",
+                            (int)iter, f0val / mObjScale, f0valnew / mObjScale, mMoveScale * mGuardShrink,
+                            tGuardBt, (int)mGuardMaxBt );
+                    mMoveScale *= mGuardShrink;
+                    this->gcmmasub( iter );
+                    this->trial_func( iter, -100 - tGuardBt, nfunc );
+
+                    if ( mProblem->restart_optimization() )
+                    {
+                        MORIS_LOG_INFO( "Native MMA iter %d: optimization restart requested during rise guard; exiting solve loop.", (int)iter );
+                        return istop;
+                    }
+
+                    tTrialStatus = this->backtrack_non_finite( iter, nfunc );
+                    if ( tTrialStatus == Trial_Status::restart )
+                    {
+                        return istop;
+                    }
+                    if ( tTrialStatus == Trial_Status::failed )
+                    {
+                        break;
+                    }
+                }
+                if ( tTrialStatus == Trial_Status::finite && tGuardBt > 0 )
+                {
+                    if ( mMoveAdapt )
+                    {
+                        // the reduced box persists in the per-ADV limits (regrown by agreement)
+                        for ( int i = 0; i < mNumVar; ++i ) mMove[ i ] = mx( mMoveMin, mMove[ i ] * mMoveScale );
+                    }
+                    MORIS_LOG_INFO( "Native MMA iter %d: rise guard accepted after %d backtrack(s): objective %.6e",
+                            (int)iter, tGuardBt, f0valnew / mObjScale );
+                }
+            }
+
             bool tConservative = tTrialStatus == Trial_Status::finite && this->is_conservative();
 
             int innerit = 0;
@@ -1352,6 +1489,42 @@ namespace moris::opt
 
             this->grad( xval.data() );
             nsens++;
+
+            // oscillation-adaptive move limit: needs two increments, i.e. from the second accepted step on
+            if ( mMoveAdapt )
+            {
+                // did the accepted step of each ADV sit on its move bound (alfa/beta of the last subproblem)?
+                // An ADV bound (xmin/xmax) or an interior step does not count.
+                int tHits = 0;
+                for ( int i = 0; i < mNumVar; ++i )
+                {
+                    const double tTol = 1.0e-3 * ( beta[ i ] - alfa[ i ] ) + 1.0e-12 * ( xmax[ i ] - xmin[ i ] );
+                    const bool   tLo  = xmma[ i ] <= alfa[ i ] + tTol && alfa[ i ] > xmin[ i ];
+                    const bool   tHi  = xmma[ i ] >= beta[ i ] - tTol && beta[ i ] < xmax[ i ];
+                    mMoveHitPrev[ i ] = mMoveHit[ i ];
+                    mMoveHit[ i ]     = ( tLo || tHi ) ? 1 : 0;
+                    tHits += mMoveHit[ i ];
+                }
+
+                if ( iter >= 2 )
+                {
+                    std::vector< double > tRange( mNumVar );
+                    std::vector< int >    tGate( mNumVar, 1 );
+                    for ( int i = 0; i < mNumVar; ++i )
+                    {
+                        tRange[ i ] = xmax[ i ] - xmin[ i ];
+                        if ( mMoveGate ) tGate[ i ] = mMoveHit[ i ] || mMoveHitPrev[ i ];
+                    }
+                    int tShrunk = adapt_move_limits( mMove, xval, xold1, xold2, tRange, tGate,
+                            mMoveShrink, mMoveGrow, mMoveMin, mMoveMax );
+
+                    std::vector< double > tSorted( mMove );
+                    std::nth_element( tSorted.begin(), tSorted.begin() + mNumVar / 2, tSorted.end() );
+                    const auto tMinMax = std::minmax_element( mMove.begin(), mMove.end() );
+                    MORIS_LOG_INFO( "MMA move adapt iter %d: hits %d shrunk %d of %d | move min=%.4e median=%.4e max=%.4e",
+                            (int)iter, tHits, tShrunk, mNumVar, *tMinMax.first, tSorted[ mNumVar / 2 ], *tMinMax.second );
+                }
+            }
 
             istop = this->kktcheck( tKKTrefres );
         }

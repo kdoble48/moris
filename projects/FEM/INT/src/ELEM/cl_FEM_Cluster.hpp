@@ -68,9 +68,10 @@ namespace moris::fem
         // element type
         Element_Type mElementType = Element_Type::END_ELEMENT_TYPE;
 
-        // acceptable volume error
-        // IG cells with a relative volume below this threshold are ignored
-        const real mVolumeError = 1e-6;
+        // acceptable volume error: IG cells of a cluster whose summed relative volume stays below this threshold are
+        // dropped from residual and IQIs. 0 keeps every IG cell: dropping cost ~1e-6 relative accuracy in an immersed
+        // linear patch test and did not improve conditioning or robustness there (cells down to 1e-34 volume).
+        const real mVolumeError = 0.0;
 
         // cluster measures
         std::map< Cluster_Measure::ClusterMeasureSpecification, std::shared_ptr< Cluster_Measure > > mClusterMeasures;

@@ -84,6 +84,12 @@ namespace moris
             /// in-place taper over accepted iterates (created from the reinit performer's parameters on first use)
             std::unique_ptr< SDF_Wean_Monitor > mWeanMonitor;
 
+            /**
+             * Errors if any GEN design uses discretization_mode = "additive" while HMR remeshing or level-set
+             * reinitialization is active (the additive field split cannot be remapped).
+             */
+            void check_additive_discretization_compatibility();
+
           public:
             //------------------------------------------------------------------------------
             /**

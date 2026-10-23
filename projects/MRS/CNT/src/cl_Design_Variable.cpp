@@ -49,7 +49,7 @@ namespace moris
 
     //--------------------------------------------------------------------------------------------------------------
 
-    char Design_Variable::get_id() const
+    sint Design_Variable::get_id() const
     {
         return mID;
     }

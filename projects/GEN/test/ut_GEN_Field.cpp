@@ -13,6 +13,8 @@
 #include "catch.hpp"
 #include "fn_trans.hpp"
 #include "cl_GEN_User_Defined_Field.hpp"
+#include "cl_GEN_Circle.hpp"
+#include "cl_GEN_Summed_Fields.hpp"
 #include "cl_GEN_Design_Factory.hpp"
 #include "fn_PRM_GEN_Parameters.hpp"
 
@@ -845,6 +847,184 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    TEST_CASE( "B-spline Geometry Additive Discretization", "[gen], [field], [B-spline geometry], [additive discretization]" )
+    {
+        // Mesh parameters (linear Lagrange, linear B-spline, no refinement)
+        uint tNumElementsPerDimension = 10;
+        real tRadius                  = 0.5;
+        real tNewRadius               = 0.25;
+        real tCoefficientShift        = 0.1;
+
+        // Loop over the discretization modes; "replace" is the unchanged legacy behaviour
+        for ( const std::string& tMode : { std::string( "additive" ), std::string( "replace" ) } )
+        {
+            bool tAdditive = ( tMode == "additive" );
+
+            // Circle with its radius as the only primitive ADV, discretized on B-spline mesh 0
+            Submodule_Parameter_Lists tFieldParameterLists( "FIELDS" );
+            tFieldParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::CIRCLE ) );
+            tFieldParameterLists.set( "center_x", 0.0 );
+            tFieldParameterLists.set( "center_y", 0.0 );
+            tFieldParameterLists.set( "radius", 0.1, tRadius, 1.0 );
+            tFieldParameterLists.set( "discretization_mesh_index", 0 );
+            tFieldParameterLists.set( "discretization_lower_bound", -1.0 );
+            tFieldParameterLists.set( "discretization_upper_bound", 1.0 );
+            tFieldParameterLists.set( "discretization_mode", tMode );
+
+            // Create geometry and keep the primitive ADVs
+            ADV_Manager    tADVManager;
+            Design_Factory tDesignFactory( tFieldParameterLists, tADVManager );
+            REQUIRE( tADVManager.mADVs.size() == 1 );
+
+            // Create mesh and geometry engine
+            mtk::Interpolation_Mesh* tMesh = create_simple_mesh( tNumElementsPerDimension, tNumElementsPerDimension, 1, 1, 0 );
+
+            Geometry_Engine_Parameters tGeometryEngineParameters;
+            tGeometryEngineParameters.mADVManager = tADVManager;
+            tGeometryEngineParameters.mGeometries = tDesignFactory.get_geometries();
+            Geometry_Engine_Test tGeometryEngine( tMesh, tGeometryEngineParameters );
+
+            std::shared_ptr< Level_Set_Geometry > tGeometry =
+                    std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometryEngine.get_geometry( 0 ) );
+
+            // (b) ADV vector = primitive radius followed by the B-spline coefficients (count unchanged by the mode)
+            Vector< real > tADVs        = tGeometryEngine.get_advs();
+            Vector< real > tLowerBounds = tGeometryEngine.get_lower_bounds();
+            Vector< real > tUpperBounds = tGeometryEngine.get_upper_bounds();
+            uint           tNumCoefficients = pow( tNumElementsPerDimension + 1, 2 );
+            if ( par_rank() == 0 )
+            {
+                REQUIRE( tADVs.size() == 1 + tNumCoefficients );
+                REQUIRE( tLowerBounds.size() == 1 + tNumCoefficients );
+                REQUIRE( tUpperBounds.size() == 1 + tNumCoefficients );
+                CHECK( tADVs( 0 ) == Approx( tRadius ) );
+                CHECK( tLowerBounds( 0 ) == Approx( 0.1 ) );
+                CHECK( tUpperBounds( 0 ) == Approx( 1.0 ) );
+                for ( uint iADVIndex = 1; iADVIndex < tADVs.size(); iADVIndex++ )
+                {
+                    CHECK( tLowerBounds( iADVIndex ) == Approx( -1.0 ) );
+                    CHECK( tUpperBounds( iADVIndex ) == Approx( 1.0 ) );
+                    if ( tAdditive )
+                    {
+                        // Correction coefficients start at zero
+                        CHECK( tADVs( iADVIndex ) == Approx( 0.0 ).margin( 1e-14 ) );
+                    }
+                }
+            }
+
+            // (e) The design depends on ADVs in both modes
+            CHECK( tGeometry->depends_on_advs() );
+            CHECK( tGeometry->get_field()->has_advs() );
+
+            // The engine reports additive designs (used by WRK to reject remeshing / reinitialization)
+            CHECK( tGeometry->uses_additive_discretization() == tAdditive );
+            CHECK( tGeometryEngine.has_additive_discretized_designs() == tAdditive );
+            CHECK( tGeometryEngine.get_additive_discretized_design_names().size() == ( tAdditive ? 1u : 0u ) );
+
+            // Coefficient ADV IDs are offset by the number of primitive ADVs
+            uint tOffset = 1;
+
+            for ( uint iNodeIndex = 0; iNodeIndex < tMesh->get_num_nodes(); iNodeIndex++ )
+            {
+                Matrix< DDRMat > tNodeCoordinates = tMesh->get_node_coordinate( iNodeIndex );
+                real             tDistance        = sqrt( pow( tNodeCoordinates( 0 ), 2 ) + pow( tNodeCoordinates( 1 ), 2 ) );
+
+                if ( tAdditive )
+                {
+                    // (a) Coefficients are zero, so the field equals the analytic circle exactly
+                    CHECK( tGeometry->get_field_value( iNodeIndex, tNodeCoordinates ) == Approx( tDistance - tRadius ).margin( 1e-12 ) );
+                }
+                else
+                {
+                    // (d) Replace mode: L2-projected circle (exact for a linear B-spline / linear Lagrange mesh)
+                    CHECK( tGeometry->get_field_value( iNodeIndex, tNodeCoordinates ) == Approx( tDistance - tRadius ).margin( 1e-12 ) );
+                }
+
+                if ( (uint)par_rank() == tMesh->get_entity_owner( iNodeIndex, mtk::EntityRank::NODE, 0 ) )
+                {
+                    // B-spline part of the sensitivities and IDs
+                    Matrix< DDRMat > tTMatrix = trans( tMesh->get_t_matrix_of_node_loc_ind( iNodeIndex, 0 ) );
+                    Matrix< DDSMat > tCoefIDs = trans( tMesh->get_coefficient_IDs_of_node( iNodeIndex, 0 ) );
+
+                    const Matrix< DDRMat >& tSensitivities = tGeometry->get_dfield_dadvs( iNodeIndex, tNodeCoordinates );
+                    Vector< sint >          tADVIDs        = tGeometry->get_determining_adv_ids( iNodeIndex, tNodeCoordinates );
+
+                    if ( tAdditive )
+                    {
+                        // (c) Circle sensitivities (center_x, center_y, radius) first, then the T-matrix row
+                        real tInverseDistance = tDistance > 0.0 ? 1.0 / tDistance : 0.0;
+
+                        Matrix< DDRMat > tExpectedSensitivities( 1, 3 + tTMatrix.numel() );
+                        tExpectedSensitivities( 0 ) = -tNodeCoordinates( 0 ) * tInverseDistance;
+                        tExpectedSensitivities( 1 ) = -tNodeCoordinates( 1 ) * tInverseDistance;
+                        tExpectedSensitivities( 2 ) = -1.0;
+
+                        Vector< sint > tExpectedIDs( 3 + tCoefIDs.numel() );
+                        tExpectedIDs( 0 ) = gNoID;
+                        tExpectedIDs( 1 ) = gNoID;
+                        tExpectedIDs( 2 ) = 0;
+                        for ( uint iCoefficient = 0; iCoefficient < tCoefIDs.numel(); iCoefficient++ )
+                        {
+                            tExpectedSensitivities( 3 + iCoefficient ) = tTMatrix( iCoefficient );
+                            tExpectedIDs( 3 + iCoefficient )           = tCoefIDs( iCoefficient ) + tOffset;
+                        }
+
+                        CHECK_EQUAL( tSensitivities, tExpectedSensitivities, );
+                        CHECK_EQUAL( tADVIDs, tExpectedIDs, );
+                        REQUIRE( tSensitivities.numel() == tADVIDs.size() );
+                    }
+                    else
+                    {
+                        // (d) Replace mode: sensitivities are the T-matrix row only (no radius entry, radius ADV is dead)
+                        Vector< sint > tExpectedIDs( tCoefIDs.numel() );
+                        for ( uint iCoefficient = 0; iCoefficient < tCoefIDs.numel(); iCoefficient++ )
+                        {
+                            tExpectedIDs( iCoefficient ) = tCoefIDs( iCoefficient ) + tOffset;
+                        }
+                        CHECK_EQUAL( tSensitivities, tTMatrix, );
+                        CHECK_EQUAL( tADVIDs, tExpectedIDs, );
+                    }
+                }
+            }
+
+            // Both ADV blocks are live in additive mode: new radius + uniform coefficient shift
+            if ( tAdditive )
+            {
+                if ( par_rank() == 0 )
+                {
+                    tADVs( 0 ) = tNewRadius;
+                    for ( uint iADVIndex = 1; iADVIndex < tADVs.size(); iADVIndex++ )
+                    {
+                        tADVs( iADVIndex ) = tCoefficientShift;
+                    }
+                }
+                tGeometryEngine.set_advs( tADVs );
+
+                // Linear B-splines form a partition of unity, so a uniform coefficient shift adds a constant
+                for ( uint iNodeIndex = 0; iNodeIndex < tMesh->get_num_nodes(); iNodeIndex++ )
+                {
+                    Matrix< DDRMat > tNodeCoordinates = tMesh->get_node_coordinate( iNodeIndex );
+                    real             tDistance        = sqrt( pow( tNodeCoordinates( 0 ), 2 ) + pow( tNodeCoordinates( 1 ), 2 ) );
+                    CHECK( tGeometry->get_field_value( iNodeIndex, tNodeCoordinates ) == Approx( tDistance - tNewRadius + tCoefficientShift ).margin( 1e-12 ) );
+                }
+            }
+
+            // Clean up
+            delete tMesh;
+        }
+
+        // (f) An unknown discretization mode is rejected
+        Submodule_Parameter_Lists tBadParameterLists( "FIELDS" );
+        tBadParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::CIRCLE ) );
+        tBadParameterLists.set( "radius", 0.1, tRadius, 1.0 );
+        tBadParameterLists.set( "discretization_mesh_index", 0 );
+        tBadParameterLists.set( "discretization_mode", "bogus" );
+        ADV_Manager tBadADVManager;
+        CHECK_THROWS( Design_Factory( tBadParameterLists, tBadADVManager ) );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     TEST_CASE( "Stored Field", "[gen], [field], [stored field]" )
     {
         // Create mesh
@@ -917,6 +1097,120 @@ namespace moris::gen
 
         // Delete mesh pointer
         delete tMesh;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Summed fields", "[gen], [field], [summed_fields]" )
+    {
+        // ADV vector shared by both circles (ADV 1 is used by both)
+        Vector< real > tADVs = { 0.5, 1.0, 2.0, 0.25 };
+
+        // Circle 1: ADV center x (id 0), ADV center y (id 1), constant radius
+        std::shared_ptr< gen::Field > tCircle1 = std::make_shared< gen::Circle >(
+                gen::ADV( tADVs, 0 ),
+                gen::ADV( tADVs, 1 ),
+                gen::ADV( 1.0 ),
+                "Circle 1" );
+
+        // Circle 2: ADV center x (id 2), ADV center y (id 3), ADV radius (id 1)
+        std::shared_ptr< gen::Field > tCircle2 = std::make_shared< gen::Circle >(
+                gen::ADV( tADVs, 2 ),
+                gen::ADV( tADVs, 3 ),
+                gen::ADV( tADVs, 1 ),
+                "Circle 2" );
+
+        Vector< std::shared_ptr< gen::Field > > tFields = { tCircle1, tCircle2 };
+        gen::Summed_Fields                      tSummed( tFields, "Summed" );
+
+        CHECK( tSummed.get_name() == "Summed" );
+
+        // ADV dependence is reported from the children
+        CHECK( tSummed.has_advs() );
+
+        // Coefficient ADV IDs are the children's, concatenated in child order
+        Vector< sint > tCoefficientIDs1 = tCircle1->get_coefficient_adv_ids();
+        Vector< sint > tCoefficientIDs2 = tCircle2->get_coefficient_adv_ids();
+        Vector< sint > tCoefficientIDs  = tSummed.get_coefficient_adv_ids();
+        REQUIRE( tCoefficientIDs.size() == tCoefficientIDs1.size() + tCoefficientIDs2.size() );
+        REQUIRE( tCoefficientIDs.size() > 0 );
+        for ( uint iID = 0; iID < tCoefficientIDs1.size(); iID++ )
+        {
+            CHECK( tCoefficientIDs( iID ) == tCoefficientIDs1( iID ) );
+        }
+        for ( uint iID = 0; iID < tCoefficientIDs2.size(); iID++ )
+        {
+            CHECK( tCoefficientIDs( tCoefficientIDs1.size() + iID ) == tCoefficientIDs2( iID ) );
+        }
+
+        // A sum of children without ADVs has no ADVs
+        std::shared_ptr< gen::Field > tConstant1 = std::make_shared< gen::Circle >( gen::ADV( 0.0 ), gen::ADV( 0.0 ), gen::ADV( 1.0 ), "Constant 1" );
+        std::shared_ptr< gen::Field > tConstant2 = std::make_shared< gen::Circle >( gen::ADV( 1.0 ), gen::ADV( 1.0 ), gen::ADV( 2.0 ), "Constant 2" );
+        gen::Summed_Fields            tConstantSum( Vector< std::shared_ptr< gen::Field > >( { tConstant1, tConstant2 } ) );
+        CHECK( not tConstantSum.has_advs() );
+
+        Vector< Matrix< DDRMat > > tPoints = { { { 0.0, 0.0 } }, { { 1.0, 1.0 } }, { { 2.5, -1.0 } } };
+
+        for ( uint iPoint = 0; iPoint < tPoints.size(); iPoint++ )
+        {
+            const Matrix< DDRMat >& tPoint = tPoints( iPoint );
+
+            // Values add
+            real tExpectedValue = tCircle1->get_field_value( 0, tPoint ) + tCircle2->get_field_value( 0, tPoint );
+            CHECK( tSummed.get_field_value( 0, tPoint ) == Approx( tExpectedValue ) );
+
+            // Determining ADV IDs concatenate in child order
+            Vector< sint > tIDs1 = tCircle1->get_determining_adv_ids( 0, tPoint );
+            Vector< sint > tIDs2 = tCircle2->get_determining_adv_ids( 0, tPoint );
+            Vector< sint > tIDs  = tSummed.get_determining_adv_ids( 0, tPoint );
+            REQUIRE( tIDs.size() == tIDs1.size() + tIDs2.size() );
+            for ( uint iID = 0; iID < tIDs1.size(); iID++ )
+            {
+                CHECK( tIDs( iID ) == tIDs1( iID ) );
+            }
+            for ( uint iID = 0; iID < tIDs2.size(); iID++ )
+            {
+                CHECK( tIDs( tIDs1.size() + iID ) == tIDs2( iID ) );
+            }
+
+            // ADV sensitivities concatenate in child order
+            Matrix< DDRMat > tSens1 = tCircle1->get_dfield_dadvs( 0, tPoint );
+            Matrix< DDRMat > tSens2 = tCircle2->get_dfield_dadvs( 0, tPoint );
+            Matrix< DDRMat > tSens  = tSummed.get_dfield_dadvs( 0, tPoint );
+            REQUIRE( tSens.numel() == tSens1.numel() + tSens2.numel() );
+            REQUIRE( tSens.numel() == tIDs.size() );
+            for ( uint iEntry = 0; iEntry < tSens1.numel(); iEntry++ )
+            {
+                CHECK( tSens( iEntry ) == Approx( tSens1( iEntry ) ) );
+            }
+            for ( uint iEntry = 0; iEntry < tSens2.numel(); iEntry++ )
+            {
+                CHECK( tSens( tSens1.numel() + iEntry ) == Approx( tSens2( iEntry ) ) );
+            }
+
+            // Coordinate sensitivities sum
+            Matrix< DDRMat > tDCoord1( 1, 2 );
+            Matrix< DDRMat > tDCoord2( 1, 2 );
+            Matrix< DDRMat > tDCoord( 1, 2 );
+            tCircle1->get_dfield_dcoordinates( 0, tPoint, tDCoord1 );
+            tCircle2->get_dfield_dcoordinates( 0, tPoint, tDCoord2 );
+            tSummed.get_dfield_dcoordinates( 0, tPoint, tDCoord );
+            REQUIRE( tDCoord.numel() == tDCoord1.numel() );
+            for ( uint iEntry = 0; iEntry < tDCoord.numel(); iEntry++ )
+            {
+                CHECK( tDCoord( iEntry ) == Approx( tDCoord1( iEntry ) + tDCoord2( iEntry ) ) );
+            }
+        }
+
+        // Hand-computed check at (1,1): circle1 = sqrt(0.25+0)-1 = -0.5, circle2 = sqrt(1+0.5625)-1.0
+        CHECK( tSummed.get_field_value( 0, tPoints( 1 ) ) == Approx( -0.5 + std::sqrt( 1.0 + 0.5625 ) - 1.0 ) );
+
+        // Remeshing of a summed design is unsupported
+        CHECK( tSummed.get_mtk_field() == nullptr );
+
+        // At least one field is required
+        Vector< std::shared_ptr< gen::Field > > tNoFields;
+        CHECK_THROWS( gen::Summed_Fields( tNoFields ) );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -1273,6 +1567,61 @@ namespace moris::gen
             CHECK( aSwissCheese->get_field_value( 0, { { aXCenter, aYCenter, aZCenter + aZSemidiameter } } ) != Approx( 0.0 ).margin( 100.0 * MORIS_REAL_EPS ) );
             CHECK( aSwissCheese->get_field_value( 0, { { aXCenter, aYCenter, aZCenter - aZSemidiameter } } ) != Approx( 0.0 ).margin( 100.0 * MORIS_REAL_EPS ) );
         }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+    TEST_CASE( "Design variable IDs beyond 256", "[gen], [design_variable], [MB-029]" )
+    {
+        // MB-029 (first cited as MB-017): Design_Variable IDs were stored as char, so more than ~250 variables aliased onto one ADV
+        const uint tNumberOfVariables = 300;
+
+        // Create distinct, non-constant design variables
+        Vector< Design_Variable > tVariables;
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            const real tOffset = static_cast< real >( iVariable );
+            tVariables.push_back( Design_Variable( -1.0 - tOffset, 0.5 + tOffset, 2.0 + tOffset ) );
+        }
+
+        // Register IDs in the same way the design factory does, then finalize
+        gen::ADV_Manager tADVManager;
+        Vector< decltype( tVariables( 0 ).get_id() ) > tIDs;
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            tIDs.push_back( tVariables( iVariable ).get_id() );
+        }
+        tADVManager.register_parameter_ids( tIDs );
+        tADVManager.finalize_parameter_ids();
+
+        // Create ADVs
+        Vector< gen::ADV > tADVs;
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            tADVs.push_back( tADVManager.create_adv( tVariables( iVariable ) ) );
+        }
+
+        // All 300 variables must give distinct ADVs with the right values and bounds
+        REQUIRE( tADVManager.mADVs.size() == tNumberOfVariables );
+        REQUIRE( tADVManager.mLowerBounds.size() == tNumberOfVariables );
+        REQUIRE( tADVManager.mUpperBounds.size() == tNumberOfVariables );
+        for ( uint iVariable = 0; iVariable < tNumberOfVariables; iVariable++ )
+        {
+            const real tOffset = static_cast< real >( iVariable );
+            CHECK( tADVs( iVariable ).get_value() == Approx( 0.5 + tOffset ) );
+            CHECK( tADVManager.mADVs( iVariable ) == Approx( 0.5 + tOffset ) );
+            CHECK( tADVManager.mLowerBounds( iVariable ) == Approx( -1.0 - tOffset ) );
+            CHECK( tADVManager.mUpperBounds( iVariable ) == Approx( 2.0 + tOffset ) );
+        }
+
+        // Intended sharing: the same Design_Variable object still aliases a single ADV
+        gen::ADV_Manager tSharedManager;
+        Design_Variable  tShared( 0.0, 1.0, 2.0 );
+        tSharedManager.register_parameter_ids( { tShared.get_id() } );
+        tSharedManager.finalize_parameter_ids();
+        gen::ADV tFirst  = tSharedManager.create_adv( tShared );
+        gen::ADV tSecond = tSharedManager.create_adv( tShared );
+        CHECK( tSharedManager.mADVs.size() == 1 );
+        CHECK( tFirst.get_id() == tSecond.get_id() );
     }
 
     //--------------------------------------------------------------------------------------------------------------

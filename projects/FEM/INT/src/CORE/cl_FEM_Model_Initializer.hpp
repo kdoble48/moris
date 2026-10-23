@@ -63,6 +63,12 @@ namespace moris::fem
 
         virtual void create_constitutive_models() = 0;
 
+        /**
+         * @brief build separate property, material model and CM instances for the follower side of IWGs, IQIs and SPs
+         * (MB-047); does nothing by default
+         */
+        virtual void create_follower_side_models() {}
+
         virtual void create_stabilization_parameters() = 0;
 
         virtual void create_iwgs() = 0;

@@ -31,6 +31,7 @@ add_subdirectory(Contact_Sensitivity_Test)
 add_subdirectory(Bedding_Sensitivity_Test)
 add_subdirectory(One_Element_Mat_Geo_Pdv_sweep)
 add_subdirectory(Level_Set_Beam_SIMP_Hole_Seeding)
+add_subdirectory(LevelSet_ADV_Filter)
 add_subdirectory(Zienkiewicz_Zhu_Adaptive_Refinement)
 add_subdirectory(UBend_Pseudo_Time_Continuation_Sensitivity_Test)
 

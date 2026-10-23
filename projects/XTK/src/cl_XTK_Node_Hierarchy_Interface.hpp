@@ -37,7 +37,7 @@ namespace moris::xtk
     struct Node_Hierarchy_Template
     {
         mtk::CellTopology  mCellTopology;
-        moris_index        mNumCells;
+        moris_index        mNumCells = 0;
         Matrix< IndexMat > mCellToNodeOrdinal;
     };
 

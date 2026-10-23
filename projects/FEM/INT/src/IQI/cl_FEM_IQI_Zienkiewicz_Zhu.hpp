@@ -24,7 +24,30 @@
 namespace moris::fem
 {
     //------------------------------------------------------------------------------
-
+    /**
+     * Zienkiewicz-Zhu error indicator of a scalar stress measure s (von Mises, a principal, normal or shear stress;
+     * Zienkiewicz & Zhu, IJNME 24:337-357, 1987).
+     *
+     * Integrand at an evaluation point:
+     *
+     *     e^2 = ( s* - s( sigma( u_h ) ) )^2
+     *
+     * - s( sigma( u_h ) ): the stress measure of the discrete solution, from the leader CM "ElastLinIso"
+     *   ( sigma = C eps( u_h ), discontinuous across elements );
+     * - s*: the recovered (smoothed) stress measure, the value of the dof field named in "dof_quantity"
+     *   (e.g. STRESS_DOF). It is computed by a separate IWG, typically IWG_Struc_Stress (STRUC_VON_MISES_STRESS, ...),
+     *   as the L2 projection of s onto the s* interpolation space:
+     *
+     *         int_Omega v ( s* - s( sigma( u_h ) ) ) dOmega = 0   for all test functions v
+     *
+     * Integrated, the IQI gives the squared estimate of the stress error in the L2 norm:
+     *
+     *     eta^2   = int_Omega ( s* - s( sigma( u_h ) ) )^2 dOmega   (GLOBAL)
+     *     eta_K^2 = int_K ( s* - s( sigma( u_h ) ) )^2 dK per IG cell (ELEMENTAL_INT; ELEMENTAL_AVG divides by |K|)
+     *
+     * Take the square root for the error itself. No dQI/du (not usable as an optimization criterion).
+     * Principal stresses: the invariant formulas are documented in eval_principal_stress.
+     */
     class IQI_Zienkiewicz_Zhu : public IQI
     {
 

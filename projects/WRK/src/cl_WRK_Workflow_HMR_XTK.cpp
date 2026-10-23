@@ -99,6 +99,44 @@ namespace moris::wrk
                 mPerformerManager->mReinitializePerformer( 0 ) = std::make_shared< wrk::Reinitialize_Performer >( mPerformerManager->mLibrary );
             }
         }
+
+        // Additive discretization (field + B-spline correction) cannot be remapped by remeshing or reinitialization
+        this->check_additive_discretization_compatibility();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Workflow_HMR_XTK::check_additive_discretization_compatibility()
+    {
+        // Same activity conditions as perform(): remeshing performer built / reinitialize performer built
+        bool tRemeshingActive      = mPerformerManager->mRemeshingMiniPerformer( 0 ) != nullptr;
+        bool tReinitializingActive = mPerformerManager->mReinitializePerformer.size() > 0;
+
+        if ( not( tRemeshingActive or tReinitializingActive ) )
+        {
+            return;
+        }
+
+        Vector< std::string > tAdditiveDesigns = mPerformerManager->mGENPerformer( 0 )->get_additive_discretized_design_names();
+
+        if ( tAdditiveDesigns.size() > 0 )
+        {
+            std::string tDesignList;
+            for ( const std::string& iName : tAdditiveDesigns )
+            {
+                tDesignList += ( tDesignList.empty() ? "" : ", " ) + iName;
+            }
+
+            MORIS_ERROR( false,
+                    "Workflow_HMR_XTK - design(s) [%s] use discretization_mode = \"additive\", which is incompatible with %s%s%s: "
+                    "the analytic field + B-spline correction split is not preserved when the field is remapped. "
+                    "Use discretization_mode = \"replace\" or disable remeshing / reinitialization.",
+                    tDesignList.c_str(),
+                    tRemeshingActive ? "HMR remeshing" : "",
+                    tRemeshingActive and tReinitializingActive ? " and " : "",
+                    tReinitializingActive ? "level-set reinitialization" : "" );
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -355,6 +393,10 @@ namespace moris::wrk
 
             if ( tOptIter > 0 and tOptIter % tReinitFreq == 0 )
             {
+                // remeshing rebuilds the B-spline basis, but the optimizer's ADVs are the unfiltered variables psi of
+                // the old basis; there is no mapping of psi to the new basis
+                MORIS_ERROR( not mPerformerManager->mGENPerformer( 0 )->has_adv_filter(),
+                        "Workflow_HMR_XTK: remeshing during the optimization is not supported with adv_filter_radius > 0" );
 
                 // allocate auxiliary arrays
                 Vector< real >  tADVs;
@@ -491,6 +533,13 @@ namespace moris::wrk
                         MORIS_LOG_INFO( "Initializing design as SDF on first iteration (sdf_initialize_at_start)" );
                     }
                     Tracer tTracer( "GEN", "Levelset", "Interface-SDF-Reinitialize" );
+
+                    // the redistance writes B-spline coefficients into the ADV vector, but with an ADV filter the ADVs are the
+                    // unfiltered variables psi; writing the redistanced field into psi would filter it again at every
+                    // redistance, which acts as a curvature flow and moves the interface
+                    MORIS_ERROR( not mPerformerManager->mGENPerformer( 0 )->has_adv_filter(),
+                            "Workflow_HMR_XTK: in-place SDF reinitialization is not supported with adv_filter_radius > 0; "
+                            "turn the redistance off (reinitialization_frequency) or the filter off" );
 
                     // Get XTK cut integration mesh
                     xtk::Cut_Integration_Mesh* tCutMeshPtr = tXTKPerformer->get_cut_integration_mesh();
