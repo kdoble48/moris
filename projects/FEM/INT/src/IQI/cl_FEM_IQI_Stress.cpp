@@ -38,41 +38,14 @@ namespace moris::fem
 
     void IQI_Stress::compute_QI( Matrix< DDRMat >& aQI )
     {
-        // check if dof index was set
-        if ( ( mLeaderDofTypes( 0 ).size() > 1 ) && ( mStressType != Stress_Type::VON_MISES_STRESS ) && ( mStressType != Stress_Type::STRESS_VECTOR ) )
+        // the full stress vector, or one of the scalar stress measures
+        if ( mStressType == Stress_Type::STRESS_VECTOR )
         {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
-
-            MORIS_ERROR( mIQITypeIndex <= 2 && mIQITypeIndex >= 0,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
+            this->get_stress_vector( aQI );
         }
-
-        // switch for different stress types
-        switch ( mStressType )
+        else
         {
-            case Stress_Type::VON_MISES_STRESS:
-                this->eval_Von_Mises_stress( aQI );
-                break;
-
-            case Stress_Type::PRINCIPAL_STRESS:
-                this->eval_principal_stress( mIQITypeIndex + 1, aQI );
-                break;
-
-            case Stress_Type::NORMAL_STRESS:
-                this->eval_normal_stress( mIQITypeIndex + 1, aQI );
-                break;
-
-            case Stress_Type::SHEAR_STRESS:
-                this->eval_shear_stress( mIQITypeIndex + 1, aQI );
-                break;
-
-            case Stress_Type::STRESS_VECTOR:
-                this->get_stress_vector( aQI );
-                break;
-
-            default:
-                MORIS_ERROR( false, "IQI_Max_Stress::compute_QI - Unknown Stress Type." );
+            aQI = { { this->eval_stress_value() } };
         }
     }
 
@@ -83,44 +56,9 @@ namespace moris::fem
         // get index for QI
         sint tQIIndex = mSet->get_QI_assembly_index( mName );
 
-        // check if dof index was set
-        if ( ( mLeaderDofTypes( 0 ).size() > 1 ) && ( mStressType != Stress_Type::VON_MISES_STRESS ) && ( mStressType != Stress_Type::STRESS_VECTOR ) )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
-
-            MORIS_ERROR( mIQITypeIndex <= 2 && mIQITypeIndex >= 0,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
-        }
-
-        // initialize stress value
+        // evaluate the stress measure
         Matrix< DDRMat > tStressVector;
-
-        // switch for different stress types
-        switch ( mStressType )
-        {
-            case Stress_Type::VON_MISES_STRESS:
-                this->eval_Von_Mises_stress( tStressVector );
-                break;
-
-            case Stress_Type::PRINCIPAL_STRESS:
-                this->eval_principal_stress( mIQITypeIndex + 1, tStressVector );
-                break;
-
-            case Stress_Type::NORMAL_STRESS:
-                this->eval_normal_stress( mIQITypeIndex + 1, tStressVector );
-                break;
-
-            case Stress_Type::SHEAR_STRESS:
-                this->eval_shear_stress( mIQITypeIndex + 1, tStressVector );
-                break;
-            case Stress_Type::STRESS_VECTOR:
-                this->get_stress_vector( tStressVector );
-                break;
-
-            default:
-                MORIS_ERROR( false, "IQI_Max_Stress::compute_QI - Unknown Stress Type." );
-        }
+        this->compute_QI( tStressVector );
 
         // evaluate the QI
         mSet->get_QI()( tQIIndex ) += aWStar * ( tStressVector );
@@ -128,7 +66,97 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
-    void IQI_Stress::eval_Von_Mises_stress( Matrix< DDRMat >& aStressVector )
+    real IQI_Stress::eval_stress_value()
+    {
+        // check if dof index was set
+        if ( ( mLeaderDofTypes( 0 ).size() > 1 ) && ( mStressType != Stress_Type::VON_MISES_STRESS ) )
+        {
+            MORIS_ERROR( mIQITypeIndex != -1,
+                    "IQI_Stress::eval_stress_value - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
+
+            MORIS_ERROR( mIQITypeIndex <= 2 && mIQITypeIndex >= 0,
+                    "IQI_Stress::eval_stress_value - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
+        }
+
+        // switch for different stress types
+        switch ( mStressType )
+        {
+            case Stress_Type::VON_MISES_STRESS:
+                return this->eval_Von_Mises_stress();
+
+            case Stress_Type::PRINCIPAL_STRESS:
+                return this->eval_principal_stress( mIQITypeIndex + 1 );
+
+            case Stress_Type::NORMAL_STRESS:
+                return this->eval_normal_stress( mIQITypeIndex + 1 );
+
+            case Stress_Type::SHEAR_STRESS:
+                return this->eval_shear_stress( mIQITypeIndex + 1 );
+
+            default:
+                MORIS_ERROR( false, "IQI_Stress::eval_stress_value - Unknown or non-scalar Stress Type." );
+                return 0.0;
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat > IQI_Stress::eval_dStressdFlux()
+    {
+        MORIS_ERROR( mStressType == Stress_Type::VON_MISES_STRESS,
+                "IQI_Stress::eval_dStressdFlux - the derivative is implemented for the von Mises stress only." );
+
+        return this->eval_dVonMisesdFlux( this->eval_Von_Mises_stress() );
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat > IQI_Stress::eval_dVonMisesdFlux( real aVonMises )
+    {
+        // standardized stress vector ( s11, s22, s33, s23, s13, s12 )
+        Matrix< DDRMat > tS;
+        this->get_stress_vector( tS );
+
+        // d sigma_vm / d s_i in the standardized ordering
+        Matrix< DDRMat > tdVMdS( 6, 1, 0.0 );
+        if ( aVonMises > MORIS_REAL_EPS )
+        {
+            real tScale = 0.5 / aVonMises;
+            tdVMdS( 0 ) = tScale * ( 2.0 * tS( 0 ) - tS( 1 ) - tS( 2 ) );
+            tdVMdS( 1 ) = tScale * ( 2.0 * tS( 1 ) - tS( 2 ) - tS( 0 ) );
+            tdVMdS( 2 ) = tScale * ( 2.0 * tS( 2 ) - tS( 0 ) - tS( 1 ) );
+            tdVMdS( 3 ) = tScale * 6.0 * tS( 3 );
+            tdVMdS( 4 ) = tScale * 6.0 * tS( 4 );
+            tdVMdS( 5 ) = tScale * 6.0 * tS( 5 );
+        }
+
+        // map back to the CM flux components (inverse of get_stress_vector)
+        uint tNumStressComponents =
+                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux( mFluxType ).length();
+        switch ( tNumStressComponents )
+        {
+            // 2D plane stress
+            case 3:
+                return { { tdVMdS( 0 ) }, { tdVMdS( 1 ) }, { tdVMdS( 5 ) } };
+
+            // 2D plane strain and axisymmetric
+            case 4:
+                return { { tdVMdS( 0 ) }, { tdVMdS( 1 ) }, { tdVMdS( 2 ) }, { tdVMdS( 5 ) } };
+
+            // 3D
+            case 6:
+                return tdVMdS;
+
+            default:
+                MORIS_ERROR( false,
+                        "IQI_Stress::eval_dVonMisesdFlux - CM stress vector of unknown size; 3, 4 or 6 components expected." );
+                return tdVMdS;
+        }
+    }
+
+    //------------------------------------------------------------------------------
+
+    real IQI_Stress::eval_Von_Mises_stress()
     {
         // get standardized stress vector
         Matrix< DDRMat > tStressVector;
@@ -144,15 +172,13 @@ namespace moris::fem
                 std::pow( tStressVector( 4 ), 2.0 ) +    //
                 std::pow( tStressVector( 5 ), 2.0 );
 
-        real tVonMisesStress = std::sqrt( 0.5 * tNormalStressContribution + 3.0 * tShearStressContribution );
-
         // compute Von-Mises stress value
-        aStressVector.set_size( 1, 1, tVonMisesStress );
+        return std::sqrt( 0.5 * tNormalStressContribution + 3.0 * tShearStressContribution );
     }
 
     //------------------------------------------------------------------------------
 
-    void IQI_Stress::eval_principal_stress( uint aPrincipalStressIndex, Matrix< DDRMat >& aStressVector )
+    real IQI_Stress::eval_principal_stress( uint aPrincipalStressIndex )
     {
         // get stress vector
         Matrix< DDRMat > tStressVector;
@@ -185,7 +211,7 @@ namespace moris::fem
 
                 default:
                     MORIS_ERROR( false,
-                            "IQI_Max_Stress::eval_principal_stress - Only 1st and 2nd principal stresses known for 2D." );
+                            "IQI_Stress::eval_principal_stress - Only 1st and 2nd principal stresses known for 2D." );
             }
         }
 
@@ -235,36 +261,36 @@ namespace moris::fem
 
                 default:
                     MORIS_ERROR( false,
-                            "IQI_Max_Stress::eval_principal_stress - Only 1st, 2nd, and 3rd principal stresses known for 3D." );
+                            "IQI_Stress::eval_principal_stress - Only 1st, 2nd, and 3rd principal stresses known for 3D." );
             }
         }
 
         // return stress value
-        aStressVector.set_size( 1, 1, tStressValue );
+        return tStressValue;
     }
 
     //------------------------------------------------------------------------------
 
-    void IQI_Stress::eval_normal_stress( uint aStressIndex, Matrix< DDRMat >& aStressVector )
+    real IQI_Stress::eval_normal_stress( uint aStressIndex )
     {
         // get stress vector
         Matrix< DDRMat > tStressVector;
         this->get_stress_vector( tStressVector );
 
         // pick stress value
-        aStressVector.set_size( 1, 1, tStressVector( aStressIndex - 1 ) );
+        return tStressVector( aStressIndex - 1 );
     }
 
     //------------------------------------------------------------------------------
 
-    void IQI_Stress::eval_shear_stress( uint aStressIndex, Matrix< DDRMat >& aStressVector )
+    real IQI_Stress::eval_shear_stress( uint aStressIndex )
     {
         // get stress vector
         Matrix< DDRMat > tStressVector;
         this->get_stress_vector( tStressVector );
 
         // pick stress value
-        aStressVector.set_size( 1, 1, tStressVector( aStressIndex + 2 ) );
+        return tStressVector( aStressIndex + 2 );
     }
 
     //------------------------------------------------------------------------------
@@ -308,7 +334,7 @@ namespace moris::fem
             // Unknown size - error
             default:
                 MORIS_ERROR( false,
-                        "IQI_Max_Von_Mises_Stress::get_stress_vector - CM stress vector of unknown size; 3, 4 or 6 components expected." );
+                        "IQI_Stress::get_stress_vector - CM stress vector of unknown size; 3, 4 or 6 components expected." );
         }
     }
 
@@ -358,7 +384,7 @@ namespace moris::fem
                     // Unknown size - error
                     default:
                         MORIS_ERROR( false,
-                                "IQI_Max_Von_Mises_Stress::get_stress_vector - CM stress vector of unknown size; 3, 4 or 6 components expected." );
+                                "IQI_Stress::get_stress_vector - CM stress vector of unknown size; 3, 4 or 6 components expected." );
 
                         return std::make_pair( 0, 0 );
                 }

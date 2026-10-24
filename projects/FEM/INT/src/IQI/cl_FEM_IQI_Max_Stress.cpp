@@ -20,9 +20,10 @@ namespace moris::fem
     //------------------------------------------------------------------------------
 
     IQI_Max_Stress::IQI_Max_Stress( enum Stress_Type aStressType )
+            : IQI_Stress( aStressType )
     {
-        // assign stress type to evaluate
-        mStressType = aStressType;
+        MORIS_ERROR( aStressType != Stress_Type::STRESS_VECTOR,
+                "IQI_Max_Stress - the stress vector cannot be aggregated; use a scalar stress measure." );
 
         // set FEM IQI type
         mFEMIQIType = fem::IQI_Type::MAX_STRESS;
@@ -35,12 +36,6 @@ namespace moris::fem
         mPropertyMap[ "Exponent" ]       = static_cast< uint >( IQI_Property_Type::EXPONENT );
         mPropertyMap[ "Shift" ]          = static_cast< uint >( IQI_Property_Type::SHIFT );
         mPropertyMap[ "KSParameter" ]    = static_cast< uint >( IQI_Property_Type::KS_PARAMETER );
-
-        // set size for the constitutive model pointer cell
-        mLeaderCM.resize( static_cast< uint >( IQI_Constitutive_Type::MAX_ENUM ), nullptr );
-
-        // populate the constitutive map
-        mConstitutiveMap[ "ElastLinIso" ] = static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO );
     }
 
     //------------------------------------------------------------------------------
@@ -79,12 +74,12 @@ namespace moris::fem
         const std::shared_ptr< Constitutive_Model >& tCMElasticity =
                 mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) );
 
-        // von Mises stress and its derivative wrt the CM flux components
-        real             tStressValue = this->eval_Von_Mises_stress();
-        Matrix< DDRMat > tdVMdFlux    = this->eval_dVonMisesdFlux( tStressValue );
+        // stress measure and its derivative wrt the CM flux components (see IQI_Stress)
+        real             tStressValue = this->eval_stress_value();
+        Matrix< DDRMat > tdStressdFlux = this->eval_dStressdFlux();
 
-        // derivative of the integrand wrt the von Mises stress
-        real tdQIdVM = this->eval_dintegrand_dstress( tStressValue );
+        // derivative of the integrand wrt the stress measure
+        real tdQIdStress = this->eval_dintegrand_dstress( tStressValue );
 
         // get the number of leader dof type dependencies
         uint tNumDofDependencies = mRequestedLeaderGlobalDofTypes.size();
@@ -104,45 +99,8 @@ namespace moris::fem
             {
                 mSet->get_residual()( tQIIndex )(
                         { tLeaderDepStartIndex, tLeaderDepStopIndex } ) +=
-                        aWStar * tdQIdVM * trans( tCMElasticity->dFluxdDOF( tDofType ) ) * tdVMdFlux;
+                        aWStar * tdQIdStress * trans( tCMElasticity->dFluxdDOF( tDofType, mFluxType ) ) * tdStressdFlux;
             }
-        }
-    }
-
-    //------------------------------------------------------------------------------
-
-    real
-    IQI_Max_Stress::eval_stress_value()
-    {
-        // check if dof index was set
-        if ( ( mLeaderDofTypes( 0 ).size() > 1 ) &&    //
-                ( mStressType != Stress_Type::VON_MISES_STRESS ) )
-        {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
-
-            MORIS_ERROR( mIQITypeIndex >= 0 && mIQITypeIndex <= 2,
-                    "IQI_Max_Stress::compute_QI - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
-        }
-
-        // switch for different stress types
-        switch ( mStressType )
-        {
-            case Stress_Type::VON_MISES_STRESS:
-                return this->eval_Von_Mises_stress();
-
-            case Stress_Type::PRINCIPAL_STRESS:
-                return this->eval_principal_stress( mIQITypeIndex + 1 );
-
-            case Stress_Type::NORMAL_STRESS:
-                return this->eval_normal_stress( mIQITypeIndex + 1 );
-
-            case Stress_Type::SHEAR_STRESS:
-                return this->eval_shear_stress( mIQITypeIndex + 1 );
-
-            default:
-                MORIS_ERROR( false, "IQI_Max_Stress::compute_QI - Unknown Stress Type." );
-                return 0.0;
         }
     }
 
@@ -225,56 +183,11 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
 
-    Matrix< DDRMat >
-    IQI_Max_Stress::eval_dVonMisesdFlux( real aVonMises )
-    {
-        // standardized stress vector ( s11, s22, s33, s23, s13, s12 )
-        Matrix< DDRMat > tS = this->get_stress_vector();
-
-        // d sigma_vm / d s_i in the standardized ordering
-        Matrix< DDRMat > tdVMdS( 6, 1, 0.0 );
-        if ( aVonMises > MORIS_REAL_EPS )
-        {
-            real tScale = 0.5 / aVonMises;
-            tdVMdS( 0 ) = tScale * ( 2.0 * tS( 0 ) - tS( 1 ) - tS( 2 ) );
-            tdVMdS( 1 ) = tScale * ( 2.0 * tS( 1 ) - tS( 2 ) - tS( 0 ) );
-            tdVMdS( 2 ) = tScale * ( 2.0 * tS( 2 ) - tS( 0 ) - tS( 1 ) );
-            tdVMdS( 3 ) = tScale * 6.0 * tS( 3 );
-            tdVMdS( 4 ) = tScale * 6.0 * tS( 4 );
-            tdVMdS( 5 ) = tScale * 6.0 * tS( 5 );
-        }
-
-        // map back to the CM flux components (inverse of get_stress_vector)
-        uint tNumStressComponents =
-                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux().length();
-        switch ( tNumStressComponents )
-        {
-            // 2D plane stress
-            case 3:
-                return { { tdVMdS( 0 ) }, { tdVMdS( 1 ) }, { tdVMdS( 5 ) } };
-
-            // 2D plane strain
-            case 4:
-                return { { tdVMdS( 0 ) }, { tdVMdS( 1 ) }, { tdVMdS( 2 ) }, { tdVMdS( 5 ) } };
-
-            // 3D
-            case 6:
-                return tdVMdS;
-
-            default:
-                MORIS_ERROR( false,
-                        "IQI_Max_Stress::eval_dVonMisesdFlux - CM stress vector of unknown size; 3, 4 or 6 components expected." );
-                return tdVMdS;
-        }
-    }
-
-    //------------------------------------------------------------------------------
-
     bool
     IQI_Max_Stress::supports_analytical_dQIdp_geometry()
     {
-        // only the von Mises stress is differentiated
-        if ( mStressType != Stress_Type::VON_MISES_STRESS )
+        // only the von Mises stress is differentiated, and the spatial flux derivative below is that of the default flux
+        if ( mStressType != Stress_Type::VON_MISES_STRESS || mFluxType != CM_Function_Type::DEFAULT )
         {
             return false;
         }
@@ -307,11 +220,11 @@ namespace moris::fem
         adQIdx.set_size( tSpaceDim, 1, 0.0 );
         adQIdn.set_size( 0, 0 );
 
-        // von Mises stress, its derivative wrt the CM flux components and the derivative of the integrand
-        // (P-norm or KS, see eval_integrand) wrt the von Mises stress; as in compute_dQIdu
-        real             tVonMises = this->eval_Von_Mises_stress();
-        Matrix< DDRMat > tdVMdFlux = this->eval_dVonMisesdFlux( tVonMises );
-        real             tdQIdVM   = this->eval_dintegrand_dstress( tVonMises );
+        // stress measure, its derivative wrt the CM flux components and the derivative of the integrand
+        // (P-norm or KS, see eval_integrand) wrt the stress measure; as in compute_dQIdu
+        real             tStressValue  = this->eval_stress_value();
+        Matrix< DDRMat > tdStressdFlux = this->eval_dStressdFlux();
+        real             tdQIdStress   = this->eval_dintegrand_dstress( tStressValue );
 
         // constitutive matrix
         const Matrix< DDRMat >& tConst = tCMElasticity->constitutive();
@@ -323,209 +236,8 @@ namespace moris::fem
             tCMElasticity->eval_dStraindx( iDir, tdStraindx );
             Matrix< DDRMat > tdFluxdx = tConst * tdStraindx;
 
-            adQIdx( iDir ) = aWStar * tdQIdVM * dot( tdVMdFlux, tdFluxdx );
+            adQIdx( iDir ) = aWStar * tdQIdStress * dot( tdStressdFlux, tdFluxdx );
         }
-    }
-
-    //------------------------------------------------------------------------------
-
-    real
-    IQI_Max_Stress::eval_Von_Mises_stress()
-    {
-        // get standardized stress vector
-        Matrix< DDRMat > tStressVector = this->get_stress_vector();
-
-        // compute contributions to von mises stress
-        real tNormalStressContribution =
-                std::pow( tStressVector( 0 ) - tStressVector( 1 ), 2.0 ) +    //
-                std::pow( tStressVector( 1 ) - tStressVector( 2 ), 2.0 ) +    //
-                std::pow( tStressVector( 2 ) - tStressVector( 0 ), 2.0 );
-        real tShearStressContribution =
-                std::pow( tStressVector( 3 ), 2.0 ) +    //
-                std::pow( tStressVector( 4 ), 2.0 ) +    //
-                std::pow( tStressVector( 5 ), 2.0 );
-
-        // compute von mises stress value
-        return std::sqrt( 0.5 * tNormalStressContribution + 3.0 * tShearStressContribution );
-    }
-
-    //------------------------------------------------------------------------------
-
-    real
-    IQI_Max_Stress::eval_principal_stress( uint aPrincipalStressIndex )
-    {
-        // get stress vector
-        Matrix< DDRMat > tStressVector = this->get_stress_vector();
-
-        // Standardized stress vector s = ( s_xx, s_yy, s_zz, s_yz, s_xz, s_xy ) (see get_stress_vector).
-        // 2D: the in-plane principal stresses are
-        //     sigma_1,2 = ( s_xx + s_yy ) / 2 +- sqrt( ( ( s_xx - s_yy ) / 2 )^2 + s_xy^2 )
-        // (in-plane shear s_xy is entry 5 of the standardized vector, entry 2 is s_zz)
-
-        // initialize stress value
-        real tStressValue = ( tStressVector( 0 ) + tStressVector( 1 ) ) / 2.0;
-
-        // get max shear stress
-        real tMaxShearStress = std::sqrt( std::pow( ( tStressVector( 0 ) - tStressVector( 1 ) ) / 2.0, 2.0 ) +    //
-                                          std::pow( tStressVector( 5 ), 2.0 ) );
-
-        // switch between the 2D case and the 3D case
-        // for 2D
-        if ( mLeaderFIManager->get_IP_geometry_interpolator()->get_number_of_space_dimensions() == 2 )
-        {
-            switch ( aPrincipalStressIndex )
-            {
-                case 1:
-                    tStressValue += tMaxShearStress;
-                    break;
-
-                case 2:
-                    tStressValue -= tMaxShearStress;
-                    break;
-
-                default:
-                    MORIS_ERROR( false,
-                            "IQI_Max_Stress::eval_principal_stress - Only 1st and 2nd principal stresses known for 2D." );
-            }
-        }
-
-        // for 3D
-        else
-        {
-            // 3D: the principal stresses are the roots of det( sigma - lambda I ) = -lambda^3 + I1 lambda^2 - I2 lambda + I3 = 0,
-            // with the stress invariants
-            //     I1 = s_xx + s_yy + s_zz                                                          (trace)
-            //     I2 = s_xx s_yy + s_yy s_zz + s_zz s_xx - s_yz^2 - s_xz^2 - s_xy^2               (sum of principal minors)
-            //     I3 = s_xx s_yy s_zz + 2 s_yz s_xz s_xy - s_xx s_yz^2 - s_yy s_xz^2 - s_zz s_xy^2  (det sigma)
-            // solved in closed form (trigonometric solution of the cubic):
-            //     Q = ( I1^2 - 3 I2 ) / 9,   R = ( 2 I1^3 - 9 I1 I2 + 27 I3 ) / 54,   theta = acos( R / Q^(3/2) )
-            //     lambda_k = 2 sqrt( Q ) cos( ( theta + 2 pi k ) / 3 ) + I1 / 3,   k = 0, 1, 2
-
-            // compute invariants
-            real tI1 = tStressVector( 0 ) + tStressVector( 1 ) + tStressVector( 2 );
-            real tI2 = tStressVector( 0 ) * tStressVector( 1 ) +    //
-                       tStressVector( 1 ) * tStressVector( 2 ) +    //
-                       tStressVector( 2 ) * tStressVector( 0 ) -    //
-                       std::pow( tStressVector( 3 ), 2.0 ) -        //
-                       std::pow( tStressVector( 4 ), 2.0 ) -        //
-                       std::pow( tStressVector( 5 ), 2.0 );
-            real tI3 = tStressVector( 0 ) * tStressVector( 1 ) * tStressVector( 2 ) -    //
-                       tStressVector( 0 ) * std::pow( tStressVector( 3 ), 2.0 ) -        //
-                       tStressVector( 1 ) * std::pow( tStressVector( 4 ), 2.0 ) -        //
-                       tStressVector( 2 ) * std::pow( tStressVector( 5 ), 2.0 ) +        //
-                       2.0 * tStressVector( 3 ) * tStressVector( 4 ) * tStressVector( 5 );
-
-            // help values
-            real tQ = ( 1. / 9. ) * ( std::pow( tI1, 2.0 ) - 3.0 * tI2 );
-            real tR = ( 1. / 54. ) * ( 2.0 * std::pow( tI1, 3.0 ) - 9.0 * tI1 * tI2 + 27.0 * tI3 );
-            // Q = 0 is a hydrostatic state (all principal values I1/3); round-off can push Q below 0 or |R|/Q^1.5 above 1
-            tQ      = std::max( tQ, 0.0 );
-            real tT = tQ > 0.0 ? std::acos( std::max( -1.0, std::min( 1.0, tR / std::sqrt( std::pow( tQ, 3.0 ) ) ) ) ) : 0.0;
-
-            // compute principal values
-            real tE1 = 2.0 * std::sqrt( tQ ) * std::cos( ( tT ) / 3.0 ) + tI1 / 3.0;
-            real tE2 = 2.0 * std::sqrt( tQ ) * std::cos( ( tT + 2.0 * M_PI ) / 3.0 ) + tI1 / 3.0;
-            real tE3 = 2.0 * std::sqrt( tQ ) * std::cos( ( tT + 4.0 * M_PI ) / 3.0 ) + tI1 / 3.0;
-
-            // figure out minimum and maximum values
-            switch ( aPrincipalStressIndex )
-            {
-                case 1:
-                    tStressValue = std::max( std::max( tE1, tE2 ), std::max( tE2, tE3 ) );
-                    break;
-
-                case 2:
-                    tStressValue = std::max( std::min( tE1, tE2 ), std::min( std::max( tE1, tE2 ), tE3 ) );
-                    break;
-
-                case 3:
-                    tStressValue = std::min( std::min( tE1, tE2 ), std::min( tE2, tE3 ) );
-                    break;
-
-                default:
-                    MORIS_ERROR( false,
-                            "IQI_Max_Stress::eval_principal_stress - Only 1st, 2nd, and 3rd principal stresses known for 3D." );
-            }
-        }
-
-        // return stress value
-        return tStressValue;
-    }
-
-    //------------------------------------------------------------------------------
-
-    real
-    IQI_Max_Stress::eval_normal_stress( uint aStressIndex )
-    {
-        // get stress vector
-        Matrix< DDRMat > tStressVector = this->get_stress_vector();
-
-        // pick stress value
-        return tStressVector( aStressIndex - 1 );
-    }
-
-    //------------------------------------------------------------------------------
-
-    real
-    IQI_Max_Stress::eval_shear_stress( uint aStressIndex )
-    {
-        // get stress vector
-        Matrix< DDRMat > tStressVector = this->get_stress_vector();
-
-        // pick stress value
-        return tStressVector( aStressIndex + 2 );
-    }
-
-    //------------------------------------------------------------------------------
-
-    Matrix< DDRMat >
-    IQI_Max_Stress::get_stress_vector()
-    {
-        // get stress vector from Constitutive model and pull apart stress vector into components
-        return standardize_stress_vector(
-                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux() );
-    }
-
-    //------------------------------------------------------------------------------
-
-    Matrix< DDRMat >
-    IQI_Max_Stress::standardize_stress_vector( const Matrix< DDRMat >& aCMStress )
-    {
-        // create stress vector
-        Matrix< DDRMat > tStressVector( 6, 1, 0.0 );
-
-        // pull apart stress vector into components
-        uint tNumStressComponents = aCMStress.length();
-        switch ( tNumStressComponents )
-        {
-            // 2D plane stress
-            case 3:
-                tStressVector( 0 ) = aCMStress( 0 );
-                tStressVector( 1 ) = aCMStress( 1 );
-                tStressVector( 5 ) = aCMStress( 2 );
-                break;
-
-                // 2D plane strain
-            case 4:
-                tStressVector( 0 ) = aCMStress( 0 );
-                tStressVector( 1 ) = aCMStress( 1 );
-                tStressVector( 2 ) = aCMStress( 2 );
-                tStressVector( 5 ) = aCMStress( 3 );
-                break;
-
-                // 3D
-            case 6:
-                tStressVector = aCMStress;
-                break;
-
-                // Unknown size - error
-            default:
-                MORIS_ERROR( false,
-                        "IQI_Max_Von_Mises_Stress::get_stress_vector - CM stress vector of unknown size; 3, 4 or 6 components expected." );
-        }
-
-        // return filled stress vector
-        return tStressVector;
     }
 
     //------------------------------------------------------------------------------
