@@ -43,6 +43,10 @@ namespace moris::fem
         uint             get_number_of_integration_points() const override;
         void             compute_jacobian_and_residual() override;
 
+        // OUTPUT-ONLY: re-fire the contact ray in the current (deformed) configuration and set the
+        // follower field interpolator to the resulting parametric point (see base class doc).
+        void remap_follower_for_output() const override;
+
       protected:
         moris_index get_follower_local_cell_index() const override;
 

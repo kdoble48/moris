@@ -18,6 +18,9 @@
 #include "cl_Vector.hpp"
 #include "cl_SDF_From_Interface.hpp"
 
+#include <cmath>
+#include <cstdint>
+
 using namespace moris;
 using namespace sdf;
 
@@ -628,5 +631,153 @@ TEST_CASE(
 
             REQUIRE( std::abs( tSDF( i ) - tExpectedSDF ) < tTolerance );
         }
+    }
+}
+
+//-------------------------------------------------------------------------------
+// The bucket-grid nearest-facet search in SDF_From_Interface::compute must return the same distance as the
+// brute-force loop over all facets (compute_distance_to_interface), for points inside, near and far outside the
+// facets' bounding box, in 2D (segments, a closed polyline plus scattered short segments) and 3D (triangles).
+// (perf/x18v8: the grid replaced an O(nodes x facets) loop that was 2.8 s of every X18 L-bracket evaluation)
+
+namespace
+{
+    // deterministic LCG in [0, 1)
+    real
+    lcg_uniform( uint64_t& aState )
+    {
+        aState = aState * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (real)( aState >> 11 ) / (real)( 1ULL << 53 );
+    }
+
+    void
+    check_grid_matches_brute_force( const Matrix< DDRMat >& aFacetNodeCoords,
+            const Matrix< IndexMat >&                       aFacetConn,
+            uint                                            aDim,
+            uint64_t                                        aSeed )
+    {
+        uint             tNumNodes = 3000;
+        Matrix< DDRMat > tNodeCoords( tNumNodes, aDim );
+        uint64_t         tState = aSeed;
+        for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+        {
+            // most points in [-0.2, 1.2]^d around the facets in [0, 1]^d, every 10th far outside in [-3, 4]^d
+            real tScale = iNode % 10 == 0 ? 7.0 : 1.4;
+            real tShift = iNode % 10 == 0 ? -3.0 : -0.2;
+            for ( uint iDim = 0; iDim < aDim; ++iDim )
+            {
+                tNodeCoords( iNode, iDim ) = tShift + tScale * lcg_uniform( tState );
+            }
+        }
+        // a few nodes exactly on facet vertices
+        for ( uint iNode = 0; iNode < 20 && iNode < aFacetNodeCoords.n_rows(); ++iNode )
+        {
+            for ( uint iDim = 0; iDim < aDim; ++iDim )
+            {
+                tNodeCoords( iNode, iDim ) = aFacetNodeCoords( iNode, iDim );
+            }
+        }
+
+        Vector< moris_index > tPhase( tNumNodes, 1 );
+        Matrix< DDRMat >      tSDF;
+        SDF_From_Interface::compute( tNumNodes, tNodeCoords, aFacetNodeCoords, aFacetConn, tPhase, 0, tSDF );
+
+        uint tMismatch = 0;
+        real tMaxDiff  = 0.0;
+        for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+        {
+            Matrix< DDRMat > tPoint( aDim, 1 );
+            for ( uint iDim = 0; iDim < aDim; ++iDim )
+            {
+                tPoint( iDim ) = tNodeCoords( iNode, iDim );
+            }
+            real tRef  = SDF_From_Interface::compute_distance_to_interface( tPoint, aFacetNodeCoords, aFacetConn, aDim );
+            real tDiff = std::abs( tSDF( iNode ) - tRef );
+            tMaxDiff   = std::max( tMaxDiff, tDiff );
+            if ( tDiff > 1.0e-14 * std::max( 1.0, tRef ) )
+            {
+                ++tMismatch;
+            }
+        }
+        // the 3D kernel sums its dot products in a different order than the Armadillo reference: round-off only
+        INFO( "max |grid - brute force| = " << tMaxDiff );
+        CHECK( tMismatch == 0 );
+        CHECK( tMaxDiff < 1.0e-14 );
+    }
+}    // namespace
+
+TEST_CASE(
+        "gen::sdf::SDF_From_Interface - bucket grid equals brute force",
+        "[geomeng],[sdf],[SDF_From_Interface],[SDF_From_Interface_grid]" )
+{
+    SECTION( "2D closed polyline plus scattered segments" )
+    {
+        // a wavy closed curve (400 segments) and 200 short random segments
+        uint               tNumCurve = 400, tNumRand = 200;
+        uint               tNumVerts = tNumCurve + 2 * tNumRand;
+        Matrix< DDRMat >   tVerts( tNumVerts, 2 );
+        Matrix< IndexMat > tConn( tNumCurve + tNumRand, 2 );
+        for ( uint i = 0; i < tNumCurve; ++i )
+        {
+            real tTheta    = 2.0 * M_PI * i / tNumCurve;
+            real tR        = 0.3 + 0.08 * std::sin( 7.0 * tTheta );
+            tVerts( i, 0 ) = 0.5 + tR * std::cos( tTheta );
+            tVerts( i, 1 ) = 0.5 + tR * std::sin( tTheta );
+            tConn( i, 0 )  = i;
+            tConn( i, 1 )  = ( i + 1 ) % tNumCurve;
+        }
+        uint64_t tState = 7;
+        for ( uint i = 0; i < tNumRand; ++i )
+        {
+            uint tA = tNumCurve + 2 * i, tB = tA + 1;
+            tVerts( tA, 0 ) = lcg_uniform( tState );
+            tVerts( tA, 1 ) = lcg_uniform( tState );
+            tVerts( tB, 0 ) = tVerts( tA, 0 ) + 0.02 * ( lcg_uniform( tState ) - 0.5 );
+            tVerts( tB, 1 ) = tVerts( tA, 1 ) + 0.02 * ( lcg_uniform( tState ) - 0.5 );
+            if ( i % 50 == 0 )    // degenerate (zero-length) segment
+            {
+                tVerts( tB, 0 ) = tVerts( tA, 0 );
+                tVerts( tB, 1 ) = tVerts( tA, 1 );
+            }
+            tConn( tNumCurve + i, 0 ) = tA;
+            tConn( tNumCurve + i, 1 ) = tB;
+        }
+        check_grid_matches_brute_force( tVerts, tConn, 2, 11 );
+    }
+
+    SECTION( "2D single segment and collinear (flat bounding box) facets" )
+    {
+        Matrix< DDRMat >   tVerts   = { { 0.1, 0.5 }, { 0.9, 0.5 }, { 0.3, 0.5 } };
+        Matrix< IndexMat > tConn    = { { 0, 1 }, { 2, 0 } };
+        check_grid_matches_brute_force( tVerts, tConn, 2, 13 );
+    }
+
+    SECTION( "3D triangulated sphere" )
+    {
+        uint             tNt = 16, tNp = 24;
+        Matrix< DDRMat > tVerts( ( tNt + 1 ) * tNp, 3 );
+        for ( uint i = 0; i <= tNt; ++i )
+        {
+            for ( uint j = 0; j < tNp; ++j )
+            {
+                real tTheta = M_PI * i / tNt, tPhi = 2.0 * M_PI * j / tNp;
+                uint tV     = i * tNp + j;
+                tVerts( tV, 0 ) = 0.5 + 0.35 * std::sin( tTheta ) * std::cos( tPhi );
+                tVerts( tV, 1 ) = 0.5 + 0.35 * std::sin( tTheta ) * std::sin( tPhi );
+                tVerts( tV, 2 ) = 0.5 + 0.35 * std::cos( tTheta );
+            }
+        }
+        Matrix< IndexMat > tConn( 2 * tNt * tNp, 3 );
+        uint               tF = 0;
+        for ( uint i = 0; i < tNt; ++i )
+        {
+            for ( uint j = 0; j < tNp; ++j )
+            {
+                uint tA = i * tNp + j, tB = i * tNp + ( j + 1 ) % tNp, tC = tA + tNp, tD = tB + tNp;
+                tConn( tF, 0 ) = tA; tConn( tF, 1 ) = tB; tConn( tF, 2 ) = tC; ++tF;
+                tConn( tF, 0 ) = tB; tConn( tF, 1 ) = tD; tConn( tF, 2 ) = tC; ++tF;
+            }
+        }
+        check_grid_matches_brute_force( tVerts, tConn, 3, 17 );
     }
 }

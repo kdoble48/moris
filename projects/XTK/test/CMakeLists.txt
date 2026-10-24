@@ -40,7 +40,10 @@ set(TEST_SOURCES
     xtk/UT_XTK_Octree_Refinement.cpp
     xtk/UT_XTK_Unenrichment.cpp
     xtk/UT_XTK_Interior_Cut_Detection.cpp
+    xtk/UT_XTK_Cut_Pathologies.cpp
+    xtk/UT_XTK_Cut_Pathologies_MPI.cpp
     xtk/UT_XTK_Connectivity_Pathologies.cpp
+    xtk/UT_XTK_Flood_Fill_Pathologies.cpp
     xtk/UT_XTK_Basis_Extention.cpp
 	)
 

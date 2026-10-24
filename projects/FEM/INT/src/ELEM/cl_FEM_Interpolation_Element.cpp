@@ -1461,6 +1461,11 @@ namespace moris::fem
                 mSet->get_field_interpolator_manager( mtk::Leader_Follower::FOLLOWER )
                         ->set_space_time_from_local_IG_point( tFollowerCoordinates.get_column( iNode ) );
 
+                // OUTPUT-ONLY: the follower coordinate above is the frozen reference-config VIS pair;
+                // re-fire the contact ray in the current (deformed) configuration so nonconformal
+                // quantities (e.g. the contact gap) are evaluated against the true deformed follower.
+                tNCElement->remap_follower_for_output();
+
                 // set vertex coordinates for field interpolator of eigen vectors
                 if ( mSet->mNumEigenVectors )
                 {
