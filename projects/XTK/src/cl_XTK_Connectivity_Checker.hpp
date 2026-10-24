@@ -273,7 +273,7 @@ namespace moris::xtk::connectivity_check
         uint mLevelCountMismatch   = 0;    // bases whose level count differs from the component count
         uint mMissingBasis         = 0;    // subphase in support without an entry for the basis
         uint mEnrichedTotalMismatch = 0;   // mNumEnrichedBasisFunctions differs from the sum of level counts
-        uint mZeroRowBases         = 0;    // enriched bases whose subphases have no positive integration volume (E3)
+        uint mZeroRowBases         = 0;    // enriched bases whose subphases have no positive integration volume (a zero row)
         uint mTinyRowBases         = 0;    // ... below 1e-12 of a background cell
         uint mMaxSupportSubphases  = 0;
         uint mMaxGraphDegree       = 0;    // widest row of the pruned subphase graph (50 columns allocated in Enrichment::generate_pruned_subphase_graph_in_basis_support)
@@ -283,11 +283,13 @@ namespace moris::xtk::connectivity_check
         // bodies per phase, on this rank (only meaningful on one rank)
         uint mBodyMismatch = 0;    // phases whose XTK body count differs from the reference
 
-        // ghost (E10)
+        // ghost
         uint mGhostPairs         = 0;
         uint mGhostWithoutContact = 0;    // ghost facet between subphases that the reference does not link
 
-        std::string mFirstFailure;
+        std::string           mFirstFailure;
+        uint                  mMaxExamples = 1;    // inconsistencies kept in mExamples (Report_Mode::DETAILED raises it)
+        Vector< std::string > mExamples;
 
         void
         note( const std::string& aWhat )
@@ -295,6 +297,10 @@ namespace moris::xtk::connectivity_check
             if ( mFirstFailure.empty() )
             {
                 mFirstFailure = aWhat;
+            }
+            if ( mExamples.size() < mMaxExamples )
+            {
+                mExamples.push_back( aWhat );
             }
         }
 
@@ -353,9 +359,13 @@ namespace moris::xtk::connectivity_check
             mGhostWithoutContact += aOther.mGhostWithoutContact;
         }
 
-        // one line for the log: what was checked and every nonzero failure count
+        // one line, key=value tokens: "PASS cut_cells=... links=.../..." or "FAIL failures=... <count>=..." (for agents and CI logs)
         std::string
-        summary() const;
+        sparse_report() const;
+
+        // every count, layer by layer, informational ones included (for digging in)
+        std::string
+        detailed_report() const;
 
         // the same fields summed over the ranks (maxima reduced as maxima)
         void
@@ -407,6 +417,13 @@ namespace moris::xtk::connectivity_check
         Vector< Vector< real > > mOwnedSubphaseIds;    // owned subphase id
     };
 
+    // how much check_and_report() writes to the log
+    enum class Report_Mode
+    {
+        SPARSE,      // one line on rank 0: PASS/FAIL and the counts that matter
+        DETAILED     // every count, each rank's first inconsistencies, and the vertices of nonconforming face triangles
+    };
+
     // the reference check of one decomposed (and optionally enriched, ghost-stabilized) XTK model on a 3D HMR background
     // mesh; the results are in mCounts (local to this rank until mCounts.reduce())
     class Connectivity_Checker
@@ -437,10 +454,10 @@ namespace moris::xtk::connectivity_check
         void
         check_all( const Vector< moris_index >& aMeshIndices, bool aEnrichment, bool aGhost, Parallel_Rows* aRows );
 
-        // check_all, then sum the counts over all ranks, log a one-line summary and each rank's first inconsistency, and
-        // warn if there is any (collective); returns the summed counts
+        // check_all, then sum the counts over all ranks and log them: one line by default, everything with
+        // Report_Mode::DETAILED (collective); returns the summed counts
         Connectivity_Counts
-        check_and_report( const Vector< moris_index >& aMeshIndices, bool aEnrichment, bool aGhost );
+        check_and_report( const Vector< moris_index >& aMeshIndices, bool aEnrichment, bool aGhost, Report_Mode aMode = Report_Mode::SPARSE );
 
         // background cell boxes and the shared faces of face neighbours (from the mesh's neighbour lists)
         void

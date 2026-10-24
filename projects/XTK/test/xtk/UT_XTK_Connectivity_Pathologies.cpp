@@ -524,5 +524,20 @@ namespace moris::xtk
         CHECK( tCounts.mEnrichedBases > 0 );
         CHECK( tCounts.mEnrichedBases == tCounts.mReferenceComponents );
         CHECK( tCounts.mGhostPairs > 0 );
+        CHECK( tCounts.sparse_report().rfind( "PASS cut_cells=", 0 ) == 0 );
+
+        // the detailed mode checks the same and reports every count
+        Connectivity_Checker tDetailedChecker( tBox.mMesh, &tModel, tGeometryEngine.get_num_bulk_phase(), 0 );
+        Connectivity_Counts  tDetailed = tDetailedChecker.check_and_report( { 0 }, true, true, Report_Mode::DETAILED );
+        CHECK( tDetailed.failures() == 0 );
+        CHECK( tDetailed.mLinks == tCounts.mLinks );
+        CHECK( tDetailed.mEnrichedBases == tCounts.mEnrichedBases );
+        CHECK( tDetailed.detailed_report().find( "neighbourhood: links" ) != std::string::npos );
+
+        // the sparse line of a failing check: the total and every nonzero failure count, as key=value tokens
+        Connectivity_Counts tFailing;
+        tFailing.mMissingLinks = 2;
+        tFailing.mCrossTalk    = 1;
+        CHECK( tFailing.sparse_report() == "FAIL failures=3 missing_links=2 cross_talk=1 (details: Report_Mode::DETAILED)" );
     }
 }    // namespace moris::xtk

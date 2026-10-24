@@ -411,22 +411,34 @@ namespace moris::xtk::connectivity_check
     // ----------------------------------------------------------------------------------
 
     Connectivity_Counts
-    Connectivity_Checker::check_and_report( const Vector< moris_index >& aMeshIndices, bool aEnrichment, bool aGhost )
+    Connectivity_Checker::check_and_report( const Vector< moris_index >& aMeshIndices, bool aEnrichment, bool aGhost, Report_Mode aMode )
     {
-        this->check_all( aMeshIndices, aEnrichment, aGhost, nullptr );
+        bool tDetailed        = aMode == Report_Mode::DETAILED;
+        mCounts.mMaxExamples  = tDetailed ? 10 : 1;
+        mMaxDumps             = tDetailed ? std::max( mMaxDumps, 6u ) : mMaxDumps;
 
-        if ( mCounts.failures() > 0 )
-        {
-            MORIS_LOG_INFO_ALL_PROCS( "XTK connectivity check, rank %d: first inconsistency: %s", par_rank(), mCounts.mFirstFailure.c_str() );
-        }
+        this->check_all( aMeshIndices, aEnrichment, aGhost, nullptr );
 
         Connectivity_Counts tTotal = mCounts;
         tTotal.reduce();
 
-        MORIS_LOG_INFO( "XTK connectivity check: %s", tTotal.summary().c_str() );
-        if ( tTotal.failures() > 0 )
+        if ( tDetailed )
         {
-            MORIS_LOG_WARNING( "XTK connectivity check found %u inconsistencies", tTotal.failures() );
+            MORIS_LOG_INFO( "XTK connectivity check (detailed):\n%s", tTotal.detailed_report().c_str() );
+            for ( const std::string& iExample : mCounts.mExamples )
+            {
+                MORIS_LOG_INFO_ALL_PROCS( "XTK connectivity check, rank %d: %s", par_rank(), iExample.c_str() );
+            }
+        }
+
+        // the one line that is always written: INFO when it passes, WARNING (kept at higher severity levels) when it fails
+        if ( tTotal.failures() == 0 )
+        {
+            MORIS_LOG_INFO( "XTK connectivity: %s", tTotal.sparse_report().c_str() );
+        }
+        else
+        {
+            MORIS_LOG_WARNING( "XTK connectivity: %s", tTotal.sparse_report().c_str() );
         }
         return tTotal;
     }
@@ -997,7 +1009,7 @@ namespace moris::xtk::connectivity_check
         real                    tCellVolume  = mBoxes.size() > 0 ? mBoxes( 0 ).volume() : 1.0;
         std::shared_ptr< Subphase_Neighborhood_Connectivity > tNeighborhood = mCutMesh->get_subphase_neighborhood();
 
-        // positive integration volume per subphase (FEM drops clusters with no positive cell volume, E3)
+        // positive integration volume per subphase (FEM drops clusters with no positive cell volume, which leaves a zero row)
         uint           tNumSubphases = mCutMesh->get_num_subphases();
         Vector< real > tUsableVolume( tNumSubphases, 0.0 );
         for ( uint iSP = 0; iSP < tNumSubphases; iSP++ )
@@ -1273,27 +1285,62 @@ namespace moris::xtk::connectivity_check
     // ----------------------------------------------------------------------------------
 
     std::string
-    Connectivity_Counts::summary() const
+    Connectivity_Counts::sparse_report() const
     {
         std::ostringstream tStream;
-        tStream << "subphases " << mSubphases << " in " << mCutCells << " cut cells, links " << mLinks << " (reference " << mReferenceLinks
-                << "), enriched bases " << mEnrichedBases << " (reference components " << mReferenceComponents << "), ghost facets " << mGhostPairs;
+        if ( this->failures() == 0 )
+        {
+            tStream << "PASS cut_cells=" << mCutCells << " subphases=" << mSubphases << " links=" << mLinks << "/" << mReferenceLinks
+                    << " enriched_bases=" << mEnrichedBases << "/" << mReferenceComponents << " ghost_facets=" << mGhostPairs;
+            return tStream.str();
+        }
         const std::pair< const char*, uint > tFailures[] = {
-            { "subphase partition", mSubphasePartitionMismatch }, { "IG cell coverage", mCoverage }, { "mixed-phase subphases", mMixedPhaseSubphase },
-            { "subphase volumes", mVolumeMismatch }, { "missing links", mMissingLinks }, { "extra links", mExtraLinks }, { "self links", mSelfLinks },
-            { "duplicate links", mDuplicateLinks }, { "asymmetric links", mAsymmetricLinks }, { "cross-phase links", mCrossPhaseLinks },
-            { "same-cell links", mSameCellLinks }, { "links between non-adjacent cells", mNonAdjacentCells }, { "bad side ordinals", mBadSideOrdinals },
-            { "nonconforming faces", mNonconformingFaces }, { "cross-talk bases", mCrossTalk }, { "split components", mSplitComponents },
-            { "level count mismatches", mLevelCountMismatch }, { "missing bases", mMissingBasis }, { "enriched total mismatch", mEnrichedTotalMismatch },
-            { "ghost facets without contact", mGhostWithoutContact }
+            { "subphase_partition", mSubphasePartitionMismatch }, { "ig_cell_coverage", mCoverage }, { "mixed_phase_subphases", mMixedPhaseSubphase },
+            { "subphase_volumes", mVolumeMismatch }, { "missing_links", mMissingLinks }, { "extra_links", mExtraLinks }, { "self_links", mSelfLinks },
+            { "duplicate_links", mDuplicateLinks }, { "asymmetric_links", mAsymmetricLinks }, { "cross_phase_links", mCrossPhaseLinks },
+            { "same_cell_links", mSameCellLinks }, { "non_adjacent_links", mNonAdjacentCells }, { "bad_side_ordinals", mBadSideOrdinals },
+            { "nonconforming_faces", mNonconformingFaces }, { "cross_talk", mCrossTalk }, { "split_components", mSplitComponents },
+            { "level_count_mismatch", mLevelCountMismatch }, { "missing_bases", mMissingBasis }, { "enriched_total_mismatch", mEnrichedTotalMismatch },
+            { "ghost_without_contact", mGhostWithoutContact }
         };
+        tStream << "FAIL failures=" << this->failures();
         for ( const std::pair< const char*, uint >& iFailure : tFailures )
         {
             if ( iFailure.second > 0 )
             {
-                tStream << "; " << iFailure.first << " " << iFailure.second;
+                tStream << " " << iFailure.first << "=" << iFailure.second;
             }
         }
+        tStream << " (details: Report_Mode::DETAILED)";
+        return tStream.str();
+    }
+
+    // ----------------------------------------------------------------------------------
+
+    std::string
+    Connectivity_Counts::detailed_report() const
+    {
+        std::ostringstream tStream;
+        tStream << std::setprecision( 3 );
+        tStream << "  subphases:     " << mSubphases << " in " << mCutCells << " cut cells; partition mismatches " << mSubphasePartitionMismatch
+                << ", IG cell coverage " << mCoverage << ", mixed-phase " << mMixedPhaseSubphase << ", volume mismatches " << mVolumeMismatch
+                << " (max error " << mMaxVolumeError << ")\n";
+        tStream << "  neighbourhood: links " << mLinks << " (reference " << mReferenceLinks << "); missing " << mMissingLinks << ", extra " << mExtraLinks
+                << " (no contact " << mExtraNoContact << ", across a transition " << mExtraTransition << "), marginal " << mMarginalLinks << "\n"
+                << "                 self " << mSelfLinks << ", duplicate " << mDuplicateLinks << ", asymmetric " << mAsymmetricLinks << ", cross-phase "
+                << mCrossPhaseLinks << ", same-cell " << mSameCellLinks << ", non-adjacent cells " << mNonAdjacentCells << ", bad side ordinals "
+                << mBadSideOrdinals << "\n"
+                << "                 transition faces " << mTransitionFaces << ", nonconforming faces " << mNonconformingFaces
+                << ", duplicate-vertex triangles " << mDuplicateVertexTriangles << "\n";
+        tStream << "  enrichment:    bases " << mBases << ", enriched " << mEnrichedBases << " (reference components " << mReferenceComponents << "); cross-talk "
+                << mCrossTalk << ", split components " << mSplitComponents << ", level count mismatches " << mLevelCountMismatch << ", missing "
+                << mMissingBasis << ", enriched total mismatch " << mEnrichedTotalMismatch << "\n"
+                << "                 zero-volume bases " << mZeroRowBases << ", below 1e-12 of a cell " << mTinyRowBases << ", max subphases per support "
+                << mMaxSupportSubphases << ", max graph degree " << mMaxGraphDegree << ", flood-fill front overflows " << mFrontOverflow
+                << " (max front ratio " << mMaxFrontRatio << ")\n";
+        tStream << "  bodies:        phases with a body-count mismatch " << mBodyMismatch << " (one rank only)\n";
+        tStream << "  ghost:         facets " << mGhostPairs << ", without contact " << mGhostWithoutContact << "\n";
+        tStream << "  result:        " << this->sparse_report();
         return tStream.str();
     }
 
