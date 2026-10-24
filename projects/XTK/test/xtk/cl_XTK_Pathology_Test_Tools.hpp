@@ -29,12 +29,14 @@
 #include "cl_HMR_Background_Mesh_Base.hpp"
 #include "cl_HMR_Background_Element_Base.hpp"
 #include "fn_PRM_HMR_Parameters.hpp"
+#include "cl_XTK_Connectivity_Checker.hpp"
 
 namespace moris::xtk
 {
     namespace pathology_test
     {
-        using Point = std::array< real, 3 >;
+        using connectivity_check::Hash;
+        using connectivity_check::Point;
 
         enum class Regime
         {
@@ -126,33 +128,6 @@ namespace moris::xtk
 
         // ----------------------------------------------------------------------------------
         // hashing (64-bit FNV-1a, split into two exactly representable reals for gathering as DDRMat)
-
-        struct Hash
-        {
-            std::uint64_t mValue = 1469598103934665603ULL;
-
-            void
-            add( std::int64_t aValue )
-            {
-                for ( uint iByte = 0; iByte < 8; iByte++ )
-                {
-                    mValue ^= ( static_cast< std::uint64_t >( aValue ) >> ( 8 * iByte ) ) & 0xffULL;
-                    mValue *= 1099511628211ULL;
-                }
-            }
-
-            real
-            high() const
-            {
-                return (real)( mValue >> 32 );
-            }
-
-            real
-            low() const
-            {
-                return (real)( mValue & 0xffffffffULL );
-            }
-        };
 
         // rows gathered on rank 0 (empty elsewhere)
         inline Vector< Matrix< DDRMat > >

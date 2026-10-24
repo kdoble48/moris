@@ -492,4 +492,37 @@ namespace moris::xtk
         }
     }
 
+
+    // ----------------------------------------------------------------------------------
+    // the checker as a standalone XTK tool on a model built through the parameter list
+
+    TEST_CASE( "XTK connectivity checker on a model run through the parameter list", "[XTK][XTK_CONNECTIVITY][XTK_CONNECTIVITY_CHECK]" )
+    {
+        // a sphere cutting several cells of a 4 x 4 x 4 box; decomposition, enrichment and ghost run through Model::perform()
+        Grid_Mesh tBox( { 4, 4, 4 }, { 1.0, 1.0, 1.0 } );
+
+        gShapes[ 0 ] = sphere( { 0.5, 0.5, 0.5 }, 0.3 );
+        gen::Geometry_Engine_Parameters tGenParameters;
+        tGenParameters.mGeometries = { create_geometry( 0, Regime::STORED ) };
+        gen::Geometry_Engine tGeometryEngine( tBox.mMesh, tGenParameters );
+
+        Parameter_List tParameters = prm::create_xtk_parameter_list();
+        tParameters.set( "ghost_stab", true );
+        Model tModel( tParameters );
+        tModel.set_geometry_engine( &tGeometryEngine );
+        tModel.set_mtk_background_mesh( tBox.mMesh );
+        tModel.set_output_performer( std::make_shared< mtk::Mesh_Manager >() );    // perform_enrichment registers the enriched meshes there
+        REQUIRE( tModel.perform() );
+
+        Connectivity_Checker tChecker( tBox.mMesh, &tModel, tGeometryEngine.get_num_bulk_phase(), 0 );
+        Connectivity_Counts  tCounts = tChecker.check_and_report( { 0 }, true, true );
+
+        CHECK( tCounts.failures() == 0 );
+        CHECK( tCounts.mCutCells > 0 );
+        CHECK( tCounts.mLinks > 0 );
+        CHECK( tCounts.mLinks == tCounts.mReferenceLinks );
+        CHECK( tCounts.mEnrichedBases > 0 );
+        CHECK( tCounts.mEnrichedBases == tCounts.mReferenceComponents );
+        CHECK( tCounts.mGhostPairs > 0 );
+    }
 }    // namespace moris::xtk
