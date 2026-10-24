@@ -9,6 +9,7 @@
  */
 
 #include "cl_GEN_User_Defined_Field.hpp"
+#include "fn_stringify_matrix.hpp"
 
 namespace moris::gen
 {
@@ -54,7 +55,13 @@ namespace moris::gen
     real
     User_Defined_Field::get_field_value( const Matrix< DDRMat >& aCoordinates )
     {
-        return this->get_field_value_user_defined( aCoordinates, mFieldVariables );
+        real tValue = this->get_field_value_user_defined( aCoordinates, mFieldVariables );
+
+        MORIS_ASSERT( std::isfinite( tValue ),
+                "There is an error in a user-defined field (field evaluates to nan/infinity at %s).",
+                ios::stringify_log( aCoordinates ).c_str() );
+
+        return tValue;
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -63,6 +70,22 @@ namespace moris::gen
     User_Defined_Field::get_dfield_dadvs( const Matrix< DDRMat >& aCoordinates )
     {
         this->get_dfield_dadvs_user_defined( aCoordinates, mFieldVariables, mSensitivities );
+
+        // the user function is checked on the coordinates it is called with: the field does not know its spatial
+        // dimension, so it cannot be probed at a made-up point when it is created (MB-080)
+        MORIS_ERROR( mSensitivities.n_rows() == 1,
+                "A user-defined field must provide a row vector for sensitivities." );
+        MORIS_ERROR( mSensitivities.n_cols() == mFieldVariables.size(),
+                "A user-defined field must have a sensitivity vector with a length equal to the total "
+                "number of field variables (ADVs + constants). sensitivities: %zu   geom variables: %zu \n",
+                mSensitivities.n_cols(),
+                mFieldVariables.size() );
+        for ( uint tSensitivityIndex = 0; tSensitivityIndex < mSensitivities.n_cols(); tSensitivityIndex++ )
+        {
+            MORIS_ASSERT( std::isfinite( mSensitivities( tSensitivityIndex ) ),
+                    "There is an error in a user-defined field sensitivity (evaluates to nan/infinity)." );
+        }
+
         return mSensitivities;
     }
 
@@ -97,10 +120,9 @@ namespace moris::gen
     void
     User_Defined_Field::validate_user_defined_functions()
     {
-        // Check field evaluation function
+        // Check field evaluation function. Its values (and the sensitivities' shape) are checked where the functions are
+        // called, on real coordinates: a probe at a fixed 3D point breaks 2D fields (MB-080)
         MORIS_ERROR( get_field_value_user_defined, "No field evaluation function was provided to a user-defined field." );
-        MORIS_ASSERT( std::isfinite( this->get_field_value_user_defined( { { 0.0, 0.0, 0.0 } }, mFieldVariables ) ),
-                "There is an error in a user-defined field (field evaluates to nan/infinity)." );
 
         // Check if sensitivity function was provided
         if ( get_dfield_dadvs_user_defined == nullptr )
@@ -111,29 +133,6 @@ namespace moris::gen
                     "Please make sure that you provide this function, or that sensitivities are not required." );
             get_dfield_dadvs_user_defined = &( User_Defined_Field::no_sensitivities );
             mSensitivities.set_size( 1, this->mFieldVariables.size(), 0.0 );
-        }
-        else
-        {
-            // Check sensitivity function
-            this->get_dfield_dadvs_user_defined( { { 0.0, 0.0, 0.0 } }, mFieldVariables, mSensitivities );
-
-            // Check for row vector
-            MORIS_ERROR( mSensitivities.n_rows() == 1,
-                    "A user-defined field must provide a row vector for sensitivities." );
-
-            // Check for size
-            MORIS_ERROR( mSensitivities.n_cols() == mFieldVariables.size(),
-                    "A user-defined field must have a sensitivity vector with a length equal to the total "
-                    "number of field variables (ADVs + constants). sensitivities: %zu   geom variables: %zu \n",
-                    mSensitivities.n_cols(),
-                    mFieldVariables.size() );
-
-            // Check for values not nan/infinity
-            for ( uint tSensitivityIndex = 0; tSensitivityIndex < mSensitivities.n_cols(); tSensitivityIndex++ )
-            {
-                MORIS_ASSERT( std::isfinite( mSensitivities( tSensitivityIndex ) ),
-                        "There is an error in a user-defined field sensitivity (evaluates to nan/infinity)." );
-            }
         }
     }
 

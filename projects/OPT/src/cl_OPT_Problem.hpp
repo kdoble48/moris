@@ -250,6 +250,22 @@ namespace moris::opt
          */
         virtual Matrix< DDSMat > get_constraint_types() = 0;
 
+      public:
+        /**
+         * Map values read from a restart file to the current ADV layout. An entry whose file ijkl ID is a real ID goes
+         * to the position of that ID in the current layout; an ID that is not found is an error. An entry without an ID
+         * (gNoID: ADVs not tied to a mesh entity) keeps its position.
+         *
+         * @param aFileIjklIds ijkl IDs in the order of the file
+         * @param aIjklIds ijkl IDs in the current order
+         * @param aFileValues values in the order of the file
+         * @return values in the current order
+         */
+        static Vector< real > map_restart_values_to_layout(
+                const Matrix< IdMat >& aFileIjklIds,
+                const Matrix< IdMat >& aIjklIds,
+                const Vector< real >&  aFileValues );
+
       private:
         /**
          * Read restart file
