@@ -458,6 +458,36 @@ namespace moris::xtk
             return tCases;
         }
 
+        // interfaces at the outer edge of the aura rather than on the processor face. With the face at x = 1 on 2 ranks,
+        // rank 1's aura ends at x = 0.5 and rank 0's at x = 1.5 both for 4 x 2 x 2 cells with linear B-splines (h = 0.5,
+        // one aura layer) and for 8 x 4 x 4 cells with quadratic ones (h = 0.25, two layers). A cut cell in the outermost
+        // aura layer lacks its outer neighbours on that rank; its outer vertices have no T-matrix there.
+        // aEdges: the aura edges to use (e.g. { 0.5 } on a mesh refined beyond x = 1.5)
+        inline Vector< Parallel_Case >
+        aura_edge_cases( const Vector< real >& aEdges = { 0.5, 1.5 } )
+        {
+            const Point tXAxis   = { 1.0, 0.0, 0.0 };
+            const Point tSlanted = { 1.0, 0.3, 0.2 };
+
+            Vector< Parallel_Case > tCases;
+            for ( real tEdge : aEdges )
+            {
+                const Point tPoint = { tEdge, 0.5, 0.5 };    // a vertex on the aura edge
+                std::ostringstream tPrefix;
+                tPrefix << "x=" << tEdge;
+                tCases.push_back( { tPrefix.str() + " (aura edge)", { plane_through( tXAxis, tPoint, 0.0 ) } } );
+                for ( real tOffset : { 1.0e-11, -1.0e-11, 1.0e-6, -1.0e-6, 0.1, -0.1 } )
+                {
+                    std::ostringstream tName;
+                    tName << tPrefix.str() << ( tOffset > 0.0 ? "+" : "" ) << tOffset;
+                    tCases.push_back( { tName.str(), { plane_through( tXAxis, tPoint, tOffset ) } } );
+                }
+                tCases.push_back( { tPrefix.str() + " slanted", { plane_through( tSlanted, tPoint, 0.0 ) } } );
+                tCases.push_back( { tPrefix.str() + " diagonal", { plane_through( { 1.0, 1.0, 0.0 }, tPoint, 0.0 ) } } );
+            }
+            return tCases;
+        }
+
         // CSV output on rank 0, open only if MORIS_XTK_PATHOLOGY_MPI_CSV is set
         inline std::ofstream*
         parallel_csv_stream()
