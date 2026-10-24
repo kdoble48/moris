@@ -263,11 +263,12 @@ namespace moris::xtk
 
     TEST_CASE( "XTK pathology: a merged enriched IP vertex carries one id on every rank", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_IPV_IDS]" )
     {
-        // Finding 27 (studies/xtk_holistic_review/findings/15_walkthrough_stops_2_3.md §8.7): enriched IP vertex ids are
+        // Finding 27 (studies/xtk_holistic_review/findings/15_walkthrough_stops_2_3.md §8.7): enriched IP vertex ids were
         // assigned per unzipped copy (one copy per subphase) before merge_duplicate_interpolation_vertices, and each rank
-        // keeps the id of its own first local copy. The owner and the other ranks can therefore keep different copies'
-        // ids for the same vertex. Checked here: every vertex, identified by its location and enriched T-matrix, has a
-        // single id across all ranks. Vertices without a T-matrix (aura) are skipped. Run on 2 ranks:
+        // kept the id of its own first local copy, so the owner and the other ranks could keep different copies' ids for
+        // the same vertex. Checked here: every vertex, identified by its location and enriched T-matrix, has a single id
+        // across all ranks (vertices without a T-matrix, in the aura, are skipped), and the owned vertex ids are exactly
+        // 1..N with no id repeated on a rank, i.e. each vertex is numbered once. Run on 2 ranks:
         //   mpirun -n 2 XTK-test.exe "[XTK_PATHOLOGY_MPI_IPV_IDS]"
         if ( par_size() < 2 )
         {
@@ -325,8 +326,14 @@ namespace moris::xtk
                 {
                     std::cout << "      first corner: " << aResult.mCornerTMatrixExample << "\n";
                 }
+                if ( not aResult.mOwnedIpVertexIdExample.empty() )
+                {
+                    std::cout << "      first numbering defect: " << aResult.mOwnedIpVertexIdExample << "\n";
+                }
                 CHECK( not aResult.mThrew );
                 CHECK( aResult.mIpVerticesWithSeveralIds == 0 );
+                CHECK( aResult.mOwnedIpVertexIdDefects == 0 );
+                CHECK( aResult.mIpVertexIdsRepeatedOnRank == 0 );
                 CHECK( aResult.mIpVertexMismatch == 0 );
                 CHECK( aResult.mCornerTMatrixMismatch == 0 );
             };
@@ -404,7 +411,8 @@ namespace moris::xtk
                 uint tCopies = tResult.mBgCellMismatch + tResult.mIpVertexMismatch + tResult.mIpCellMismatch;
                 uint tMissing = tResult.mClusterVerticesWithoutBasis + tResult.mEmptyOwnedVertices;
                 uint tIds     = tResult.mIpVerticesWithSeveralIds + tResult.mDuplicateIgCellIds + tResult.mInvalidIgCellIds
-                          + tResult.mDuplicateSubphaseIds + tResult.mInvalidSubphaseIds;
+                          + tResult.mDuplicateSubphaseIds + tResult.mInvalidSubphaseIds
+                          + tResult.mOwnedIpVertexIdDefects + tResult.mIpVertexIdsRepeatedOnRank;
                 bool tFailed = tResult.mThrew or tCopies > 0 or tMissing > 0 or tIds > 0 or tResult.mCornerTMatrixMismatch > 0;
                 tNumFailedCases += tFailed;
 
@@ -557,6 +565,8 @@ namespace moris::xtk
                     { "IP vertex copies", tResult.mIpVertexMismatch },
                     { "T-matrix corners", tResult.mCornerTMatrixMismatch },
                     { "vertices with several ids", tResult.mIpVerticesWithSeveralIds },
+                    { "owned vertex ids not 1..N", tResult.mOwnedIpVertexIdDefects },
+                    { "vertex ids repeated on a rank", tResult.mIpVertexIdsRepeatedOnRank },
                     { "cluster vertices without T", tResult.mClusterVerticesWithoutBasis },
                     { "owned vertices with empty T", tResult.mEmptyOwnedVertices },
                     { "duplicate ig/sp ids", tResult.mDuplicateIgCellIds + tResult.mInvalidIgCellIds + tResult.mDuplicateSubphaseIds + tResult.mInvalidSubphaseIds },
