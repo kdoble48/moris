@@ -55,6 +55,7 @@ set(HEADERS
         cl_XTK_Cut_Integration_Mesh.hpp
         cl_XTK_External_Mesh_Data.hpp
         cl_XTK_Face_Registry.hpp
+        cl_XTK_Connectivity_Checker.hpp
         cl_XTK_Ghost_Stabilization.hpp
         cl_XTK_Hole_Seeder.hpp
         cl_XTK_Input_Generator.hpp
@@ -145,6 +146,7 @@ set(LIB_SOURCES
         cl_XTK_Enrichment.cpp
         cl_XTK_Vertex_Enrichment.cpp
         cl_XTK_Field.cpp
+        cl_XTK_Connectivity_Checker.cpp
         cl_XTK_Ghost_Stabilization.cpp
         cl_XTK_Hole_Seeder.cpp
         cl_XTK_Multigrid.cpp
