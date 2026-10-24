@@ -494,6 +494,448 @@ namespace moris::xtk
 
 
     // ----------------------------------------------------------------------------------
+    // refinement-transition lineup: the background neighbour records (facet, side ordinals, transition location) and the
+    // local coordinates of every double-sided cluster side, checked against the physical geometry
+
+    namespace
+    {
+        Box
+        vertex_box( const Vector< mtk::Vertex const * >& aVertices )
+        {
+            Box tBox;
+            for ( mtk::Vertex const * iVertex : aVertices )
+            {
+                Matrix< DDRMat > tX = iVertex->get_coords();
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    tBox.mMin[ iDim ] = std::min( tBox.mMin[ iDim ], tX( iDim ) );
+                    tBox.mMax[ iDim ] = std::max( tBox.mMax[ iDim ], tX( iDim ) );
+                }
+            }
+            return tBox;
+        }
+
+        bool
+        same_box( const Box& aA, const Box& aB, real aTolerance )
+        {
+            for ( uint iDim = 0; iDim < 3; iDim++ )
+            {
+                if ( std::abs( aA.mMin[ iDim ] - aB.mMin[ iDim ] ) > aTolerance or std::abs( aA.mMax[ iDim ] - aB.mMax[ iDim ] ) > aTolerance )
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool
+        box_inside( const Box& aInner, const Box& aOuter, real aTolerance )
+        {
+            for ( uint iDim = 0; iDim < 3; iDim++ )
+            {
+                if ( aInner.mMin[ iDim ] < aOuter.mMin[ iDim ] - aTolerance or aInner.mMax[ iDim ] > aOuter.mMax[ iDim ] + aTolerance )
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // the axis along which a face box is flat
+        uint
+        flat_axis( const Box& aFace )
+        {
+            uint tAxis = 0;
+            for ( uint iDim = 1; iDim < 3; iDim++ )
+            {
+                if ( aFace.size( iDim ) < aFace.size( tAxis ) )
+                {
+                    tAxis = iDim;
+                }
+            }
+            return tAxis;
+        }
+
+        // the column of aCell's neighbour records that points at aNeighbor (MORIS_INDEX_MAX if none)
+        moris_index
+        record_of_neighbor( const Matrix< IndexMat >& aRecords, moris_index aNeighbor )
+        {
+            for ( uint iN = 0; iN < aRecords.n_cols(); iN++ )
+            {
+                if ( aRecords( 0, iN ) == aNeighbor )
+                {
+                    return (moris_index)iN;
+                }
+            }
+            return MORIS_INDEX_MAX;
+        }
+
+        struct Lineup_Counts
+        {
+            uint mSameLevelSides  = 0;
+            uint mCoarseToFine    = 0;
+            uint mFineToCoarse    = 0;
+            uint mLevelJumps      = 0;    // neighbours more than one level apart
+            uint mBadSameLevel    = 0;    // the two faces or the two facet indices differ
+            uint mBadCoarseToFine = 0;    // fine face not on the coarse face, no transition location, or facet not the coarse cell's own
+            uint mBadLocation     = 0;    // one (side ordinal, transition location) names two different positions on the face
+            uint mDuplicateLocation = 0;  // two fine neighbours on one coarse side with the same transition location
+            uint mBadFineToCoarse = 0;    // the neighbour ordinal does not name the coarse face that contains mine, or its facet differs
+            uint mFacetNotNeighbors = 0;  // fine -> coarse: the facet index HMR gives is not the coarse cell's facet (MB-075)
+            uint mClusterSides    = 0;
+            uint mCrossLevelSides = 0;
+            uint mBadLocalCoords  = 0;    // a side vertex's local coordinate, mapped through the interpolation cell, misses the vertex
+            uint mBadPatch        = 0;    // leader and follower sides do not cover the same patch
+            uint mCrossLevelGhost = 0;
+            std::array< uint, 6 > mCrossLevelGhostByDirection = {};    // -x, +x, -y, +y, -z, +z of the coarse side's face
+            Vector< std::string > mNotes;
+
+            void
+            note( const std::string& aNote )
+            {
+                if ( mNotes.size() < 12 )
+                {
+                    mNotes.push_back( aNote );
+                }
+            }
+
+            void
+            reduce()
+            {
+                for ( uint* iValue : { &mSameLevelSides, &mCoarseToFine, &mFineToCoarse, &mLevelJumps, &mBadSameLevel, &mBadCoarseToFine, &mBadLocation,
+                              &mDuplicateLocation, &mBadFineToCoarse, &mFacetNotNeighbors, &mClusterSides, &mCrossLevelSides, &mBadLocalCoords,
+                              &mBadPatch, &mCrossLevelGhost } )
+                {
+                    *iValue = sum_all( *iValue );
+                }
+                for ( uint& iValue : mCrossLevelGhostByDirection )
+                {
+                    iValue = sum_all( iValue );
+                }
+            }
+        };
+
+        // (1) background neighbour records against the geometry of the two cells
+        void
+        check_background_lineup( mtk::Interpolation_Mesh* aMesh, Lineup_Counts& aCounts )
+        {
+            // (side ordinal, transition location) -> position of the fine face's centre on the coarse face, in units of 1e-6
+            // of the coarse face size; HMR must use one convention for all cells
+            std::map< std::pair< moris_index, moris_index >, std::pair< std::int64_t, std::int64_t > > tPositionOfLocation;
+
+            for ( uint iCell = 0; iCell < aMesh->get_num_elems(); iCell++ )
+            {
+                const mtk::Cell&   tCell      = aMesh->get_mtk_cell( iCell );
+                real               tTolerance = 1.0e-9 * cell_box( tCell ).size( 0 );
+                Matrix< IndexMat > tByIndex   = aMesh->get_elements_connected_to_element_and_face_ind_loc_inds( iCell );
+                Matrix< IndexMat > tByOrdinal = aMesh->get_elements_connected_to_element_and_face_ord_loc_inds( iCell );
+                Matrix< IndexMat > tMyFacets  = aMesh->get_entity_connected_to_entity_loc_inds( iCell, mtk::EntityRank::ELEMENT, aMesh->get_facet_rank() );
+                std::map< moris_index, std::set< moris_index > > tLocationsOnSide;
+
+                for ( uint iN = 0; iN < tByOrdinal.n_cols(); iN++ )
+                {
+                    moris_index      tNeighborIndex = tByOrdinal( 0, iN );
+                    const mtk::Cell& tNeighbor      = aMesh->get_mtk_cell( tNeighborIndex );
+                    moris_index      tMyOrdinal     = tByOrdinal( 1, iN );
+                    moris_index      tNbOrdinal     = tByOrdinal( 2, iN );
+                    moris_index      tLocation      = tByOrdinal( 3, iN );
+                    moris_index      tGivenFacet    = tByIndex( 1, iN );
+                    Box              tMyFace        = vertex_box( tCell.get_vertices_on_side_ordinal( tMyOrdinal ) );
+                    Box              tNbFace        = vertex_box( tNeighbor.get_vertices_on_side_ordinal( tNbOrdinal ) );
+                    uint             tAxis          = flat_axis( tMyFace );
+                    bool             tCoplanar      = flat_axis( tNbFace ) == tAxis and std::abs( tMyFace.mMin[ tAxis ] - tNbFace.mMin[ tAxis ] ) <= tTolerance;
+                    Matrix< IndexMat > tNbFacets    = aMesh->get_entity_connected_to_entity_loc_inds( tNeighborIndex, mtk::EntityRank::ELEMENT, aMesh->get_facet_rank() );
+                    Matrix< IndexMat > tNbByIndex   = aMesh->get_elements_connected_to_element_and_face_ind_loc_inds( tNeighborIndex );
+                    moris_index      tBackRecord    = record_of_neighbor( tNbByIndex, (moris_index)iCell );
+                    uint             tMyLevel       = tCell.get_level();
+                    uint             tNbLevel       = tNeighbor.get_level();
+                    std::string      tWhere         = "cell " + std::to_string( iCell ) + " (level " + std::to_string( tMyLevel ) + ") -> " + std::to_string( tNeighborIndex )
+                                         + " (level " + std::to_string( tNbLevel ) + "), ords " + std::to_string( tMyOrdinal ) + "/" + std::to_string( tNbOrdinal )
+                                         + ", location " + std::to_string( tLocation );
+
+                    if ( tMyLevel == tNbLevel )
+                    {
+                        aCounts.mSameLevelSides++;
+                        bool tGood = tCoplanar and same_box( tMyFace, tNbFace, tTolerance ) and tLocation == MORIS_INDEX_MAX and tGivenFacet == tMyFacets( tMyOrdinal )
+                                 and tGivenFacet == tNbFacets( tNbOrdinal ) and tBackRecord != MORIS_INDEX_MAX and tNbByIndex( 1, tBackRecord ) == tGivenFacet;
+                        if ( not tGood )
+                        {
+                            aCounts.mBadSameLevel++;
+                            aCounts.note( "same level: " + tWhere );
+                        }
+                    }
+                    else if ( tNbLevel == tMyLevel + 1 )
+                    {
+                        // coarse -> fine: the fine face lies on my face, at the position the transition location names
+                        aCounts.mCoarseToFine++;
+                        bool tGood = tCoplanar and box_inside( tNbFace, tMyFace, tTolerance ) and tLocation != MORIS_INDEX_MAX and tGivenFacet == tMyFacets( tMyOrdinal );
+                        if ( not tGood )
+                        {
+                            aCounts.mBadCoarseToFine++;
+                            aCounts.note( "coarse -> fine: " + tWhere );
+                            continue;
+                        }
+                        if ( not tLocationsOnSide[ tMyOrdinal ].insert( tLocation ).second )
+                        {
+                            aCounts.mDuplicateLocation++;
+                            aCounts.note( "duplicate transition location: " + tWhere );
+                        }
+                        uint                                  tAxis1 = ( tAxis + 1 ) % 3;
+                        uint                                  tAxis2 = ( tAxis + 2 ) % 3;
+                        std::pair< std::int64_t, std::int64_t > tPosition = {
+                            std::llround( 1.0e6 * ( 0.5 * ( tNbFace.mMin[ tAxis1 ] + tNbFace.mMax[ tAxis1 ] ) - tMyFace.mMin[ tAxis1 ] ) / tMyFace.size( tAxis1 ) ),
+                            std::llround( 1.0e6 * ( 0.5 * ( tNbFace.mMin[ tAxis2 ] + tNbFace.mMax[ tAxis2 ] ) - tMyFace.mMin[ tAxis2 ] ) / tMyFace.size( tAxis2 ) )
+                        };
+                        auto tKnown = tPositionOfLocation.insert( { { tMyOrdinal, tLocation }, tPosition } );
+                        if ( not tKnown.second and tKnown.first->second != tPosition )
+                        {
+                            aCounts.mBadLocation++;
+                            aCounts.note( "transition location names another position: " + tWhere );
+                        }
+                    }
+                    else if ( tMyLevel == tNbLevel + 1 )
+                    {
+                        // fine -> coarse: the neighbour ordinal names the coarse face that contains mine, and that face's facet is
+                        // the one the coarse cell reports for this pair
+                        aCounts.mFineToCoarse++;
+                        bool tGood = tCoplanar and box_inside( tMyFace, tNbFace, tTolerance ) and tBackRecord != MORIS_INDEX_MAX
+                                 and tNbByIndex( 1, tBackRecord ) == tNbFacets( tNbOrdinal );
+                        if ( not tGood )
+                        {
+                            aCounts.mBadFineToCoarse++;
+                            aCounts.note( "fine -> coarse: " + tWhere );
+                        }
+                        if ( tGivenFacet != tNbFacets( tNbOrdinal ) )
+                        {
+                            aCounts.mFacetNotNeighbors++;
+                        }
+                    }
+                    else
+                    {
+                        aCounts.mLevelJumps++;
+                        aCounts.note( "level jump: " + tWhere );
+                    }
+                }
+            }
+        }
+
+        // area and centroid of a planar polygon given by its corner vertices in cyclic order
+        void
+        add_polygon( const Vector< mtk::Vertex const * >& aCorners, real& aArea, Point& aMoment )
+        {
+            Matrix< DDRMat > tX0 = aCorners( 0 )->get_coords();
+            for ( uint iV = 1; iV + 1 < aCorners.size(); iV++ )
+            {
+                Matrix< DDRMat > tX1 = aCorners( iV )->get_coords();
+                Matrix< DDRMat > tX2 = aCorners( iV + 1 )->get_coords();
+                real             tA[ 3 ], tB[ 3 ];
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    tA[ iDim ] = tX1( iDim ) - tX0( iDim );
+                    tB[ iDim ] = tX2( iDim ) - tX0( iDim );
+                }
+                real tCross[ 3 ] = { tA[ 1 ] * tB[ 2 ] - tA[ 2 ] * tB[ 1 ], tA[ 2 ] * tB[ 0 ] - tA[ 0 ] * tB[ 2 ], tA[ 0 ] * tB[ 1 ] - tA[ 1 ] * tB[ 0 ] };
+                real tArea       = 0.5 * std::sqrt( tCross[ 0 ] * tCross[ 0 ] + tCross[ 1 ] * tCross[ 1 ] + tCross[ 2 ] * tCross[ 2 ] );
+                aArea += tArea;
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    aMoment[ iDim ] += tArea * ( tX0( iDim ) + tX1( iDim ) + tX2( iDim ) ) / 3.0;
+                }
+            }
+        }
+
+        // (2) every side of every double-sided cluster: the local coordinates the integration reads, mapped through the
+        // interpolation cell, must land on the side's vertices, and the leader and follower sides must cover the same patch
+        void
+        check_cluster_lineup( Model& aModel, Lineup_Counts& aCounts )
+        {
+            Enriched_Integration_Mesh& tEnrIgMesh = aModel.get_enriched_integ_mesh( 0 );
+            for ( uint iSet = 0; iSet < tEnrIgMesh.get_num_sets(); iSet++ )
+            {
+                mtk::Set* tSet = tEnrIgMesh.get_set_by_index( iSet );
+                if ( tSet->get_set_type() != mtk::SetType::DOUBLE_SIDED_SIDESET )
+                {
+                    continue;
+                }
+                bool tGhost = tSet->get_set_name().rfind( "ghost", 0 ) == 0;
+                for ( const mtk::Cluster* iCluster : tSet->get_clusters_on_set() )
+                {
+                    const mtk::Cell& tLeaderIp   = iCluster->get_interpolation_cell( mtk::Leader_Follower::LEADER );
+                    const mtk::Cell& tFollowerIp = iCluster->get_interpolation_cell( mtk::Leader_Follower::FOLLOWER );
+                    bool             tCross      = tLeaderIp.get_level() != tFollowerIp.get_level();
+                    real             tArea[ 2 ]  = { 0.0, 0.0 };
+                    Point            tMoment[ 2 ] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
+                    real             tSize       = std::min( cell_box( tLeaderIp ).size( 0 ), cell_box( tFollowerIp ).size( 0 ) );
+                    std::string      tWhere      = tSet->get_set_name() + " leader cell " + std::to_string( tLeaderIp.get_id() ) + " (level "
+                                         + std::to_string( tLeaderIp.get_level() ) + "), follower cell " + std::to_string( tFollowerIp.get_id() ) + " (level "
+                                         + std::to_string( tFollowerIp.get_level() ) + ")";
+
+                    for ( uint iSide = 0; iSide < 2; iSide++ )
+                    {
+                        mtk::Leader_Follower tSide   = iSide == 0 ? mtk::Leader_Follower::LEADER : mtk::Leader_Follower::FOLLOWER;
+                        Box                  tIpBox  = cell_box( iCluster->get_interpolation_cell( tSide ) );
+                        const Vector< mtk::Cell const * >& tCells = iCluster->get_primary_cells_in_cluster( tSide );
+                        for ( uint iCell = 0; iCell < tCells.size(); iCell++ )
+                        {
+                            aCounts.mClusterSides++;
+                            aCounts.mCrossLevelSides += tCross;
+                            moris_index                    tOrdinal = iCluster->get_cell_side_ordinal( iCell, tSide );
+                            Vector< mtk::Vertex const * > tVertices = tCells( iCell )->get_vertices_on_side_ordinal( tOrdinal );
+                            Matrix< DDRMat >               tXi      = iCluster->get_cell_local_coords_on_side_wrt_interp_cell( iCell, tSide );
+                            bool                           tGood    = tXi.n_rows() == tVertices.size() and tXi.n_cols() == 3;
+                            for ( uint iV = 0; tGood and iV < tVertices.size(); iV++ )
+                            {
+                                Matrix< DDRMat > tX = tVertices( iV )->get_coords();
+                                for ( uint iDim = 0; iDim < 3; iDim++ )
+                                {
+                                    real tMapped = tIpBox.mMin[ iDim ] + 0.5 * ( tXi( iV, iDim ) + 1.0 ) * tIpBox.size( iDim );
+                                    tGood        = tGood and std::abs( tMapped - tX( iDim ) ) <= 1.0e-9 * tSize;
+                                }
+                            }
+                            if ( not tGood )
+                            {
+                                aCounts.mBadLocalCoords++;
+                                aCounts.note( std::string( iSide == 0 ? "leader" : "follower" ) + " local coordinates off the side vertices: " + tWhere );
+                            }
+                            add_polygon( tCells( iCell )->get_vertices_on_side_ordinal( tOrdinal ), tArea[ iSide ], tMoment[ iSide ] );
+                        }
+                    }
+
+                    bool tSamePatch = std::abs( tArea[ 0 ] - tArea[ 1 ] ) <= 1.0e-9 * tSize * tSize and tArea[ 0 ] > 0.0;
+                    for ( uint iDim = 0; tSamePatch and iDim < 3; iDim++ )
+                    {
+                        tSamePatch = std::abs( tMoment[ 0 ][ iDim ] / tArea[ 0 ] - tMoment[ 1 ][ iDim ] / tArea[ 1 ] ) <= 1.0e-9 * tSize;
+                    }
+                    if ( not tSamePatch )
+                    {
+                        aCounts.mBadPatch++;
+                        aCounts.note( "leader and follower sides cover different patches: " + tWhere );
+                    }
+
+                    if ( tGhost and tCross )
+                    {
+                        // direction of the shared face as seen from the coarser side
+                        aCounts.mCrossLevelGhost++;
+                        const mtk::Cell& tCoarse  = tLeaderIp.get_level() < tFollowerIp.get_level() ? tLeaderIp : tFollowerIp;
+                        Box              tCoarseBox = cell_box( tCoarse );
+                        Point            tCentre   = { tMoment[ 0 ][ 0 ] / tArea[ 0 ], tMoment[ 0 ][ 1 ] / tArea[ 0 ], tMoment[ 0 ][ 2 ] / tArea[ 0 ] };
+                        for ( uint iDim = 0; iDim < 3; iDim++ )
+                        {
+                            if ( std::abs( tCentre[ iDim ] - tCoarseBox.mMin[ iDim ] ) <= 1.0e-9 * tSize )
+                            {
+                                aCounts.mCrossLevelGhostByDirection[ 2 * iDim ]++;
+                            }
+                            else if ( std::abs( tCentre[ iDim ] - tCoarseBox.mMax[ iDim ] ) <= 1.0e-9 * tSize )
+                            {
+                                aCounts.mCrossLevelGhostByDirection[ 2 * iDim + 1 ]++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        void
+        print_lineup( const std::string& aCase, const Lineup_Counts& aCounts, const Vector< std::string >& aLocalNotes )
+        {
+            if ( par_rank() == 0 )
+            {
+                const std::array< uint, 6 >& tDir = aCounts.mCrossLevelGhostByDirection;
+                std::cout << "\n=== " << aCase << " (" << par_size() << " rank(s)) ===\n"
+                          << "background sides: same level " << aCounts.mSameLevelSides << " (bad " << aCounts.mBadSameLevel << "), coarse->fine "
+                          << aCounts.mCoarseToFine << " (bad " << aCounts.mBadCoarseToFine << ", location mismatch " << aCounts.mBadLocation << ", duplicate location "
+                          << aCounts.mDuplicateLocation << "), fine->coarse " << aCounts.mFineToCoarse << " (bad " << aCounts.mBadFineToCoarse
+                          << "; facet given is not the coarse cell's: " << aCounts.mFacetNotNeighbors << "), level jumps " << aCounts.mLevelJumps << "\n"
+                          << "cluster sides: " << aCounts.mClusterSides << " (cross-level " << aCounts.mCrossLevelSides << "), bad local coordinates "
+                          << aCounts.mBadLocalCoords << ", leader/follower patch mismatch " << aCounts.mBadPatch << "\n"
+                          << "cross-level ghost facets: " << aCounts.mCrossLevelGhost << "  by coarse face -x/+x/-y/+y/-z/+z: " << tDir[ 0 ] << "/" << tDir[ 1 ] << "/"
+                          << tDir[ 2 ] << "/" << tDir[ 3 ] << "/" << tDir[ 4 ] << "/" << tDir[ 5 ] << "\n";
+            }
+            for ( const std::string& iNote : aLocalNotes )
+            {
+                std::cout << "  [rank " << par_rank() << "] " << iNote << "\n";
+            }
+        }
+
+        Lineup_Counts
+        run_lineup_case( mtk::Interpolation_Mesh* aMesh, const std::string& aCase, const Shape& aShape )
+        {
+            Lineup_Counts tCounts;
+            check_background_lineup( aMesh, tCounts );
+
+            gShapes[ 0 ] = aShape;
+            gen::Geometry_Engine_Parameters tParameters;
+            tParameters.mGeometries = { create_geometry( 0, Regime::STORED ) };
+            gen::Geometry_Engine tGeometryEngine( aMesh, tParameters );
+            Model                tModel( 3, aMesh, &tGeometryEngine );
+            tModel.mVerbose  = false;
+            bool tDecomposed = tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8, Subdivision_Method::C_HIERARCHY_TET4 } );
+            REQUIRE( sum_all( (uint)tDecomposed ) == (uint)par_size() );
+            tModel.perform_basis_enrichment( mtk::EntityRank::BSPLINE, Matrix< IndexMat >( 1, 1, 0 ), false );
+            tModel.construct_face_oriented_ghost_penalization_cells();
+            check_cluster_lineup( tModel, tCounts );
+
+            Vector< std::string > tLocalNotes = tCounts.mNotes;
+            tCounts.reduce();
+            print_lineup( aCase, tCounts, tLocalNotes );
+            return tCounts;
+        }
+
+        void
+        check_lineup_counts( const Lineup_Counts& aCounts )
+        {
+            CHECK( aCounts.mBadSameLevel == 0 );
+            CHECK( aCounts.mBadCoarseToFine == 0 );
+            CHECK( aCounts.mBadLocation == 0 );
+            CHECK( aCounts.mDuplicateLocation == 0 );
+            CHECK( aCounts.mBadFineToCoarse == 0 );
+            CHECK( aCounts.mLevelJumps == 0 );
+            CHECK( aCounts.mBadLocalCoords == 0 );
+            CHECK( aCounts.mBadPatch == 0 );
+        }
+    }    // namespace
+
+    TEST_CASE( "XTK refinement transition lineup: facets, ordinals, transition locations and ghost local coordinates", "[XTK][XTK_CONNECTIVITY][XTK_TRANSITION_LINEUP]" )
+    {
+        // A 6 x 6 x 6 box on [0,3]^3 whose central 2 x 2 x 2 block ([1,2]^3) is refined one level, so every face direction is a
+        // refinement transition. The geometries cut only fine cells next to the transition faces (a cut coarse cell next to
+        // uncut fine cells is MB-075), so legacy ghost builds non-trivial (coarse -> fine) facets on all six sides.
+        auto tCentralBlock = []( const Matrix< DDRMat >& aCentre, uint aPass ) -> bool {
+            real tLow  = aPass == 0 ? 1.0 : 1.25;
+            real tHigh = aPass == 0 ? 2.0 : 1.75;
+            return aCentre( 0 ) > tLow and aCentre( 0 ) < tHigh and aCentre( 1 ) > tLow and aCentre( 1 ) < tHigh and aCentre( 2 ) > tLow and aCentre( 2 ) < tHigh;
+        };
+
+        SECTION( "one refinement level" )
+        {
+            Grid_Mesh tBox( { 6, 6, 6 }, { 3.0, 3.0, 3.0 }, tCentralBlock, 1 );
+            for ( const std::pair< std::string, Shape >& iCase : Vector< std::pair< std::string, Shape > >{
+                          { "sphere r=0.45 in the refined block", sphere( { 1.5, 1.5, 1.5 }, 0.45 ) },
+                          { "box [1.1,1.9]^3 in the refined block", box_union( { { 1.1, 1.9, 1.1, 1.9, 1.1, 1.9 } } ) } } )
+            {
+                Lineup_Counts tCounts = run_lineup_case( tBox.mMesh, iCase.first, iCase.second );
+                check_lineup_counts( tCounts );
+                CHECK( tCounts.mCoarseToFine > 0 );
+                CHECK( tCounts.mFineToCoarse == tCounts.mCoarseToFine );
+                for ( uint iDirection = 0; iDirection < 6; iDirection++ )
+                {
+                    CHECK( tCounts.mCrossLevelGhostByDirection[ iDirection ] > 0 );
+                }
+            }
+        }
+
+        SECTION( "two refinement levels, nested" )
+        {
+            // second pass: [1.25,1.75]^3 inside the refined block; transitions 0 -> 1 outside and 1 -> 2 inside
+            Grid_Mesh     tBox( { 6, 6, 6 }, { 3.0, 3.0, 3.0 }, tCentralBlock, 2 );
+            Lineup_Counts tCounts = run_lineup_case( tBox.mMesh, "sphere r=0.2 in the level-2 block", sphere( { 1.5, 1.5, 1.5 }, 0.2 ) );
+            check_lineup_counts( tCounts );
+            CHECK( tCounts.mCoarseToFine > 0 );
+            CHECK( tCounts.mCrossLevelGhost > 0 );
+        }
+    }
+
+    // ----------------------------------------------------------------------------------
     // the checker as a standalone XTK tool on a model built through the parameter list
 
     TEST_CASE( "XTK connectivity checker on a model run through the parameter list", "[XTK][XTK_CONNECTIVITY][XTK_CONNECTIVITY_CHECK]" )
