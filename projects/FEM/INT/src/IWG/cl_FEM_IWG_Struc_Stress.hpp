@@ -91,26 +91,6 @@ namespace moris::fem
          */
         void compute_dRdp( real aWStar ) override;
 
-      private:
-        //------------------------------------------------------------------------------
-
-        void eval_stress_criterion(
-                moris::real&             aStressVal,
-                Matrix< DDRMat >&        aDStressVal,
-                Matrix< DDRMat > const & aStressTensor,
-                Matrix< DDRMat > const & aDStressTensor );
-
-        //------------------------------------------------------------------------------
-
-        void eval_Von_Mises_stress(
-                moris::real&             aStressVal,
-                Matrix< DDRMat >&        aDStressVal,
-                Matrix< DDRMat > const & aStressTensor,
-                Matrix< DDRMat > const & aDStressTensor );
-
-        //------------------------------------------------------------------------------
-
-        //------------------------------------------------------------------------------
     };
     //------------------------------------------------------------------------------
 }    // namespace moris::fem
