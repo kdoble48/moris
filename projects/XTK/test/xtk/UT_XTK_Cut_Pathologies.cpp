@@ -60,6 +60,7 @@
 
 #include "cl_Communication_Tools.hpp"
 
+#include "cl_XTK_Pathology_Test_Tools.hpp"
 #include "cl_XTK_Model.hpp"
 #include "cl_XTK_Cut_Integration_Mesh.hpp"
 #include "cl_MTK_Cell.hpp"
@@ -84,10 +85,11 @@
 
 namespace moris::xtk
 {
+    using namespace pathology_test;
+
     namespace
     {
         using Corner_Values = std::array< real, 8 >;
-        using Point         = std::array< real, 3 >;
 
         // corner i of [0,1]^3 sits at ( i & 1, ( i >> 1 ) & 1, ( i >> 2 ) & 1 )
         Corner_Values gCornersA = {};
@@ -114,27 +116,6 @@ namespace moris::xtk
 
         // tolerance on volumes compared with the reference
         const real gVolumeTolerance = 1.0e-10;
-
-        enum class Regime
-        {
-            STORED,
-            ANALYTIC,
-            MULTILINEAR
-        };
-
-        std::string
-        regime_name( Regime aRegime )
-        {
-            switch ( aRegime )
-            {
-                case Regime::STORED:
-                    return "stored";
-                case Regime::ANALYTIC:
-                    return "analytic";
-                default:
-                    return "multilinear";
-            }
-        }
 
         Point
         corner_point( uint aCorner )
@@ -1300,62 +1281,6 @@ namespace moris::xtk
         // integration vertices closer than this count as one location
         const real gLocationTolerance = 1.0e-12;
 
-        // built like the multi-rank [XTK_HMR] test (parameter list, initial refinement, mesh manager): the Unit_Hex
-        // construction (setters + finalize + create_interpolation_mesh) segfaults in the subphase neighbourhood on > 1 rank
-        // even without a cut
-        struct Box_Mesh
-        {
-            std::shared_ptr< hmr::HMR >          mHMR;
-            std::shared_ptr< mtk::Mesh_Manager > mMeshManager;
-            mtk::Interpolation_Mesh*             mMesh = nullptr;
-
-            // aRefineAboveX: background cells whose centre lies at x > aRefineAboveX are refined one level
-            explicit Box_Mesh( real aRefineAboveX = MORIS_REAL_MAX )
-            {
-                Module_Parameter_Lists tParameters( Module_Type::HMR );
-                tParameters( 0 ).add_parameter_list( prm::create_hmr_parameter_list() );
-                tParameters( 0 )( 0 ).set( "number_of_elements_per_dimension", 4, 2, 2 );
-                tParameters( 0 )( 0 ).set( "domain_dimensions", 2.0, 1.0, 1.0 );
-                tParameters( 0 )( 0 ).set( "domain_offset", 0.0, 0.0, 0.0 );
-                tParameters( 0 )( 0 ).set( "lagrange_output_meshes", "0" );
-                tParameters( 0 )( 0 ).set( "lagrange_orders", "1" );
-                tParameters( 0 )( 0 ).set( "lagrange_pattern", std::string( "0" ) );
-                tParameters( 0 )( 0 ).set( "bspline_orders", "1" );
-                tParameters( 0 )( 0 ).set( "bspline_pattern", std::string( "0" ) );
-                tParameters( 0 )( 0 ).set( "lagrange_to_bspline", "0" );
-                tParameters( 0 )( 0 ).set( "refinement_buffer", 1 );
-                tParameters( 0 )( 0 ).set( "staircase_buffer", 1 );
-
-                mHMR         = std::make_shared< hmr::HMR >( tParameters );
-                mMeshManager = std::make_shared< mtk::Mesh_Manager >();
-                mHMR->set_performer( mMeshManager );
-                mHMR->perform_initial_refinement();
-                if ( aRefineAboveX < MORIS_REAL_MAX )
-                {
-                    hmr::Background_Mesh_Base* tBackgroundMesh = mHMR->get_database()->get_background_mesh();
-                    luint                      tNumElements    = tBackgroundMesh->get_number_of_active_elements_on_proc();
-                    Matrix< DDRMat >           tCentre( 3, 1 );
-                    // mark the elements as Database::flag_element does, but without HMR::flag_element: that sets the
-                    // rank-local mHaveRefinedAtLeastOneElement, and Database::perform_refinement then skips a collective
-                    // call on the flagging ranks only (tFlag || perform_refinement short-circuits) and deadlocks (MB-043)
-                    uint tWorkingPattern = mHMR->get_database()->get_parameters()->get_working_pattern();
-                    for ( luint iElement = 0; iElement < tNumElements; iElement++ )
-                    {
-                        hmr::Background_Element_Base* tElement = tBackgroundMesh->get_element( iElement );
-                        tBackgroundMesh->calc_center_of_element( tElement, tCentre );
-                        if ( tCentre( 0 ) > aRefineAboveX )
-                        {
-                            tElement->put_on_refinement_queue();
-                            tElement->set_refined_flag( tWorkingPattern );
-                        }
-                    }
-                    mHMR->perform_refinement_based_on_working_pattern( 0 );
-                }
-                mHMR->perform();
-                mMesh = mMeshManager->get_interpolation_mesh( 0 );
-            }
-        };
-
         // exact negative volume of a plane in the box: the 24-tet reference is exact for a linear field, per background cell
         real
         box_reference_negative_volume( const Plane& aPlane )
@@ -1769,7 +1694,7 @@ namespace moris::xtk
 
     TEST_CASE( "XTK pathology sweep: planes at the processor boundary of a box, any number of ranks", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI]" )
     {
-        Box_Mesh                 tBox;
+        Grid_Mesh                tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 } );
         mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
 
         // where the processor boundaries are
@@ -1895,51 +1820,6 @@ namespace moris::xtk
         // ----------------------------------------------------------------------------------
         // aura sweep: a background cell held by several ranks (owner + aura copies) must be decomposed, numbered and
         // enriched identically on each of them, and the enriched meshes and output sets must not depend on the rank count
-
-        // 64-bit FNV-1a over integers, split into two exactly representable reals so it can be gathered as DDRMat
-        struct Hash
-        {
-            std::uint64_t mValue = 1469598103934665603ULL;
-
-            void
-            add( std::int64_t aValue )
-            {
-                for ( uint iByte = 0; iByte < 8; iByte++ )
-                {
-                    mValue ^= ( static_cast< std::uint64_t >( aValue ) >> ( 8 * iByte ) ) & 0xffULL;
-                    mValue *= 1099511628211ULL;
-                }
-            }
-
-            real
-            high() const
-            {
-                return (real)( mValue >> 32 );
-            }
-
-            real
-            low() const
-            {
-                return (real)( mValue & 0xffffffffULL );
-            }
-        };
-
-        // rows gathered on rank 0 (empty elsewhere)
-        Vector< Matrix< DDRMat > >
-        gather_rows( const Vector< Vector< real > >& aRows, uint aNumColumns )
-        {
-            Matrix< DDRMat > tRows( aRows.size(), aNumColumns );
-            for ( uint iRow = 0; iRow < aRows.size(); iRow++ )
-            {
-                for ( uint iCol = 0; iCol < aNumColumns; iCol++ )
-                {
-                    tRows( iRow, iCol ) = aRows( iRow )( iCol );
-                }
-            }
-            Vector< Matrix< DDRMat > > tGathered;
-            gatherv_mats( tRows, tGathered, 0 );
-            return tGathered;
-        }
 
         // entities held by several ranks: column 0 is the global id, columns aFirst.. must agree between the copies;
         // returns the number of ids whose copies disagree and fills one example
@@ -2407,7 +2287,7 @@ namespace moris::xtk
 
     TEST_CASE( "XTK pathology sweep: aura copies, enrichment and output sets agree across ranks", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_AURA]" )
     {
-        Box_Mesh                 tBox;
+        Grid_Mesh                tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 } );
         mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
 
         const char* tOnlyCase = std::getenv( "MORIS_XTK_PATHOLOGY_MPI_CASE" );
@@ -2510,7 +2390,7 @@ namespace moris::xtk
         // finding 6: check_intersected_background_cell_levels compares each rank's intersected cells with that rank's
         // first one and combines with all_land, so ranks that are each uniform at different levels pass. The box is
         // refined one level for x > 1.5; the processor face is x = 1 on 2 ranks, and each rank's aura reaches 0.5 past it.
-        Box_Mesh                 tBox( 1.5 );
+        Grid_Mesh                tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 }, 1.5 );
         mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
 
         struct Level_Case
