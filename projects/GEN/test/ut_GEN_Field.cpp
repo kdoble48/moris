@@ -66,6 +66,45 @@ namespace moris
 
     //------------------------------------------------------------------------------------------------------------------
 
+    // 2D disc of radius aParameters( 0 ) about (0.5, 0.5), written over the point's dimension: a 3D point reads past the
+    // 2-entry centre (vector::at throws), as the MB-031 XTK test fields do (MB-080)
+    real
+    user_defined_2d_disc_field(
+            const Matrix< DDRMat >& aCoordinates,
+            const Vector< real >&   aParameters )
+    {
+        Vector< real > tCentre          = { 0.5, 0.5 };
+        real           tSquaredDistance = 0.0;
+        for ( uint iDim = 0; iDim < aCoordinates.numel(); iDim++ )
+        {
+            tSquaredDistance += std::pow( aCoordinates( iDim ) - tCentre( iDim ), 2 );
+        }
+        return std::sqrt( tSquaredDistance ) - aParameters( 0 );
+    }
+
+    // its derivative with respect to the radius; evaluates the field first, so it reads the centre the same way
+    void
+    user_defined_2d_disc_sensitivity(
+            const Matrix< DDRMat >& aCoordinates,
+            const Vector< real >&   aParameters,
+            Matrix< DDRMat >&       aSensitivities )
+    {
+        user_defined_2d_disc_field( aCoordinates, aParameters );
+        aSensitivities = { { -1.0 } };
+    }
+
+    // a sensitivity function with the wrong length (two entries for one ADV)
+    void
+    user_defined_wrong_length_sensitivity(
+            const Matrix< DDRMat >& aCoordinates,
+            const Vector< real >&   aParameters,
+            Matrix< DDRMat >&       aSensitivities )
+    {
+        aSensitivities = { { 1.0, 1.0 } };
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
 }    // namespace moris
 
 namespace moris::gen
@@ -588,6 +627,36 @@ namespace moris::gen
         // Check sensitivity values
         CHECK_EQUAL( tUserDefinedField->get_dfield_dadvs( tCoordinates1 ), Matrix< DDRMat >( { { 0.0, 12.0 } } ), );
         CHECK_EQUAL( tUserDefinedField->get_dfield_dadvs( tCoordinates2 ), Matrix< DDRMat >( { { 2.0, -12.0 } } ), );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "User-defined field in 2D is not probed at a 3D point", "[gen], [field], [user-defined field], [MB-080]" )
+    {
+        // Creating the field used to call both functions at (0, 0, 0), which reads past a 2D field's centre: in release
+        // through the sensitivity function, in debug also through the field function (MB-080)
+        ADV_Manager   tADVManager( 1 );
+        Vector< ADV > tADVs = { tADVManager.create_adv( { 0.0, 0.2, 1.0 } ) };
+
+        std::shared_ptr< User_Defined_Field > tDisc;
+        REQUIRE_NOTHROW( tDisc = std::make_shared< User_Defined_Field >(
+                                 &user_defined_2d_disc_field,
+                                 &user_defined_2d_disc_sensitivity,
+                                 tADVs ) );
+
+        Matrix< DDRMat > tCentre  = { { 0.5, 0.5 } };
+        Matrix< DDRMat > tOutside = { { 1.0, 0.5 } };
+        CHECK( tDisc->get_field_value( tCentre ) == Approx( -0.2 ) );
+        CHECK( tDisc->get_field_value( tOutside ) == Approx( 0.3 ) );
+        CHECK_EQUAL( tDisc->get_dfield_dadvs( tOutside ), Matrix< DDRMat >( { { -1.0 } } ), );
+
+        // the sensitivity length is still checked, on the first real call instead of at construction
+        std::shared_ptr< User_Defined_Field > tWrongLength;
+        REQUIRE_NOTHROW( tWrongLength = std::make_shared< User_Defined_Field >(
+                                 &user_defined_2d_disc_field,
+                                 &user_defined_wrong_length_sensitivity,
+                                 tADVs ) );
+        CHECK_THROWS( tWrongLength->get_dfield_dadvs( tOutside ) );
     }
 
     //--------------------------------------------------------------------------------------------------------------
