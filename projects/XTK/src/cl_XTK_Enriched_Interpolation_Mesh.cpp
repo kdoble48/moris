@@ -808,11 +808,72 @@ namespace moris::xtk
     void
     Enriched_Interpolation_Mesh::merge_duplicate_interpolation_vertices()
     {
-        // TODO: only owning processor should merge and the non-owning procs should then request merged information
-
         Tracer tTracer( "XTK", "Enriched_Interpolation_Mesh", "merge_duplicate_interpolation_vertices", mXTKModel->mVerboseLevel, 0 );
         MORIS_LOG_SPEC( "Num Enriched Interpolation Vertices Pre Merge ", mEnrichedInterpVerts.size() );
 
+        // vertex enrichments are deduplicated by value per base vertex (add_vertex_enrichment), so equal pointers for every
+        // B-spline mesh mean equal enriched T-matrices
+        uint tNumMeshes = mInterpVertEnrichment.size();
+        this->merge_interpolation_vertices(
+                [ tNumMeshes ]( Interpolation_Vertex_Unzipped const & aVertex, Interpolation_Vertex_Unzipped const & aOther ) {
+                    for ( uint iMeshIndex = 0; iMeshIndex < tNumMeshes; iMeshIndex++ )
+                    {
+                        if ( aVertex.get_xtk_interpolation( iMeshIndex ) != aOther.get_xtk_interpolation( iMeshIndex ) )
+                        {
+                            return false;
+                        }
+                    }
+                    return true;
+                },
+                "enrichment" );
+
+        MORIS_LOG_SPEC( "Num Enriched Interpolation Vertices Post Merge", mEnrichedInterpVerts.size() );
+    }
+
+    // ----------------------------------------------------------------------------
+
+    void
+    Enriched_Interpolation_Mesh::merge_not_owned_vertices_with_same_id()
+    {
+        Tracer tTracer( "XTK", "Enriched_Interpolation_Mesh", "merge_not_owned_vertices_with_same_id", mXTKModel->mVerboseLevel, 0 );
+
+        moris_id tRank      = par_rank();
+        uint     tNumMeshes = mInterpVertEnrichment.size();
+
+        uint tNumMerged = this->merge_interpolation_vertices(
+                [ tRank, tNumMeshes ]( Interpolation_Vertex_Unzipped const & aVertex, Interpolation_Vertex_Unzipped const & aOther ) {
+                    if ( aVertex.get_owner() == tRank or aOther.get_owner() == tRank or aVertex.get_id() != aOther.get_id() )
+                    {
+                        return false;
+                    }
+
+                    // the owner says these are one vertex: locally they must not carry different enriched T-matrices
+                    // (a copy without a T-matrix, an aura vertex, gets one later from the owner)
+                    for ( uint iMeshIndex = 0; iMeshIndex < tNumMeshes; iMeshIndex++ )
+                    {
+                        Vertex_Enrichment const * tMine  = aVertex.get_xtk_interpolation( iMeshIndex );
+                        Vertex_Enrichment const * tOther = aOther.get_xtk_interpolation( iMeshIndex );
+                        MORIS_ERROR( tMine == tOther or tMine == nullptr or tOther == nullptr                                         //
+                                             or tMine->get_basis_indices().numel() == 0 or tOther->get_basis_indices().numel() == 0,
+                                "Enriched_Interpolation_Mesh::merge_not_owned_vertices_with_same_id() - "
+                                "the owner gave id %i to two unzipped copies of base vertex %i with different enriched T-matrices.",
+                                aVertex.get_id(),
+                                aVertex.get_base_vertex()->get_id() );
+                    }
+                    return true;
+                },
+                "owner id" );
+
+        MORIS_LOG_SPEC( "Num not-owned unzipped vertices merged by owner id", sum_all( tNumMerged ) );
+    }
+
+    // ----------------------------------------------------------------------------
+
+    uint
+    Enriched_Interpolation_Mesh::merge_interpolation_vertices(
+            const std::function< bool( Interpolation_Vertex_Unzipped const &, Interpolation_Vertex_Unzipped const & ) >& aSameVertex,
+            const std::string&                                                                                           aLabel )
+    {
         // this is how many vertices I start with
         moris_index tStartNumVerts = mEnrichedInterpVerts.size();
 
@@ -827,58 +888,35 @@ namespace moris::xtk
 
         for ( uint iBV = 0; iBV < tBaseVertexToEnrichedVertex.size(); iBV++ )
         {
-            // keep track of the first vertex that a given vertex wants to merge with
-            Vector< moris_index > tMergeWithVertex( tBaseVertexToEnrichedVertex( iBV ).size(), MORIS_INDEX_MAX );
+            Vector< Interpolation_Vertex_Unzipped* > const & tVertices = tBaseVertexToEnrichedVertex( iBV );
 
-            for ( uint iEV = 0; iEV < tBaseVertexToEnrichedVertex( iBV ).size(); iEV++ )
+            // the first earlier vertex that a given vertex merges into (the first of each group keeps MORIS_INDEX_MAX)
+            Vector< moris_index > tMergeWithVertex( tVertices.size(), MORIS_INDEX_MAX );
+
+            for ( uint iEV = 1; iEV < tVertices.size(); iEV++ )
             {
-                for ( uint iOtherEV = 0; iOtherEV < iEV + 1; iOtherEV++ )
+                for ( uint iOtherEV = 0; iOtherEV < iEV; iOtherEV++ )
                 {
-                    if ( iEV != iOtherEV )
+                    if ( aSameVertex( *tVertices( iEV ), *tVertices( iOtherEV ) ) )
                     {
-                        bool tMerge = true;
-                        for ( uint iMeshIndex = 0; iMeshIndex < mInterpVertEnrichment.size(); iMeshIndex++ )
-                        {
-                            Vertex_Enrichment* tMyVertexEnrichment    = tBaseVertexToEnrichedVertex( iBV )( iEV )->get_xtk_interpolation( iMeshIndex );
-                            Vertex_Enrichment* tOtherVertexEnrichment = tBaseVertexToEnrichedVertex( iBV )( iOtherEV )->get_xtk_interpolation( iMeshIndex );
-
-                            if ( tMyVertexEnrichment != tOtherVertexEnrichment )
-                            {
-                                tMerge = false;
-                                break;
-                            }
-                        }
-
-                        if ( tMerge )
-                        {
-                            if ( iEV == 0 )
-                            {
-                                tMergeWithVertex( iEV ) = iEV;
-                            }
-                            else
-                            {
-                                tMergeWithVertex( iEV ) = iOtherEV;
-                            }
-                            break;
-                        }
+                        tMergeWithVertex( iEV ) = iOtherEV;
+                        break;
                     }
                 }
             }
 
-            // at this point, entries in tMergeWithVertex should be such that nodes merged to are MORIS_INDEX_MAX everyone else has their new vertex index.
-            // iterate through these and change the new vertex index list
+            // vertices merged into are kept, every other vertex points to the one it merges into
             for ( uint iMerge = 0; iMerge < tMergeWithVertex.size(); iMerge++ )
             {
-                moris_index tOldIndex = tBaseVertexToEnrichedVertex( iBV )( iMerge )->get_index();
+                moris_index tOldIndex = tVertices( iMerge )->get_index();
+                MORIS_ASSERT( tNewIndex( tOldIndex ) == MORIS_INDEX_MAX, "OVERWRITING A NEW NODE INDEX" );
                 if ( tMergeWithVertex( iMerge ) == MORIS_INDEX_MAX )
                 {
-                    MORIS_ASSERT( tNewIndex( tOldIndex ) == MORIS_INDEX_MAX, "OVERWRITING A NEW NODE INDEX" );
                     tNewIndex( tOldIndex ) = tOldIndex;
                 }
                 else
                 {
-                    MORIS_ASSERT( tNewIndex( tOldIndex ) == MORIS_INDEX_MAX, "OVERWRITING A NEW NODE INDEX" );
-                    tNewIndex( tOldIndex ) = tBaseVertexToEnrichedVertex( iBV )( tMergeWithVertex( iMerge ) )->get_index();
+                    tNewIndex( tOldIndex ) = tVertices( tMergeWithVertex( iMerge ) )->get_index();
                     tNodesToDelete.push_back( tOldIndex );
                 }
             }
@@ -903,7 +941,7 @@ namespace moris::xtk
 
         mEnrichedInterpVerts.data().erase( std::remove( std::begin( mEnrichedInterpVerts.data() ), std::end( mEnrichedInterpVerts.data() ), nullptr ), std::end( mEnrichedInterpVerts.data() ) );
 
-        MORIS_ERROR( mEnrichedInterpVerts.size() == tStartNumVerts - tNodesToDelete.size(), "Something went wrong merging nodes." );
+        MORIS_ERROR( mEnrichedInterpVerts.size() == tStartNumVerts - tNodesToDelete.size(), "Something went wrong merging nodes (%s).", aLabel.c_str() );
 
         // reindex the vertices
         for ( uint iV = 0; iV < mEnrichedInterpVerts.size(); iV++ )
@@ -919,9 +957,37 @@ namespace moris::xtk
             }
         }
 
+        // the owned / not-owned lists hold vertex indices: rebuild them in the new numbering if they were set up
+        if ( mOwnedUnzippedVertices.size() + mNotOwnedUnzippedVertices.size() > 0 and tNodesToDelete.size() > 0 )
+        {
+            // kept vertices keep their order, so the new index of a kept vertex is its rank among the kept ones
+            Vector< moris_index > tCompactIndex( tStartNumVerts, MORIS_INDEX_MAX );
+            moris_index           tNextIndex = 0;
+            for ( moris_index iOld = 0; iOld < tStartNumVerts; iOld++ )
+            {
+                if ( tNewIndex( iOld ) == iOld )
+                {
+                    tCompactIndex( iOld ) = tNextIndex++;
+                }
+            }
+            for ( Vector< moris_index >* iList : { &mOwnedUnzippedVertices, &mNotOwnedUnzippedVertices } )
+            {
+                Vector< moris_index > tKept;
+                tKept.reserve( iList->size() );
+                for ( moris_index iOld : *iList )
+                {
+                    if ( tCompactIndex( iOld ) != MORIS_INDEX_MAX )
+                    {
+                        tKept.push_back( tCompactIndex( iOld ) );
+                    }
+                }
+                *iList = tKept;
+            }
+        }
+
         mNumVerts = mEnrichedInterpVerts.size();
 
-        MORIS_LOG_SPEC( "Num Enriched Interpolation Vertices Post Merge", mEnrichedInterpVerts.size() );
+        return tNodesToDelete.size();
     }
 
     // ----------------------------------------------------------------------------------
@@ -2178,7 +2244,12 @@ namespace moris::xtk
 
         this->setup_basis_maps();
 
+        // ids are assigned to merged vertices (merge_duplicate_interpolation_vertices runs first): the owner numbers its
+        // vertices, every other rank asks the owner by (base vertex, unzipped cell) and gets the id of the merged vertex
         this->assign_ip_vertex_ids();
+
+        // not-owned copies the owner calls one vertex (aura copies without a T-matrix were not merged locally)
+        this->merge_not_owned_vertices_with_same_id();
 
         this->setup_vertex_maps();
     }
