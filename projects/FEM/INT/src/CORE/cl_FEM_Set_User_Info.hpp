@@ -12,6 +12,8 @@
 #define SRC_FEM_CL_FEM_SET_USER_INFO_HPP_
 
 #include <algorithm>
+#include <set>
+#include <string>
 #include <utility>
 
 #include "moris_typedefs.hpp"    //MRS/COR/src
@@ -427,9 +429,7 @@ namespace moris::fem
             // an IWG added twice to a set is assembled twice, e.g. when a set name is repeated in its mesh_set_names
             if ( std::find( mIWGs.begin(), mIWGs.end(), aIWG ) != mIWGs.end() )
             {
-                MORIS_LOG_WARNING( "IWG %s is defined more than once on mesh set %s and will be assembled once per definition; check its mesh_set_names.",
-                        aIWG->get_name().c_str(),
-                        mMeshSetName.c_str() );
+                this->warn_repeated_definition( "IWG", aIWG->get_name(), "assembled" );
             }
 
             mIWGs.push_back( aIWG );
@@ -465,9 +465,7 @@ namespace moris::fem
             // an IQI added twice to a set is evaluated twice, e.g. when a set name is repeated in its mesh_set_names
             if ( std::find( mIQIs.begin(), mIQIs.end(), aIQI ) != mIQIs.end() )
             {
-                MORIS_LOG_WARNING( "IQI %s is defined more than once on mesh set %s and will be evaluated once per definition; check its mesh_set_names.",
-                        aIQI->get_name().c_str(),
-                        mMeshSetName.c_str() );
+                this->warn_repeated_definition( "IQI", aIQI->get_name(), "evaluated" );
             }
 
             mIQIs.push_back( aIQI );
@@ -481,6 +479,32 @@ namespace moris::fem
         const Vector< std::shared_ptr< fem::IQI > > &get_IQIs() const
         {
             return mIQIs;
+        }
+
+      private:
+        //------------------------------------------------------------------------------
+        /**
+         * warn that an IWG or IQI is defined more than once on this set; each one is reported once per run,
+         * although the model (and its set infos) is rebuilt at every optimization iteration
+         * @param[ in ] aKind   "IWG" or "IQI"
+         * @param[ in ] aName   IWG or IQI name
+         * @param[ in ] aAction what happens once per definition ("assembled" or "evaluated")
+         */
+        void warn_repeated_definition(
+                const std::string &aKind,
+                const std::string &aName,
+                const std::string &aAction ) const
+        {
+            static std::set< std::string > sReported;
+
+            if ( sReported.insert( aKind + " " + aName + " on " + mMeshSetName ).second )
+            {
+                MORIS_LOG_WARNING( "%s %s is defined more than once on mesh set %s and will be %s once per definition; check its mesh_set_names.",
+                        aKind.c_str(),
+                        aName.c_str(),
+                        mMeshSetName.c_str(),
+                        aAction.c_str() );
+            }
         }
     };
 
