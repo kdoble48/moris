@@ -34,6 +34,7 @@ set(TEST_SOURCES
     cl_FEM_Integration_Mesh_Test.cpp
     cl_FEM_Integration_Mesh_Test2.cpp
     cl_FEM_Double_Sided_Sideset_Test.cpp
+    UT_FEM_Element_Nonconformal_Sideset_Gap.cpp
     cl_FEM_Element_HJ_Test.cpp
     UT_FEM_Set.cpp
     #UT_FEM_Element.cpp
