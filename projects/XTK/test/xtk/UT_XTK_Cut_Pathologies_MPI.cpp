@@ -21,6 +21,8 @@
  *
  */
 
+#include <mpi.h>
+
 #include "catch.hpp"
 
 #include "cl_XTK_Cut_Pathology_MPI_Harness.hpp"
@@ -436,6 +438,171 @@ namespace moris::xtk
         {
             std::cout << "\n  cases with a disagreement, missing data or a throw: " << tNumFailedCases << "\n";
             CHECK( tNumFailedCases == 0 );
+        }
+    }
+
+    TEST_CASE( "XTK fuzz: random interfaces at processor boundaries and aura edges", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_FUZZ]" )
+    {
+        // Random level-set geometries (fuzz_case) on an HMR mesh sized from HMR's own partitioning rules: the rank grid is
+        // MPI_Dims_create (HMR decomposition method 1), the padding (= aura) is P = B-spline order (buffers 1), and every rank
+        // owns W = 2P + 2 elements per split direction (HMR needs >= P, or 2P + 1 with numbered aura, when a direction is
+        // split more than twice; 2P + 2 also leaves owned cells between the aura edges of the two neighbours).
+        // Every case runs all aura_case checks plus the global enrichment check. Run on 4 and 8 ranks:
+        //   mpirun -n 8 XTK-test.exe "[XTK_PATHOLOGY_MPI_FUZZ]"
+        // Environment: MORIS_XTK_FUZZ_SEED (1), MORIS_XTK_FUZZ_CASES per order (40), MORIS_XTK_FUZZ_CASE (one case index),
+        // MORIS_XTK_FUZZ_ORDERS ("1,2"), MORIS_XTK_FUZZ_WIDTH (owned elements per split direction, default 2P + 2).
+        if ( par_size() < 2 )
+        {
+            WARN( "needs at least 2 ranks" );
+            return;
+        }
+        auto tEnv = []( const char* aName, const std::string& aDefault ) -> std::string {
+            const char* tValue = std::getenv( aName );
+            return tValue != nullptr ? std::string( tValue ) : aDefault;
+        };
+        std::uint64_t tSeed     = std::stoull( tEnv( "MORIS_XTK_FUZZ_SEED", "1" ) );
+        uint          tNumCases = std::stoul( tEnv( "MORIS_XTK_FUZZ_CASES", "40" ) );
+        int           tOnlyCase = std::stoi( tEnv( "MORIS_XTK_FUZZ_CASE", "-1" ) );
+        std::string   tWidthEnv = tEnv( "MORIS_XTK_FUZZ_WIDTH", "" );
+        Vector< uint > tOrders;
+        {
+            std::stringstream tStream( tEnv( "MORIS_XTK_FUZZ_ORDERS", "1,2" ) );
+            std::string       tItem;
+            while ( std::getline( tStream, tItem, ',' ) )
+            {
+                tOrders.push_back( std::stoul( tItem ) );
+            }
+        }
+
+        int tRankGrid[ 3 ] = { 0, 0, 0 };
+        MPI_Dims_create( par_size(), 3, tRankGrid );
+        const real tH = 0.125;
+
+        uint                     tNumRun = 0, tNumRefused = 0;
+        std::map< std::string, uint > tFailures;
+        Vector< std::string >    tFailedCases;
+        for ( uint iOrder : tOrders )
+        {
+            uint                  tWidth = tWidthEnv.empty() ? 2 * iOrder + 2 : std::stoul( tWidthEnv );
+            std::array< uint, 3 > tElements;
+            Point                 tDomain;
+            for ( uint iDim = 0; iDim < 3; iDim++ )
+            {
+                tElements[ iDim ] = std::max( tRankGrid[ iDim ], 1 ) * tWidth;
+                tDomain[ iDim ]   = tElements[ iDim ] * tH;
+            }
+            Grid_Mesh                tBox( tElements, tDomain, MORIS_REAL_MAX, std::to_string( iOrder ) );
+            mtk::Interpolation_Mesh* tMesh        = tBox.mMesh;
+            Fuzz_Coordinates         tCoordinates = fuzz_coordinates( tMesh, tDomain, tH, iOrder );
+            if ( par_rank() == 0 )
+            {
+                std::cout << "\n=== fuzz: B-spline order " << iOrder << ", " << tElements[ 0 ] << "x" << tElements[ 1 ] << "x" << tElements[ 2 ]
+                          << " cells, rank grid " << tRankGrid[ 0 ] << "x" << tRankGrid[ 1 ] << "x" << tRankGrid[ 2 ] << ", seed " << tSeed << " ===\n";
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    std::cout << "    axis " << iDim << ": processor boundaries";
+                    for ( real iX : tCoordinates.mProcessorBoundaries[ iDim ] )
+                    {
+                        std::cout << " " << iX;
+                    }
+                    std::cout << " | aura edges";
+                    for ( real iX : tCoordinates.mAuraEdges[ iDim ] )
+                    {
+                        std::cout << " " << iX;
+                    }
+                    std::cout << "\n";
+                }
+            }
+
+            for ( uint iCase = 0; iCase < tNumCases; iCase++ )
+            {
+                if ( tOnlyCase >= 0 and (uint)tOnlyCase != iCase )
+                {
+                    continue;
+                }
+                Fuzz_Case                     tCase = fuzz_case( tSeed, 100000 * iOrder + iCase, tCoordinates );
+                Vector< gen::Field_Function > tFields;
+                for ( uint iGeometry = 0; iGeometry < tCase.mGeometries.size(); iGeometry++ )
+                {
+                    gFuzzGeometries[ iGeometry ] = tCase.mGeometries( iGeometry );
+                    tFields.push_back( iGeometry == 0 ? &fuzz_field_0 : &fuzz_field_1 );
+                }
+
+                // announce first: a crash or a hang (a rank throwing inside a collective call) then names its case
+                std::ostringstream tName;
+                tName << "order " << iOrder << " case " << iCase;
+                if ( par_rank() == 0 )
+                {
+                    std::cout << "FUZZ-START " << tName.str() << " : " << tCase.mDescription << std::endl;
+                }
+
+                Aura_Result tResult = aura_case_fields( tMesh, tFields, Regime::STORED );
+                if ( par_rank() != 0 )
+                {
+                    continue;
+                }
+
+                if ( tResult.mThrew and tResult.mMessage.find( "decomposition refused" ) != std::string::npos )
+                {
+                    tNumRefused++;
+                    std::cout << "    " << tName.str() << "  refused\n";
+                    continue;
+                }
+                tNumRun++;
+
+                std::map< std::string, uint > tCounts = {
+                    { "threw", tResult.mThrew },
+                    { "bg cell copies", tResult.mBgCellMismatch },
+                    { "IP cell copies", tResult.mIpCellMismatch },
+                    { "IP vertex copies", tResult.mIpVertexMismatch },
+                    { "T-matrix corners", tResult.mCornerTMatrixMismatch },
+                    { "vertices with several ids", tResult.mIpVerticesWithSeveralIds },
+                    { "cluster vertices without T", tResult.mClusterVerticesWithoutBasis },
+                    { "owned vertices with empty T", tResult.mEmptyOwnedVertices },
+                    { "duplicate ig/sp ids", tResult.mDuplicateIgCellIds + tResult.mInvalidIgCellIds + tResult.mDuplicateSubphaseIds + tResult.mInvalidSubphaseIds },
+                    { "dof split", tResult.mDofSplit },
+                    { "dof merged", tResult.mDofMerged },
+                    { "dof ambiguous", tResult.mDofAmbiguous },
+                };
+                std::ostringstream tFailed;
+                for ( const std::pair< const std::string, uint >& iCount : tCounts )
+                {
+                    if ( iCount.second > 0 )
+                    {
+                        tFailures[ iCount.first ]++;
+                        tFailed << "  " << iCount.first << " " << iCount.second;
+                    }
+                }
+                std::cout << ( tFailed.str().empty() ? "    " : "  X " ) << tName.str() << "  bases " << tResult.mDofBases << "  shared corners "
+                          << tResult.mSharedCorners << tFailed.str() << "\n";
+                if ( not tFailed.str().empty() )
+                {
+                    tFailedCases.push_back( tName.str() + ":" + tFailed.str() );
+                    for ( const std::string& iExample : { tResult.mMessage, tResult.mBgCellExample, tResult.mIpCellExample, tResult.mIpVertexExample,
+                                  tResult.mCornerTMatrixExample, tResult.mIpVertexIdExample, tResult.mDofExample } )
+                    {
+                        if ( not iExample.empty() )
+                        {
+                            std::cout << "        " << iExample.substr( 0, 200 ) << "\n";
+                        }
+                    }
+                }
+            }
+        }
+
+        if ( par_rank() == 0 )
+        {
+            std::cout << "\n  fuzz summary: " << tNumRun << " cases run, " << tNumRefused << " refused by decomposition, " << tFailedCases.size()
+                      << " failing\n";
+            for ( const std::pair< const std::string, uint >& iFailure : tFailures )
+            {
+                std::cout << "    " << std::setw( 30 ) << iFailure.first << ": " << iFailure.second << " case(s)\n";
+            }
+            for ( const std::string& iCase : tFailedCases )
+            {
+                std::cout << "    failing " << iCase << "\n";
+            }
+            CHECK( tFailedCases.size() == 0 );
         }
     }
 

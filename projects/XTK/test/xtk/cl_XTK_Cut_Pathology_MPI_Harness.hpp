@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
@@ -661,6 +662,14 @@ namespace moris::xtk
             return tSeveral;
         }
 
+        // global enrichment check on rank 0 (fills the mDof* fields of aResult). aDofs: (background basis id, subphase id,
+        // enriched basis id) of every owned subphase; aLinks: (subphase id, neighbour subphase id), same phase only.
+        // For each background basis the subphases using it are split into connected pieces by the links among them:
+        // one enriched id per piece, different ids for different pieces (generalized Heaviside)
+        struct Aura_Result;
+        inline void
+        check_enrichment_components( const Vector< Matrix< DDRMat > >& aDofs, const Vector< Matrix< DDRMat > >& aLinks, Aura_Result& aResult );
+
         // ids that two different entities carry (column 0 = id, column 1 = 1 if owned): owned ids must be unique
         inline uint
         count_duplicate_owned_ids( const Vector< Matrix< DDRMat > >& aGathered, uint& aNumOwned, uint& aNumInvalid )
@@ -715,6 +724,13 @@ namespace moris::xtk
             uint        mSharedCorners = 0, mCornerTMatrixMismatch = 0;
             std::string mCornerTMatrixExample;
 
+            // global enrichment check (generalized Heaviside, over all ranks): for every background basis, the owned
+            // subphases in its support (those whose T-matrices use it) are split into same-phase connected pieces with the
+            // subphase neighbourhood; each piece must carry one enriched basis id (else "split"), different pieces
+            // different ids (else "merged"), and each (basis, subphase) pair one id (else "ambiguous")
+            uint        mDofBases = 0, mDofSplit = 0, mDofMerged = 0, mDofAmbiguous = 0;
+            std::string mDofExample;
+
             // background cells this rank holds (owned + aura); on rank 0 after aura_case: the min and max over ranks,
             // which give the aura depth (e.g. 8 x 4 x 4 on 2 ranks: 64 owned + 16 per aura layer)
             uint mNumBgCellsOnRank = 0, mMinBgCellsOnRank = 0, mMaxBgCellsOnRank = 0;
@@ -742,6 +758,120 @@ namespace moris::xtk
             std::map< std::string, std::pair< uint, real > > mSets;
         };
 
+        inline void
+        check_enrichment_components( const Vector< Matrix< DDRMat > >& aDofs, const Vector< Matrix< DDRMat > >& aLinks, Aura_Result& aResult )
+        {
+            // background basis id -> subphase id -> enriched ids
+            std::map< moris_id, std::map< moris_id, std::set< moris_id > > > tBasisSupport;
+            for ( const Matrix< DDRMat >& iRows : aDofs )
+            {
+                for ( uint iRow = 0; iRow < iRows.n_rows(); iRow++ )
+                {
+                    tBasisSupport[ (moris_id)iRows( iRow, 0 ) ][ (moris_id)iRows( iRow, 1 ) ].insert( (moris_id)iRows( iRow, 2 ) );
+                }
+            }
+            std::map< moris_id, std::set< moris_id > > tNeighbours;
+            for ( const Matrix< DDRMat >& iRows : aLinks )
+            {
+                for ( uint iRow = 0; iRow < iRows.n_rows(); iRow++ )
+                {
+                    moris_id tA = (moris_id)iRows( iRow, 0 ), tB = (moris_id)iRows( iRow, 1 );
+                    tNeighbours[ tA ].insert( tB );
+                    tNeighbours[ tB ].insert( tA );
+                }
+            }
+
+            // MORIS_XTK_FUZZ_INJECT=dof (negative control of this check alone): give one subphase of a piece with two linked
+            // subphases a new enriched id for that basis, splitting the piece; the check below must report it. (A renamed
+            // single-subphase piece is still consistent: ids are only names.)
+            const char* tInject = std::getenv( "MORIS_XTK_FUZZ_INJECT" );
+            if ( tInject != nullptr and std::string( tInject ) == "dof" )
+            {
+                bool tInjected = false;
+                for ( std::pair< const moris_id, std::map< moris_id, std::set< moris_id > > >& iBasis : tBasisSupport )
+                {
+                    for ( std::pair< const moris_id, std::set< moris_id > >& iSubphase : iBasis.second )
+                    {
+                        for ( moris_id iNeighbour : tNeighbours[ iSubphase.first ] )
+                        {
+                            if ( not tInjected and iBasis.second.count( iNeighbour ) and iBasis.second.at( iNeighbour ) == iSubphase.second )
+                            {
+                                iSubphase.second = { *iSubphase.second.begin() + 1000000 };
+                                tInjected        = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            aResult.mDofBases = tBasisSupport.size();
+            for ( const std::pair< const moris_id, std::map< moris_id, std::set< moris_id > > >& iBasis : tBasisSupport )
+            {
+                const std::map< moris_id, std::set< moris_id > >& tSupport = iBasis.second;
+
+                // connected pieces of the support (depth-first search over links between subphases of the support)
+                std::map< moris_id, uint > tPiece;
+                uint                       tNumPieces = 0;
+                for ( const std::pair< const moris_id, std::set< moris_id > >& iStart : tSupport )
+                {
+                    if ( tPiece.count( iStart.first ) )
+                    {
+                        continue;
+                    }
+                    std::vector< moris_id > tStack = { iStart.first };
+                    tPiece[ iStart.first ]         = tNumPieces;
+                    while ( not tStack.empty() )
+                    {
+                        moris_id tCurrent = tStack.back();
+                        tStack.pop_back();
+                        for ( moris_id iNext : tNeighbours[ tCurrent ] )
+                        {
+                            if ( tSupport.count( iNext ) and not tPiece.count( iNext ) )
+                            {
+                                tPiece[ iNext ] = tNumPieces;
+                                tStack.push_back( iNext );
+                            }
+                        }
+                    }
+                    tNumPieces++;
+                }
+
+                // enriched ids per piece, and pieces per enriched id
+                Vector< std::set< moris_id > >        tIdsOfPiece( tNumPieces );
+                std::map< moris_id, std::set< uint > > tPiecesOfId;
+                bool                                  tAmbiguous = false;
+                for ( const std::pair< const moris_id, std::set< moris_id > >& iSubphase : tSupport )
+                {
+                    tAmbiguous = tAmbiguous or iSubphase.second.size() > 1;
+                    for ( moris_id iId : iSubphase.second )
+                    {
+                        tIdsOfPiece( tPiece[ iSubphase.first ] ).insert( iId );
+                        tPiecesOfId[ iId ].insert( tPiece[ iSubphase.first ] );
+                    }
+                }
+                bool tSplit = false, tMerged = false;
+                for ( const std::set< moris_id >& iIds : tIdsOfPiece )
+                {
+                    tSplit = tSplit or iIds.size() > 1;
+                }
+                for ( const std::pair< const moris_id, std::set< uint > >& iId : tPiecesOfId )
+                {
+                    tMerged = tMerged or iId.second.size() > 1;
+                }
+                aResult.mDofSplit += tSplit;
+                aResult.mDofMerged += tMerged;
+                aResult.mDofAmbiguous += tAmbiguous;
+                if ( ( tSplit or tMerged or tAmbiguous ) and aResult.mDofExample.empty() )
+                {
+                    std::ostringstream tStream;
+                    tStream << "background basis " << iBasis.first << ": " << tNumPieces << " piece(s), " << tPiecesOfId.size()
+                            << " enriched id(s)" << ( tSplit ? ", a piece with several ids" : "" ) << ( tMerged ? ", an id on several pieces" : "" )
+                            << ( tAmbiguous ? ", a subphase with several ids" : "" );
+                    aResult.mDofExample = tStream.str();
+                }
+            }
+        }
+
         inline Aura_Result
         aura_case_fields( mtk::Interpolation_Mesh* aMesh, const Vector< gen::Field_Function >& aFields, Regime aRegime )
         {
@@ -750,6 +880,7 @@ namespace moris::xtk
 
             Vector< Vector< real > >                         tBgRows, tIgCellRows, tSubphaseRows, tVertexRows, tCellRows, tBasisRows, tCornerRows;
             std::map< moris_index, std::pair< real, real > > tTMatrixHashOfVertex;    // enriched IP vertex index -> T-matrix hash
+            Vector< Vector< real > >                         tDofRows, tLinkRows;     // global enrichment check (2b)
             std::map< std::string, std::pair< uint, real > > tLocalSets;
             bool                                             tThrew = false;
 
@@ -774,6 +905,71 @@ namespace moris::xtk
                 tResult.mNumBgCellsOnRank = aMesh->get_num_elems();
                 tModel.perform_basis_enrichment( mtk::EntityRank::BSPLINE, 0 );
                 tModel.construct_face_oriented_ghost_penalization_cells();
+
+                // MORIS_XTK_FUZZ_INJECT=t-aura / t-owned (end-to-end negative control): on the last rank, corrupt one enriched
+                // basis id in a real vertex T-matrix of an aura copy (the owner keeps the right one: the corner check must
+                // fire) or of an owned cell (the global enrichment check must fire). MORIS_XTK_FUZZ_INJECT_ID=level (default)
+                // uses the id of another level of the same background basis (a wrong piece, the finding-28 symptom) when
+                // there is one; =new, or no other level, uses an id that exists nowhere.
+                if ( const char* tInject = std::getenv( "MORIS_XTK_FUZZ_INJECT" ) )
+                {
+                    std::string tWhere   = tInject;
+                    const char* tIdMode  = std::getenv( "MORIS_XTK_FUZZ_INJECT_ID" );
+                    bool        tLevel   = tIdMode == nullptr or std::string( tIdMode ) != "new";
+                    bool        tWantAura = tWhere == "t-aura";
+                    if ( ( tWhere == "t-aura" or tWhere == "t-owned" ) and par_rank() == par_size() - 1 )
+                    {
+                        Enriched_Interpolation_Mesh&         tEnrIpMesh    = tModel.get_enriched_interp_mesh( 0 );
+                        Matrix< IndexMat > const &           tEnrichedToId = tEnrIpMesh.get_enriched_coefficient_local_to_global_map( 0 );
+                        Vector< Matrix< IndexMat > > const & tBgToEnriched = tEnrIpMesh.get_enriched_coefficients_to_background_coefficients( 0 );
+                        bool                                 tDone         = false;
+                        for ( Interpolation_Cell_Unzipped* iCell : tEnrIpMesh.get_enriched_interpolation_cells() )
+                        {
+                            if ( tDone or ( iCell->get_owner() != (moris_id)par_rank() ) != tWantAura )
+                            {
+                                continue;
+                            }
+                            for ( mtk::Vertex* iVertex : iCell->get_vertex_pointers() )
+                            {
+                                Vertex_Enrichment* tT = tEnrIpMesh.get_xtk_interp_vertex( iVertex->get_index() ).get_xtk_interpolation( 0 );
+                                if ( tDone or tT == nullptr or tT->get_basis_indices().numel() == 0 )
+                                {
+                                    continue;
+                                }
+                                Matrix< IndexMat > tIndices = tT->get_basis_indices();
+                                Matrix< IndexMat > tIds     = tT->get_ids();
+                                moris_id           tWrongId = tIds( 0 ) + 1000000;
+                                if ( tLevel )
+                                {
+                                    // another level of the same background basis
+                                    for ( uint iBg = 0; iBg < tBgToEnriched.size() and tWrongId == tIds( 0 ) + 1000000; iBg++ )
+                                    {
+                                        const Matrix< IndexMat >& tLevels = tBgToEnriched( iBg );
+                                        bool                      tHas    = false;
+                                        for ( uint iL = 0; iL < tLevels.numel(); iL++ )
+                                        {
+                                            tHas = tHas or tLevels( iL ) == tIndices( 0 );
+                                        }
+                                        for ( uint iL = 0; tHas and iL < tLevels.numel(); iL++ )
+                                        {
+                                            if ( tLevels( iL ) != tIndices( 0 ) )
+                                            {
+                                                tWrongId = tEnrichedToId( tLevels( iL ) );
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                std::cout << "INJECT rank " << par_rank() << ( tWantAura ? " aura" : " owned" ) << " cell " << iCell->get_id()
+                                          << " vertex " << iVertex->get_id() << ": enriched id " << tIds( 0 ) << " -> " << tWrongId
+                                          << ( tWrongId == tIds( 0 ) + 1000000 ? " (new)" : " (other level)" ) << std::endl;
+                                tIds( 0 ) = tWrongId;
+                                tT->add_basis_information( tIndices, tIds );
+                                tDone = true;
+                            }
+                        }
+                    }
+                }
 
                 // 1. every background cell this rank holds: decomposition, ids and phases
                 Cut_Integration_Mesh* tCutMesh = tModel.get_cut_integration_mesh();
@@ -948,6 +1144,53 @@ namespace moris::xtk
                     }
                 }
 
+                // 2b. global enrichment check: for every owned unzipped IP cell (= subphase) the (background basis id,
+                // subphase id, enriched basis id) triples of its T-matrices, and the subphase neighbourhood links
+                {
+                    Matrix< IndexMat > const &           tEnrichedToId = tEnrIpMesh.get_enriched_coefficient_local_to_global_map( 0 );
+                    Vector< Matrix< IndexMat > > const & tBgToEnriched = tEnrIpMesh.get_enriched_coefficients_to_background_coefficients( 0 );
+                    Vector< moris_index >                tEnrichedToBg( tEnrichedToId.numel(), MORIS_INDEX_MAX );
+                    for ( uint iBg = 0; iBg < tBgToEnriched.size(); iBg++ )
+                    {
+                        for ( uint iEnr = 0; iEnr < tBgToEnriched( iBg ).numel(); iEnr++ )
+                        {
+                            tEnrichedToBg( tBgToEnriched( iBg )( iEnr ) ) = (moris_index)iBg;
+                        }
+                    }
+
+                    std::shared_ptr< Subphase_Neighborhood_Connectivity > tNeighbourhood = tCutMesh->get_subphase_neighborhood();
+                    for ( Interpolation_Cell_Unzipped* iCell : tEnrIpMesh.get_enriched_interpolation_cells() )
+                    {
+                        if ( iCell->get_owner() != (moris_id)tRank )
+                        {
+                            continue;
+                        }
+                        moris_index tSubphase   = iCell->get_subphase_index();
+                        moris_id    tSubphaseId = tCutMesh->get_subphase_id( tSubphase );
+
+                        std::set< std::pair< moris_id, moris_id > > tDofs;    // (background basis id, enriched basis id)
+                        for ( mtk::Vertex* iVertex : iCell->get_vertex_pointers() )
+                        {
+                            mtk::Vertex_Interpolation* tInterpolation = iVertex->get_interpolation( 0 );
+                            Matrix< IndexMat >         tIndices       = tInterpolation->get_indices();
+                            Matrix< IdMat >            tIds           = tInterpolation->get_ids();
+                            for ( uint iB = 0; iB < tIndices.numel(); iB++ )
+                            {
+                                moris_id tBgId = aMesh->get_glb_entity_id_from_entity_loc_index( tEnrichedToBg( tIndices( iB ) ), mtk::EntityRank::BSPLINE, 0 );
+                                tDofs.insert( { tBgId, tIds( iB ) } );
+                            }
+                        }
+                        for ( const std::pair< moris_id, moris_id >& iDof : tDofs )
+                        {
+                            tDofRows.push_back( { (real)iDof.first, (real)tSubphaseId, (real)iDof.second } );
+                        }
+                        for ( moris_index iNeighbour : *tNeighbourhood->mSubphaseToSubPhase( tSubphase ) )
+                        {
+                            tLinkRows.push_back( { (real)tSubphaseId, (real)tCutMesh->get_subphase_id( iNeighbour ) } );
+                        }
+                    }
+                }
+
                 // 3. output sets of the enriched integration mesh: every cluster this rank holds, its measure, and its IP vertices
                 Enriched_Integration_Mesh& tEnrIgMesh = tModel.get_enriched_integ_mesh( 0 );
                 for ( uint iSet = 0; iSet < tEnrIgMesh.get_num_sets(); iSet++ )
@@ -1009,6 +1252,8 @@ namespace moris::xtk
             Vector< Matrix< DDRMat > > tVertices = gather_rows( tVertexRows, 9 );
             Vector< Matrix< DDRMat > > tCells    = gather_rows( tCellRows, 7 );
             Vector< Matrix< DDRMat > > tCorners  = gather_rows( tCornerRows, 6 );
+            Vector< Matrix< DDRMat > > tDofs     = gather_rows( tDofRows, 3 );
+            Vector< Matrix< DDRMat > > tLinks    = gather_rows( tLinkRows, 2 );
             Vector< Matrix< DDRMat > > tBasis    = gather_rows( tBasisRows, 1 );
 
             // set names may differ between ranks (a rank without a cut has no interface set): gather names + values
@@ -1037,6 +1282,7 @@ namespace moris::xtk
                 tResult.mIpCellIdMismatch = count_disagreeing_copies( tCells, 4, 5, tResult.mIpCellIdExample, tSharedForIds );
                 tResult.mCornerTMatrixMismatch =
                         count_corners_with_several_t_matrices( tCorners, tResult.mSharedCorners, tResult.mCornerTMatrixExample );
+                check_enrichment_components( tDofs, tLinks, tResult );
 
                 tResult.mDuplicateIgCellIds   = count_duplicate_owned_ids( tIgCells, tResult.mOwnedIgCells, tResult.mInvalidIgCellIds );
                 tResult.mDuplicateSubphaseIds = count_duplicate_owned_ids( tSps, tResult.mOwnedSubphases, tResult.mInvalidSubphaseIds );
@@ -1174,6 +1420,262 @@ namespace moris::xtk
             tCases.push_back( { "U, bridge at x=1.5", { tSlab( 0.25, 0.4, 1.5 + tThin ), tSlab( 0.75, 0.4, 1.5 + tThin ), tBridge( 1.5 ) } } );
             tCases.push_back( { "U, bridge at x=0.5", { tSlab( 0.25, 0.5 - tThin, 1.6 ), tSlab( 0.75, 0.5 - tThin, 1.6 ), tBridge( 0.5 ) } } );
             return tCases;
+        }
+
+        // ----------------------------------------------------------------------------------
+        // fuzz testing (finding 27/28 robustness): random level-set geometries placed at the places parallel XTK is fragile.
+        // A geometry is the union (max) of 1-3 primitives: a plane, a sphere, or a box one node layer thick. Coordinates are
+        // drawn mostly from the partition: interior processor boundaries and aura edges (boundary +- padding x h), then grid
+        // lines and cell centres, each with a tiny or no offset. Everything is deterministic in (seed, case), so every rank
+        // builds the same case.
+
+        struct Fuzz_Primitive
+        {
+            uint  mType = 0;    // 0 plane (normal mA, offset mB[ 0 ]), 1 sphere (centre mA, radius mB[ 0 ]), 2 box (centre mA, half widths mB)
+            Point mA    = {};
+            Point mB    = {};
+        };
+
+        inline Vector< Fuzz_Primitive > gFuzzGeometries[ 2 ];
+
+        inline real
+        fuzz_value( const Vector< Fuzz_Primitive >& aPrimitives, const Matrix< DDRMat >& aPoint )
+        {
+            real tValue = -MORIS_REAL_MAX;
+            for ( const Fuzz_Primitive& iP : aPrimitives )
+            {
+                real tPrimitive = 0.0;
+                if ( iP.mType == 0 )
+                {
+                    tPrimitive = iP.mA[ 0 ] * aPoint( 0 ) + iP.mA[ 1 ] * aPoint( 1 ) + iP.mA[ 2 ] * aPoint( 2 ) + iP.mB[ 0 ];
+                }
+                else if ( iP.mType == 1 )
+                {
+                    real tDistance = 0.0;
+                    for ( uint iDim = 0; iDim < 3; iDim++ )
+                    {
+                        tDistance += std::pow( aPoint( iDim ) - iP.mA[ iDim ], 2 );
+                    }
+                    tPrimitive = iP.mB[ 0 ] - std::sqrt( tDistance );
+                }
+                else
+                {
+                    tPrimitive = MORIS_REAL_MAX;
+                    for ( uint iDim = 0; iDim < 3; iDim++ )
+                    {
+                        tPrimitive = std::min( tPrimitive, iP.mB[ iDim ] - std::abs( aPoint( iDim ) - iP.mA[ iDim ] ) );
+                    }
+                }
+                tValue = std::max( tValue, tPrimitive );
+            }
+            return tValue;
+        }
+
+        inline real
+        fuzz_field_0( const Matrix< DDRMat >& aPoint, const Vector< real >& aParameters )
+        {
+            return fuzz_value( gFuzzGeometries[ 0 ], aPoint );
+        }
+
+        inline real
+        fuzz_field_1( const Matrix< DDRMat >& aPoint, const Vector< real >& aParameters )
+        {
+            return fuzz_value( gFuzzGeometries[ 1 ], aPoint );
+        }
+
+        // special coordinates per axis, from the partition of an HMR mesh with cells of size aH and padding aPadding
+        struct Fuzz_Coordinates
+        {
+            std::array< std::vector< real >, 3 > mProcessorBoundaries;
+            std::array< std::vector< real >, 3 > mAuraEdges;
+            Point                                mDomain = {};
+            real                                 mH      = 0.0;
+        };
+
+        inline Fuzz_Coordinates
+        fuzz_coordinates( mtk::Interpolation_Mesh* aMesh, const Point& aDomain, real aH, uint aPadding )
+        {
+            // bounding box of the cells this rank owns, shared with all ranks slot by slot
+            Point tMin = { MORIS_REAL_MAX, MORIS_REAL_MAX, MORIS_REAL_MAX }, tMax = { -MORIS_REAL_MAX, -MORIS_REAL_MAX, -MORIS_REAL_MAX };
+            for ( uint iCell = 0; iCell < aMesh->get_num_elems(); iCell++ )
+            {
+                mtk::Cell& tCell = aMesh->get_mtk_cell( iCell );
+                if ( tCell.get_owner() != (moris_id)par_rank() )
+                {
+                    continue;
+                }
+                for ( mtk::Vertex* iVertex : tCell.get_vertex_pointers() )
+                {
+                    Matrix< DDRMat > tX = iVertex->get_coords();
+                    for ( uint iDim = 0; iDim < 3; iDim++ )
+                    {
+                        tMin[ iDim ] = std::min( tMin[ iDim ], tX( iDim ) );
+                        tMax[ iDim ] = std::max( tMax[ iDim ], tX( iDim ) );
+                    }
+                }
+            }
+
+            Fuzz_Coordinates tCoordinates;
+            tCoordinates.mDomain = aDomain;
+            tCoordinates.mH      = aH;
+            std::array< std::set< std::int64_t >, 3 > tBoundaries;    // in units of 1e-9 to merge equal faces
+            for ( int iRank = 0; iRank < par_size(); iRank++ )
+            {
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    real tLow  = min_all( iRank == par_rank() ? tMin[ iDim ] : MORIS_REAL_MAX );
+                    real tHigh = max_all( iRank == par_rank() ? tMax[ iDim ] : -MORIS_REAL_MAX );
+                    for ( real iFace : { tLow, tHigh } )
+                    {
+                        if ( iFace > 0.5 * aH and iFace < aDomain[ iDim ] - 0.5 * aH )
+                        {
+                            tBoundaries[ iDim ].insert( std::llround( iFace * 1.0e9 ) );
+                        }
+                    }
+                }
+            }
+            for ( uint iDim = 0; iDim < 3; iDim++ )
+            {
+                for ( std::int64_t iFace : tBoundaries[ iDim ] )
+                {
+                    real tFace = iFace * 1.0e-9;
+                    tCoordinates.mProcessorBoundaries[ iDim ].push_back( tFace );
+                    for ( real iEdge : { tFace - aPadding * aH, tFace + aPadding * aH } )
+                    {
+                        if ( iEdge > 0.5 * aH and iEdge < aDomain[ iDim ] - 0.5 * aH )
+                        {
+                            tCoordinates.mAuraEdges[ iDim ].push_back( iEdge );
+                        }
+                    }
+                }
+            }
+            return tCoordinates;
+        }
+
+        struct Fuzz_Case
+        {
+            Vector< Vector< Fuzz_Primitive > > mGeometries;
+            std::string                        mDescription;
+        };
+
+        inline Fuzz_Case
+        fuzz_case( std::uint64_t aSeed, uint aCase, const Fuzz_Coordinates& aCoordinates )
+        {
+            std::mt19937_64                        tEngine( aSeed * 1000003ULL + aCase );
+            std::uniform_real_distribution< real > tUniform( 0.0, 1.0 );
+            auto                                   tPick = [ & ]( uint aCount ) -> uint { return std::min( (uint)( tUniform( tEngine ) * aCount ), aCount - 1 ); };
+            const real                             tH    = aCoordinates.mH;
+
+            std::ostringstream tDescription;
+            tDescription << std::setprecision( 12 );
+
+            // a coordinate on axis aDim: processor boundary, aura edge, grid line, cell centre or anywhere, plus an offset
+            auto tCoordinate = [ & ]( uint aDim ) -> real {
+                real                       tBase = 0.0;
+                real                       tKind = tUniform( tEngine );
+                const std::vector< real >& tFaces = aCoordinates.mProcessorBoundaries[ aDim ];
+                const std::vector< real >& tEdges = aCoordinates.mAuraEdges[ aDim ];
+                uint                       tNumLines = (uint)std::llround( aCoordinates.mDomain[ aDim ] / tH );
+                if ( tKind < 0.3 and not tFaces.empty() )
+                {
+                    tBase = tFaces[ tPick( tFaces.size() ) ];
+                }
+                else if ( tKind < 0.65 and not tEdges.empty() )
+                {
+                    tBase = tEdges[ tPick( tEdges.size() ) ];
+                }
+                else if ( tKind < 0.8 )
+                {
+                    tBase = tPick( tNumLines + 1 ) * tH;
+                }
+                else if ( tKind < 0.9 )
+                {
+                    tBase = ( tPick( tNumLines ) + 0.5 ) * tH;
+                }
+                else
+                {
+                    return tUniform( tEngine ) * aCoordinates.mDomain[ aDim ];
+                }
+                const real tOffsets[] = { 0.0, 0.0, 0.0, 1.0e-12, -1.0e-12, 1.0e-11, -1.0e-11, 1.0e-9, -1.0e-9, 1.0e-6, -1.0e-6 };
+                real       tOffset    = tUniform( tEngine ) < 0.8 ? tOffsets[ tPick( 11 ) ] : ( tUniform( tEngine ) - 0.5 ) * tH;
+                return tBase + tOffset;
+            };
+
+            Fuzz_Case tCase;
+            uint      tNumGeometries = tUniform( tEngine ) < 0.7 ? 1 : 2;
+            for ( uint iGeometry = 0; iGeometry < tNumGeometries; iGeometry++ )
+            {
+                Vector< Fuzz_Primitive > tPrimitives;
+                uint                     tNumPrimitives = 1 + tPick( 3 );
+                tDescription << ( iGeometry > 0 ? " | " : "" ) << "g" << iGeometry << ":";
+                for ( uint iPrimitive = 0; iPrimitive < tNumPrimitives; iPrimitive++ )
+                {
+                    Fuzz_Primitive tP;
+                    real           tKind = tUniform( tEngine );
+                    Point          tPoint = { tCoordinate( 0 ), tCoordinate( 1 ), tCoordinate( 2 ) };
+                    if ( tKind < 0.45 )
+                    {
+                        // plane through tPoint: axis-aligned, a fixed diagonal, or a random direction
+                        Point tNormal = { 0.0, 0.0, 0.0 };
+                        real  tWhich  = tUniform( tEngine );
+                        if ( tWhich < 0.5 )
+                        {
+                            tNormal[ tPick( 3 ) ] = 1.0;
+                        }
+                        else if ( tWhich < 0.75 )
+                        {
+                            const Point tDiagonals[] = { { 1, 1, 0 }, { 1, 0, 1 }, { 0, 1, 1 }, { 1, 1, 1 }, { 1, 0.3, 0.2 }, { 1, -1, 0 } };
+                            tNormal                  = tDiagonals[ tPick( 6 ) ];
+                        }
+                        else
+                        {
+                            std::normal_distribution< real > tGauss( 0.0, 1.0 );
+                            tNormal = { tGauss( tEngine ), tGauss( tEngine ), tGauss( tEngine ) };
+                        }
+                        Plane tPlane = plane_through( tNormal, tPoint, 0.0 );
+                        tP.mType     = 0;
+                        tP.mA        = { tPlane[ 0 ], tPlane[ 1 ], tPlane[ 2 ] };
+                        tP.mB        = { tPlane[ 3 ], 0.0, 0.0 };
+                        tDescription << " plane n=(" << tP.mA[ 0 ] << "," << tP.mA[ 1 ] << "," << tP.mA[ 2 ] << ") d=" << tP.mB[ 0 ];
+                    }
+                    else if ( tKind < 0.75 )
+                    {
+                        // sphere centred at tPoint whose surface passes through a special coordinate on one axis
+                        uint tAxis   = tPick( 3 );
+                        real tTarget = tCoordinate( tAxis );
+                        real tRadius = std::abs( tTarget - tPoint[ tAxis ] );
+                        if ( tRadius < 0.25 * tH )
+                        {
+                            tRadius = ( 2.0 + 4.0 * tUniform( tEngine ) ) * tH;
+                        }
+                        tP.mType = 1;
+                        tP.mA    = tPoint;
+                        tP.mB    = { tRadius, 0.0, 0.0 };
+                        tDescription << " sphere c=(" << tPoint[ 0 ] << "," << tPoint[ 1 ] << "," << tPoint[ 2 ] << ") r=" << tRadius;
+                    }
+                    else
+                    {
+                        // box one node layer thick normal to a random axis (a slab or, with a second thin axis, a bar)
+                        tP.mType = 2;
+                        tP.mA    = tPoint;
+                        for ( uint iDim = 0; iDim < 3; iDim++ )
+                        {
+                            tP.mB[ iDim ] = ( 0.5 + 2.0 * tUniform( tEngine ) ) * aCoordinates.mDomain[ iDim ] * 0.5;
+                        }
+                        tP.mB[ tPick( 3 ) ] = 0.24 * tH;
+                        if ( tUniform( tEngine ) < 0.3 )
+                        {
+                            tP.mB[ tPick( 3 ) ] = 0.24 * tH;
+                        }
+                        tDescription << " box c=(" << tPoint[ 0 ] << "," << tPoint[ 1 ] << "," << tPoint[ 2 ] << ") h=(" << tP.mB[ 0 ] << ","
+                                     << tP.mB[ 1 ] << "," << tP.mB[ 2 ] << ")";
+                    }
+                    tPrimitives.push_back( tP );
+                }
+                tCase.mGeometries.push_back( tPrimitives );
+            }
+            tCase.mDescription = tDescription.str();
+            return tCase;
         }
 
         inline std::ofstream*
