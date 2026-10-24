@@ -148,6 +148,9 @@ set(TEST_SOURCES
     UT_FEM_IQI_Max_Damage.cpp
     UT_FEM_IQI_Formulas.cpp
     UT_FEM_Geometric_Sensitivities_Struc_Linear.cpp
+    UT_FEM_IQI_Max_Stress.cpp
+    UT_FEM_Stress_Measures.cpp
+    UT_FEM_IWG_Struc_Stress.cpp
   
     UT_FEM_Input.cpp
     UT_FEM_Geometry_Interpolator.cpp

@@ -2405,17 +2405,14 @@ namespace moris::xtk
                     mEnrichmentData( tMeshIndex ).mEnrichedBasisIndexToId;
         }
 
-        // tell the enriched IP mesh to finish setting itself up
-        mXTKModelPtr->mEnrichedInterpMesh( 0 )->finalize_setup();
-
         // in most cases all the interpolation vertices are the same. We merge them back together with this call
         // post-processing to construct_enriched_interpolation_vertices_and_cells in an effort to not add complexity to the function
-        // (as that function is already too complex/loaded)
+        // (as that function is already too complex/loaded). The merge comes before finalize_setup(), which assigns the
+        // vertex ids: ids assigned to unmerged copies differ between the owner and the other ranks.
         mXTKModelPtr->mEnrichedInterpMesh( 0 )->merge_duplicate_interpolation_vertices();
 
-        // reset global to local maps (delete & setup again) with deleted duplicate vertices
-        mXTKModelPtr->mEnrichedInterpMesh( 0 )->mGlobalToLocalMaps( 0 ).clear();
-        mXTKModelPtr->mEnrichedInterpMesh( 0 )->setup_vertex_maps();
+        // tell the enriched IP mesh to finish setting itself up (vertex ids, maps, bulk phases)
+        mXTKModelPtr->mEnrichedInterpMesh( 0 )->finalize_setup();
     }
 
     //-------------------------------------------------------------------------------------
@@ -2470,17 +2467,11 @@ namespace moris::xtk
                     mEnrichmentData( tMeshIndex ).mEnrichedBasisIndexToId;
         }
 
-        // tell the enriched IP mesh to finish setting itself up
-        mXTKModelPtr->mEnrichedInterpMesh( 0 )->finalize_setup_new();
-
-        // in most cases all the interpolation vertices are the same. We merge them back together with this call
-        // post-processing to construct_enriched_interpolation_vertices_and_cells in an effort to not add complexity to the function
-        // (as that function is already too complex/loaded)
+        // merge the unzipped copies of a vertex before the vertex ids are assigned (see construct_enriched_interpolation_mesh())
         mXTKModelPtr->mEnrichedInterpMesh( 0 )->merge_duplicate_interpolation_vertices();
 
-        // reset global to local maps (delete & setup again) with deleted duplicate vertices
-        mXTKModelPtr->mEnrichedInterpMesh( 0 )->mGlobalToLocalMaps( 0 ).clear();
-        mXTKModelPtr->mEnrichedInterpMesh( 0 )->setup_vertex_maps();
+        // tell the enriched IP mesh to finish setting itself up
+        mXTKModelPtr->mEnrichedInterpMesh( 0 )->finalize_setup_new();
     }
 
     //-------------------------------------------------------------------------------------

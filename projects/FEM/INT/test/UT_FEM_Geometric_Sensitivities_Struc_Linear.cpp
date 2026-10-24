@@ -945,25 +945,37 @@ TEST_CASE( "Analytic_Geo_Sens_IQI_Strain_Energy", "[fem],[Analytic_Geo_Sens],[An
 
 TEST_CASE( "Analytic_Geo_Sens_IQI_Max_Stress", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_IQI_Max_Stress]" )
 {
-    for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+    // P-norm ( Exponent ) and shifted KS ( KSParameter ) integrands
+    for ( uint iAggregation = 0; iAggregation < 2; iAggregation++ )
     {
-        for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+        for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
         {
-            IQI_Factory tIQIFactory;
+            for ( uint iOrder = 1; iOrder < 3; iOrder++ )
+            {
+                IQI_Factory tIQIFactory;
 
-            std::shared_ptr< IQI > tIQI = tIQIFactory.create_IQI( IQI_Type::MAX_VON_MISES_STRESS );
-            tIQI->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
-            tIQI->set_constitutive_model( create_elastic_CM( iSpaceDim ), "ElastLinIso", mtk::Leader_Follower::LEADER );
-            tIQI->set_property( create_const_property( { { 0.5 } } ), "ReferenceValue", mtk::Leader_Follower::LEADER );
-            tIQI->set_property( create_const_property( { { 8.0 } } ), "Exponent", mtk::Leader_Follower::LEADER );
-            tIQI->set_property( create_const_property( { { 0.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                std::shared_ptr< IQI > tIQI = tIQIFactory.create_IQI( IQI_Type::MAX_VON_MISES_STRESS );
+                tIQI->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+                tIQI->set_constitutive_model( create_elastic_CM( iSpaceDim ), "ElastLinIso", mtk::Leader_Follower::LEADER );
+                tIQI->set_property( create_const_property( { { 0.5 } } ), "ReferenceValue", mtk::Leader_Follower::LEADER );
+                if ( iAggregation == 0 )
+                {
+                    tIQI->set_property( create_const_property( { { 8.0 } } ), "Exponent", mtk::Leader_Follower::LEADER );
+                    tIQI->set_property( create_const_property( { { 0.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                }
+                else
+                {
+                    tIQI->set_property( create_const_property( { { 5.0 } } ), "KSParameter", mtk::Leader_Follower::LEADER );
+                    tIQI->set_property( create_const_property( { { 2.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                }
 
-            real tError = check_IQI_geometric_sensitivities( tIQI, iSpaceDim, iOrder );
+                real tError = check_IQI_geometric_sensitivities( tIQI, iSpaceDim, iOrder );
 
-            std::cout << "Analytic_Geo_Sens IQI_Max_Stress dim " << iSpaceDim << " order " << iOrder
-                      << " max rel. error vs FD " << tError << '\n';
+                std::cout << "Analytic_Geo_Sens IQI_Max_Stress " << ( iAggregation == 0 ? "P-norm" : "KS" ) << " dim " << iSpaceDim
+                          << " order " << iOrder << " max rel. error vs FD " << tError << '\n';
 
-            CHECK( tError < tGeoSensTolerance );
+                CHECK( tError < tGeoSensTolerance );
+            }
         }
     }
 }
@@ -1109,6 +1121,60 @@ TEST_CASE( "Analytic_Geo_Sens_Varying_IWG_Struc_Linear_Dirichlet", "[fem],[Analy
 
                     CHECK( tError < tGeoSensTolerance );
                 }
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+TEST_CASE( "Analytic_Geo_Sens_Varying_IQI_Max_Stress", "[fem],[Analytic_Geo_Sens],[Analytic_Geo_Sens_Varying]" )
+{
+    // E(x), nu(x): analytical with space derivatives (dC/dx eps term), FD fallback without;
+    // a spatially varying aggregation property (ReferenceValue(x)) always takes the FD fallback
+    struct Max_Stress_Case
+    {
+        Geo_Sens_Variation mCMVariation;
+        Geo_Sens_Variation mRefVariation;
+        bool               mExpectAnalytical;
+    };
+    Vector< Max_Stress_Case > tCases = {
+        { Geo_Sens_Variation::VARYING_WITH_DER, Geo_Sens_Variation::CONSTANT, true },
+        { Geo_Sens_Variation::VARYING_NO_DER, Geo_Sens_Variation::CONSTANT, false },
+        { Geo_Sens_Variation::CONSTANT, Geo_Sens_Variation::VARYING_WITH_DER, false }
+    };
+
+    for ( const Max_Stress_Case& tCase : tCases )
+    {
+        // P-norm ( Exponent ) and shifted KS ( KSParameter ) integrands
+        for ( uint iAggregation = 0; iAggregation < 2; iAggregation++ )
+        {
+            for ( uint iSpaceDim = 2; iSpaceDim < 4; iSpaceDim++ )
+            {
+                IQI_Factory tIQIFactory;
+
+                std::shared_ptr< IQI > tIQI = tIQIFactory.create_IQI( IQI_Type::MAX_VON_MISES_STRESS );
+                tIQI->set_dof_type_list( tGeoSensDispDofTypes, mtk::Leader_Follower::LEADER );
+                tIQI->set_constitutive_model( create_elastic_CM( iSpaceDim, Model_Type::PLANE_STRESS, tCase.mCMVariation ), "ElastLinIso", mtk::Leader_Follower::LEADER );
+                tIQI->set_property( create_property( { { 0.5 } }, tCase.mRefVariation ), "ReferenceValue", mtk::Leader_Follower::LEADER );
+                if ( iAggregation == 0 )
+                {
+                    tIQI->set_property( create_const_property( { { 8.0 } } ), "Exponent", mtk::Leader_Follower::LEADER );
+                    tIQI->set_property( create_const_property( { { 0.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                }
+                else
+                {
+                    tIQI->set_property( create_const_property( { { 5.0 } } ), "KSParameter", mtk::Leader_Follower::LEADER );
+                    tIQI->set_property( create_const_property( { { 2.0 } } ), "Shift", mtk::Leader_Follower::LEADER );
+                }
+
+                real tError = check_IQI_geometric_sensitivities( tIQI, iSpaceDim, 1, tCase.mExpectAnalytical );
+
+                std::cout << "Analytic_Geo_Sens Varying IQI_Max_Stress " << ( iAggregation == 0 ? "P-norm" : "KS" )
+                          << " analytical " << tCase.mExpectAnalytical << " dim " << iSpaceDim
+                          << " max rel. error vs FD " << tError << '\n';
+
+                CHECK( tError < tGeoSensTolerance );
             }
         }
     }

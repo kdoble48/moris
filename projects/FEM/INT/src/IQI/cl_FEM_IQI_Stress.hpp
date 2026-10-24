@@ -25,12 +25,17 @@ namespace moris::fem
 {
     //------------------------------------------------------------------------------
 
+    /**
+     * pointwise stress measures (von Mises, principal, normal, shear, or the full stress vector) of an elasticity CM;
+     * derived IQIs (e.g. IQI_Max_Stress) reuse the scalar measures and their derivatives wrt the CM flux.
+     * The measures themselves are implemented once in fn_FEM_Stress_Measures.
+     */
     class IQI_Stress : public IQI
     {
 
         //------------------------------------------------------------------------------
 
-      private:
+      protected:
         //------------------------------------------------------------------------------
 
         // stress type to evaluate
@@ -45,9 +50,6 @@ namespace moris::fem
             MAX_ENUM
         };
 
-        //------------------------------------------------------------------------------
-
-      protected:
         //------------------------------------------------------------------------------
         /*
          * default constructor
@@ -78,49 +80,28 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
 
-      private:
+      protected:
         //------------------------------------------------------------------------------
         /**
          * gets the stress vector from the constitutive model and sorts it into a format standardized
          * (independent of 2D-plane strain, 2D-plain stress, and 3D)
-         * @param[ out ] aStressVector vector with 6 entries containing the normal and shear stress values
+         * @param[ out ] aStressVector vector with 6 entries ( s_xx, s_yy, s_zz, s_yz, s_xz, s_xy )
          */
         void get_stress_vector( Matrix< DDRMat > &aStressVector );
 
         //------------------------------------------------------------------------------
         /**
-         * evaluate the Von-Mises stress using the stress vector provided by the constitutive model
-         * @param[ out ] aStressVector the value of the Von-Mises stress
+         * evaluate the selected scalar stress measure (von Mises, principal, normal or shear)
+         * @return the value of the stress measure
          */
-        void eval_Von_Mises_stress( Matrix< DDRMat > &aStressVector );
+        real eval_stress_value();
 
         //------------------------------------------------------------------------------
         /**
-         * evaluate the i-th principal stress using the stress vector provided by the constitutive model
-         * @param[ in ] aPrincipalStressIndex number i of the principal stress to get,
-         *               i.e. 1,2,3 for the first, second and third principal stress, respectively
-         * @param[ out ] tStressValue the value of the requested principal stress
+         * derivative of the selected scalar stress measure wrt the CM flux components (von Mises stress only)
+         * @return derivative in the layout of the CM flux ( 3, 4 or 6 x 1 )
          */
-        void eval_principal_stress( uint aPrincipalStressIndex, Matrix< DDRMat > &aStressVector );
-
-        //------------------------------------------------------------------------------
-        /**
-         * evaluate the i-th normal stress using the stress vector provided by the constitutive model
-         * @param[ in ] aStressIndex number of the principal stress to get,
-         *               i.e. 1,2,3 for the x-, y-, and z-normal stresses, respectively
-         * @param[ out ] tStressValue the value of the requested principal stress
-         */
-        void eval_normal_stress( uint aStressIndex, Matrix< DDRMat > &aStressVector );
-
-        //------------------------------------------------------------------------------
-        /**
-         * evaluate the i-th shear stress using the stress vector provided by the constitutive model
-         * @param[ in ] aStressIndex number of the principal stress to get,
-         *               i.e. 1,2,3 for the yz-, xz-, and xy-shear stresses, respectively
-         *               in 2D the input is ignored, as there's only one shear stress
-         * @param[ out ] tStressValue the value of the requested principal stress
-         */
-        void eval_shear_stress( uint aStressIndex, Matrix< DDRMat > &aStressVector );
+        Matrix< DDRMat > eval_dStressdFlux();
 
         //------------------------------------------------------------------------------
         /**
@@ -156,7 +137,7 @@ namespace moris::fem
                 Vector< MSI::Dof_Type > &aDofType,
                 Matrix< DDRMat >        &adQIdu ) override
         {
-            MORIS_ERROR( false, "IQI_Stress::compute_dQIdu() - not implemented for a drag/lift coefficient IQI." );
+            MORIS_ERROR( false, "IQI_Stress::compute_dQIdu() - not implemented." );
         }
 
         //------------------------------------------------------------------------------
@@ -169,4 +150,3 @@ namespace moris::fem
 }    // namespace moris::fem
 
 #endif /* PROJECTS_FEM_INT_SRC_CL_FEM_IQI_STRESS_HPP_ */
-

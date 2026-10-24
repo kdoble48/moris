@@ -11,6 +11,8 @@
 #ifndef PROJECTS_XTK_SRC_XTK_CL_XTK_ENRICHED_INTERPOLATION_MESH_HPP_
 #define PROJECTS_XTK_SRC_XTK_CL_XTK_ENRICHED_INTERPOLATION_MESH_HPP_
 
+#include <functional>
+
 #include "cl_Vector.hpp"
 
 #include "cl_MTK_Interpolation_Mesh.hpp"
@@ -535,8 +537,31 @@ namespace moris::xtk
 
         //------------------------------------------------------------------------------
 
+        /**
+         * Merges the unzipped copies of a base vertex that carry the same vertex enrichment for every B-spline mesh.
+         * Called before the vertex ids are assigned, so that the owner numbers merged vertices only.
+         */
         void
         merge_duplicate_interpolation_vertices();
+
+        /**
+         * Merges the not-owned unzipped vertices that received the same id from their owner. Aura copies have no
+         * T-matrix when merge_duplicate_interpolation_vertices runs, so they are not merged there; the owner's id
+         * says which of them are one vertex.
+         */
+        void
+        merge_not_owned_vertices_with_same_id();
+
+        /**
+         * Merges unzipped vertices on the same base vertex: each vertex is merged into the first earlier vertex on
+         * that base vertex for which aSameVertex returns true. Cells are repointed and the vertices re-indexed.
+         *
+         * @return number of vertices removed
+         */
+        uint
+        merge_interpolation_vertices(
+                const std::function< bool( Interpolation_Vertex_Unzipped const &, Interpolation_Vertex_Unzipped const & ) >& aSameVertex,
+                const std::string&                                                                                           aLabel );
 
         //------------------------------------------------------------------------------
 
