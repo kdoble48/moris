@@ -479,8 +479,9 @@ namespace moris::opt
         MORIS_LOG_INFO( "Reading ADVs from restart file: %s", mRestartFile.c_str() );
 
         // Open open restart file
-        // Note: only processor 0 reads this file; therefore no parallel file name extension is used
-        hid_t tFileID = open_hdf5_file( mRestartFile, false );
+        // Note: only processor 0 reads this file; therefore no parallel file name extension is used, and it is opened
+        // read-only (with write permission, open_hdf5_file asserts on a parallel extension: MB-081)
+        hid_t tFileID = open_hdf5_file( mRestartFile, false, true );
 
         // Define matrix in which to read restart ADVs
         Vector< real >  tRestartADVs;
@@ -521,42 +522,66 @@ namespace moris::opt
         // reorder adv for new proc layout. FIXME see above
         if ( par_size() != tParSizeFile )
         {
-            moris::map< moris_id, sint > tIjklIdToPosMap;
-            for ( uint Ik = 0; Ik < mIjklIds.numel(); Ik++ )
-            {
-                if ( mIjklIds( Ik ) != gNoID )
-                {
-                    tIjklIdToPosMap[ mIjklIds( Ik ) ] = Ik;
-                }
-            }
-
-            for ( uint Ik = 0; Ik < tIjklIdsFile.numel(); Ik++ )
-            {
-                if ( tIjklIdToPosMap.key_exists( tIjklIdsFile( Ik ) ) )
-                {
-                    sint tIndxed            = tIjklIdToPosMap.find( tIjklIdsFile( Ik ) );
-                    mADVs( tIndxed )        = tRestartADVs( Ik );
-                    mUpperBounds( tIndxed ) = tRestartUpperBounds( Ik );
-                    mLowerBounds( tIndxed ) = tRestartLowerBounds( Ik );
-                }
-                else
-                {
-                    mADVs( Ik )        = tRestartADVs( Ik );
-                    mUpperBounds( Ik ) = tRestartUpperBounds( Ik );
-                    mLowerBounds( Ik ) = tRestartLowerBounds( Ik );
-                }
-            }
+            mADVs        = map_restart_values_to_layout( tIjklIdsFile, mIjklIds, tRestartADVs );
+            mUpperBounds = map_restart_values_to_layout( tIjklIdsFile, mIjklIds, tRestartUpperBounds );
+            mLowerBounds = map_restart_values_to_layout( tIjklIdsFile, mIjklIds, tRestartLowerBounds );
 
             MORIS_ERROR( mADVs.max() != MORIS_REAL_MAX, "Restart ADV is MORIS_REAL_MAX" );
             MORIS_ERROR( mUpperBounds.max() != MORIS_REAL_MAX, "Restart upper bound is MORIS_REAL_MAX" );
             MORIS_ERROR( mLowerBounds.max() != MORIS_REAL_MAX, "Restart lower bound is MORIS_REAL_MAX" );
         }
-
-        // Copy restart vectors on member variables
-        mADVs        = tRestartADVs;
-        mUpperBounds = tRestartUpperBounds;
-        mLowerBounds = tRestartLowerBounds;
+        else
+        {
+            // same layout: the file order is the current order (this copy used to run unconditionally and overwrite
+            // the reordered values on a different rank count: MB-077)
+            mADVs        = tRestartADVs;
+            mUpperBounds = tRestartUpperBounds;
+            mLowerBounds = tRestartLowerBounds;
+        }
 
         mRestartFile = "";
+    }
+
+    // -------------------------------------------------------------------------------------------------------------
+
+    Vector< real >
+    Problem::map_restart_values_to_layout(
+            const Matrix< IdMat >& aFileIjklIds,
+            const Matrix< IdMat >& aIjklIds,
+            const Vector< real >&  aFileValues )
+    {
+        MORIS_ERROR( aFileIjklIds.numel() == aFileValues.size() and aIjklIds.numel() == aFileValues.size(),
+                "Problem::map_restart_values_to_layout() - %zu restart values, %zu ijkl IDs in the file, %zu in the current layout.",
+                aFileValues.size(),
+                (size_t)aFileIjklIds.numel(),
+                (size_t)aIjklIds.numel() );
+
+        moris::map< moris_id, sint > tIjklIdToPosMap;
+        for ( uint Ik = 0; Ik < aIjklIds.numel(); Ik++ )
+        {
+            if ( aIjklIds( Ik ) != gNoID )
+            {
+                tIjklIdToPosMap[ aIjklIds( Ik ) ] = Ik;
+            }
+        }
+
+        Vector< real > tValues( aFileValues.size(), MORIS_REAL_MAX );
+        for ( uint Ik = 0; Ik < aFileIjklIds.numel(); Ik++ )
+        {
+            // not tied to a mesh entity: the same position in every layout
+            if ( aFileIjklIds( Ik ) == gNoID )
+            {
+                tValues( Ik ) = aFileValues( Ik );
+                continue;
+            }
+
+            MORIS_ERROR( tIjklIdToPosMap.key_exists( aFileIjklIds( Ik ) ),
+                    "Problem::map_restart_values_to_layout() - ijkl ID %d of restart entry %u is not in the current layout.",
+                    (int)aFileIjklIds( Ik ),
+                    Ik );
+            tValues( tIjklIdToPosMap.find( aFileIjklIds( Ik ) ) ) = aFileValues( Ik );
+        }
+
+        return tValues;
     }
 }    // namespace moris::opt

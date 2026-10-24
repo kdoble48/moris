@@ -1823,4 +1823,30 @@ namespace moris::opt
             }
         }
     }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    // A restart file written on another rank count lists the ADVs in that layout's order (MB-077): the values follow their
+    // ijkl IDs, an ADV without an ID keeps its position, and an ID missing from the current layout is an error
+    TEST_CASE( "Restart values are mapped to the current layout by ijkl ID", "[optimization][MB-077]" )
+    {
+        Matrix< IdMat > tFileIds    = { { 30 }, { 10 }, { gNoID }, { 20 } };
+        Matrix< IdMat > tCurrentIds = { { 10 }, { 20 }, { gNoID }, { 30 } };
+        Vector< real >  tFileValues = { 3.0, 1.0, 9.0, 2.0 };
+
+        Vector< real > tValues = Problem::map_restart_values_to_layout( tFileIds, tCurrentIds, tFileValues );
+        REQUIRE( tValues.size() == 4 );
+        CHECK( tValues( 0 ) == 1.0 );
+        CHECK( tValues( 1 ) == 2.0 );
+        CHECK( tValues( 2 ) == 9.0 );
+        CHECK( tValues( 3 ) == 3.0 );
+
+        // the same layout maps to itself
+        Vector< real > tSame = Problem::map_restart_values_to_layout( tCurrentIds, tCurrentIds, tValues );
+        CHECK( tSame( 0 ) == 1.0 );
+        CHECK( tSame( 3 ) == 3.0 );
+
+        Matrix< IdMat > tOtherIds = { { 10 }, { 20 }, { gNoID }, { 40 } };
+        CHECK_THROWS( Problem::map_restart_values_to_layout( tFileIds, tOtherIds, tFileValues ) );
+    }
 }    // namespace moris::opt
