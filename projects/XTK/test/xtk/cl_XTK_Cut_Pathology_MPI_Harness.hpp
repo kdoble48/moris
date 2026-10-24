@@ -551,8 +551,9 @@ namespace moris::xtk
 
         // the converse of count_disagreeing_copies for enriched IP vertices: one vertex, identified by its location and
         // its enriched T-matrix (columns 2-4 and 6-7 of the vertex rows), must carry one id on every rank that holds it.
-        // Ids are assigned per unzipped copy before merge_duplicate_interpolation_vertices, and each rank keeps its own
-        // first local copy (finding 27 in studies/xtk_holistic_review/findings/15_walkthrough_stops_2_3.md §8.7).
+        // Before the finding-27 fix, ids were assigned per unzipped copy before merge_duplicate_interpolation_vertices,
+        // and each rank kept its own first local copy (studies/xtk_holistic_review/findings/15_walkthrough_stops_2_3.md
+        // §8.7); this check guards that fix.
         // Returns the number of vertices with more than one id; aWithinRank counts those where one rank holds two of them
         inline uint
         count_vertices_with_several_ids( const Vector< Matrix< DDRMat > >& aGathered, uint& aWithinRank, uint& aNumKeys, std::string& aExample )
@@ -719,6 +720,12 @@ namespace moris::xtk
             uint        mIpVerticesWithSeveralIds = 0, mIpVerticesWithSeveralIdsOnOneRank = 0, mDistinctIpVertices = 0;
             std::string mIpVertexIdExample;
 
+            // numbering of the enriched IP vertices. Over all ranks the owned vertex ids must be exactly 1..N (N owned
+            // vertices): a repeated id or an id above N means a vertex was numbered more than once or an id was skipped.
+            // On each rank no two vertices may share an id. Ids are assigned after the merge, so the range is dense.
+            uint        mOwnedIpVertices = 0, mOwnedIpVertexIdDefects = 0, mIpVertexIdsRepeatedOnRank = 0;
+            std::string mOwnedIpVertexIdExample;
+
             // a corner of an IP cell (keyed by cell id = subphase id and location, so independent of vertex ids) whose
             // enriched T-matrix (basis ids, owners, weights) differs between the ranks that hold the cell: finding 28
             uint        mSharedCorners = 0, mCornerTMatrixMismatch = 0;
@@ -881,6 +888,7 @@ namespace moris::xtk
             Vector< Vector< real > >                         tBgRows, tIgCellRows, tSubphaseRows, tVertexRows, tCellRows, tBasisRows, tCornerRows;
             std::map< moris_index, std::pair< real, real > > tTMatrixHashOfVertex;    // enriched IP vertex index -> T-matrix hash
             Vector< Vector< real > >                         tDofRows, tLinkRows;     // global enrichment check (2b)
+            Vector< Vector< real > >                         tOwnedIpVertexIdRows;    // ids of the owned enriched IP vertices
             std::map< std::string, std::pair< uint, real > > tLocalSets;
             bool                                             tThrew = false;
 
@@ -1029,6 +1037,21 @@ namespace moris::xtk
 
                 // 2. enriched interpolation mesh: vertices with their enriched basis, cells with their vertices
                 Enriched_Interpolation_Mesh& tEnrIpMesh = tModel.get_enriched_interp_mesh( 0 );
+                std::map< moris_id, uint >   tVerticesWithId;    // id -> number of vertices on this rank carrying it
+                for ( uint iV = 0; iV < tEnrIpMesh.get_num_entities( mtk::EntityRank::NODE, 0 ); iV++ )
+                {
+                    mtk::Vertex& tVertex = tEnrIpMesh.get_mtk_vertex( iV );
+                    tVerticesWithId[ tVertex.get_id() ]++;
+                    if ( tVertex.get_owner() == (moris_id)tRank )
+                    {
+                        tOwnedIpVertexIdRows.push_back( { (real)tVertex.get_id() } );
+                    }
+                }
+                for ( const std::pair< const moris_id, uint >& iId : tVerticesWithId )
+                {
+                    tResult.mIpVertexIdsRepeatedOnRank += iId.second > 1;
+                }
+
                 for ( uint iV = 0; iV < tEnrIpMesh.get_num_entities( mtk::EntityRank::NODE, 0 ); iV++ )
                 {
                     mtk::Vertex&               tVertex        = tEnrIpMesh.get_mtk_vertex( iV );
@@ -1243,6 +1266,7 @@ namespace moris::xtk
             tResult.mEmptyOwnedVertices          = sum_all( tResult.mEmptyOwnedVertices );
             tResult.mEmptyAuraVertices           = sum_all( tResult.mEmptyAuraVertices );
             tResult.mClusterVerticesWithoutBasis = sum_all( tResult.mClusterVerticesWithoutBasis );
+            tResult.mIpVertexIdsRepeatedOnRank   = sum_all( tResult.mIpVertexIdsRepeatedOnRank );
             tResult.mMinBgCellsOnRank            = min_all( tResult.mNumBgCellsOnRank );
             tResult.mMaxBgCellsOnRank            = max_all( tResult.mNumBgCellsOnRank );
 
@@ -1255,6 +1279,7 @@ namespace moris::xtk
             Vector< Matrix< DDRMat > > tDofs     = gather_rows( tDofRows, 3 );
             Vector< Matrix< DDRMat > > tLinks    = gather_rows( tLinkRows, 2 );
             Vector< Matrix< DDRMat > > tBasis    = gather_rows( tBasisRows, 1 );
+            Vector< Matrix< DDRMat > > tOwnedIds = gather_rows( tOwnedIpVertexIdRows, 1 );
 
             // set names may differ between ranks (a rank without a cut has no interface set): gather names + values
             Vector< Vector< real > > tSetRows;
@@ -1283,6 +1308,27 @@ namespace moris::xtk
                 tResult.mCornerTMatrixMismatch =
                         count_corners_with_several_t_matrices( tCorners, tResult.mSharedCorners, tResult.mCornerTMatrixExample );
                 check_enrichment_components( tDofs, tLinks, tResult );
+
+                // owned vertex ids: exactly 1..N over all ranks
+                std::map< moris_id, uint > tOwnersOfId;
+                for ( const Matrix< DDRMat >& iRows : tOwnedIds )
+                {
+                    for ( uint iRow = 0; iRow < iRows.n_rows(); iRow++ )
+                    {
+                        tOwnersOfId[ (moris_id)iRows( iRow, 0 ) ]++;
+                        tResult.mOwnedIpVertices++;
+                    }
+                }
+                for ( const std::pair< const moris_id, uint >& iId : tOwnersOfId )
+                {
+                    bool tBad = iId.second > 1 or iId.first < 1 or iId.first > (moris_id)tResult.mOwnedIpVertices;
+                    tResult.mOwnedIpVertexIdDefects += tBad ? iId.second : 0;
+                    if ( tBad and tResult.mOwnedIpVertexIdExample.empty() )
+                    {
+                        tResult.mOwnedIpVertexIdExample = "owned id " + std::to_string( iId.first ) + " (" + std::to_string( iId.second )
+                                                        + " owned vertices; " + std::to_string( tResult.mOwnedIpVertices ) + " owned in total)";
+                    }
+                }
 
                 tResult.mDuplicateIgCellIds   = count_duplicate_owned_ids( tIgCells, tResult.mOwnedIgCells, tResult.mInvalidIgCellIds );
                 tResult.mDuplicateSubphaseIds = count_duplicate_owned_ids( tSps, tResult.mOwnedSubphases, tResult.mInvalidSubphaseIds );

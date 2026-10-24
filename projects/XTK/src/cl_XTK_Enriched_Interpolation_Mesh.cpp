@@ -2265,11 +2265,12 @@ namespace moris::xtk
         /* ---------------------------------------------------------------------------------------- */
         /* Step 0: Sort into owned and not owned entities */
 
-        // initialize a temporary list storing the UIPCs associated with the UIPVs
-        Vector< moris_index > tUipcsAssociatedWithNotOwnedUipvs;
+        // every (not owned UIPV, UIPC) pair: the id of a merged UIPV is requested through each UIPC it is attached to
+        Vector< moris_index > tRequestedUipvs;
+        Vector< moris_index > tRequestedUipcs;
 
         // determine which UIPVs can be assigned an ID and which need to be communicated
-        this->sort_unzipped_vertices_into_owned_and_not_owned( tUipcsAssociatedWithNotOwnedUipvs );
+        this->sort_unzipped_vertices_into_owned_and_not_owned( tRequestedUipvs, tRequestedUipcs );
 
         /* ---------------------------------------------------------------------------------------- */
         /* Step 0.5: Get the communication table */
@@ -2324,7 +2325,8 @@ namespace moris::xtk
 
             // fill identifying information
             this->prepare_requests_for_not_owned_unzipped_vertex_IDs(
-                    tUipcsAssociatedWithNotOwnedUipvs,
+                    tRequestedUipvs,
+                    tRequestedUipcs,
                     tNotOwnedUIPVsToProcs,
                     tBaseVertexIds,
                     tUnzippedIpCellIds );
@@ -2474,7 +2476,8 @@ namespace moris::xtk
 
     void
     Enriched_Interpolation_Mesh::sort_unzipped_vertices_into_owned_and_not_owned(
-            Vector< moris_index >& aUipcsAssociatedWithNotOwnedUipvs )
+            Vector< moris_index >& aRequestedUipvs,
+            Vector< moris_index >& aRequestedUipcs )
     {
         // get the number of enriched interpolation cells
         uint tNumUIPCs = this->get_num_entities( mtk::EntityRank::ELEMENT );
@@ -2483,7 +2486,8 @@ namespace moris::xtk
         // reserve memory
         mOwnedUnzippedVertices.reserve( tNumUIPVs );
         mNotOwnedUnzippedVertices.reserve( tNumUIPVs );
-        aUipcsAssociatedWithNotOwnedUipvs.reserve( tNumUIPVs );
+        aRequestedUipvs.reserve( tNumUIPVs );
+        aRequestedUipcs.reserve( tNumUIPVs );
 
         // Keep track of which vertices have been treated
         Vector< bool > tVertexTracker( tNumUIPVs, true );
@@ -2506,10 +2510,18 @@ namespace moris::xtk
                 moris_index tVertexIndex = tUIPVs( iVert )->get_index();
                 moris_index tOwner       = tUIPVs( iVert )->get_owner();
 
-                // make sure vertices are not re-numbered
-                MORIS_ASSERT( tVertexTracker( tVertexIndex ),
-                        "Enriched_Interpolation_Mesh::assign_ip_vertex_ids() - "
-                        "Trying to assign an index to a UIPV that has already been assigned one." );
+                // a not owned UIPV is requested through every UIPC it is attached to (merged UIPVs are shared by UIPCs)
+                if ( tOwner != par_rank() )
+                {
+                    aRequestedUipvs.push_back( tVertexIndex );
+                    aRequestedUipcs.push_back( tUipcIndex );
+                }
+
+                // list each UIPV once: it receives a single id
+                if ( !tVertexTracker( tVertexIndex ) )
+                {
+                    continue;
+                }
                 tVertexTracker( tVertexIndex ) = false;
 
                 // sort into owned and not owned
@@ -2520,7 +2532,6 @@ namespace moris::xtk
                 else    // not owned
                 {
                     mNotOwnedUnzippedVertices.push_back( tVertexIndex );
-                    aUipcsAssociatedWithNotOwnedUipvs.push_back( tUipcIndex );
                 }
             }
         }
@@ -2528,7 +2539,8 @@ namespace moris::xtk
         // size out unused memory
         mOwnedUnzippedVertices.shrink_to_fit();
         mNotOwnedUnzippedVertices.shrink_to_fit();
-        aUipcsAssociatedWithNotOwnedUipvs.shrink_to_fit();
+        aRequestedUipvs.shrink_to_fit();
+        aRequestedUipcs.shrink_to_fit();
 
     }    // end function: Enriched_Interpolation_Mesh::sort_unzipped_vertices_into_owned_and_not_owned()
 
@@ -2536,7 +2548,8 @@ namespace moris::xtk
 
     void
     Enriched_Interpolation_Mesh::prepare_requests_for_not_owned_unzipped_vertex_IDs(
-            Vector< moris_index > const &    aUipcsAssociatedWithNotOwnedUipvs,
+            Vector< moris_index > const &    aRequestedUipvs,
+            Vector< moris_index > const &    aRequestedUipcs,
             Vector< Vector< moris_index > >& aNotOwnedUIPVsToProcs,
             Vector< Matrix< IdMat > >&       aBaseVertexIds,
             Vector< Matrix< IdMat > >&       aUnzippedIpCellIds )
@@ -2552,17 +2565,17 @@ namespace moris::xtk
         aBaseVertexIds.resize( tCommTableSize );
         aUnzippedIpCellIds.resize( tCommTableSize );
 
-        // get the number of non-owned entities on the executing processor
-        uint tNumNotOwnedUIPVs = mNotOwnedUnzippedVertices.size();
+        // get the number of (not owned UIPV, UIPC) pairs to request on the executing processor
+        uint tNumRequests = aRequestedUipvs.size();
 
-        // prepare list that give the position of the requested UIPV in the array of non-owned UIPVs
+        // prepare list that give the position of the requested pair in the list of requests
         Vector< Vector< moris_index > > tUipvPositionInNotOwnedList( tCommTableSize );
 
-        // go through SPGs that executing proc knows about, but doesn't own, ...
-        for ( uint iNotOwnedVert = 0; iNotOwnedVert < tNumNotOwnedUIPVs; iNotOwnedVert++ )
+        // go through the UIPVs that executing proc knows about, but doesn't own, once per UIPC they are attached to ...
+        for ( uint iNotOwnedVert = 0; iNotOwnedVert < tNumRequests; iNotOwnedVert++ )
         {
             // ... get their index ...
-            moris_index tVertIndex = mNotOwnedUnzippedVertices( iNotOwnedVert );
+            moris_index tVertIndex = aRequestedUipvs( iNotOwnedVert );
 
             // ... get their respective owners, and position in the comm table ...
             moris_index tOwnerProc = mEnrichedInterpVerts( tVertIndex )->get_owner();
@@ -2607,7 +2620,7 @@ namespace moris::xtk
 
                 // get the index and ID of the UIPC the current UIPV is attached to
                 moris_index tIndexInNotOwnedList = tUipvPositionInNotOwnedList( iProc )( iVert );
-                moris_index tCellIndex           = aUipcsAssociatedWithNotOwnedUipvs( tIndexInNotOwnedList );
+                moris_index tCellIndex           = aRequestedUipcs( tIndexInNotOwnedList );
                 moris_id    tCellId              = mEnrichedInterpCells( tCellIndex )->get_id();
 
                 // store the identifying information in the output arrays
@@ -2716,6 +2729,9 @@ namespace moris::xtk
         Matrix< IdMat > tCommTable     = mXTKModel->get_communication_table();
         uint            tCommTableSize = tCommTable.numel();
 
+        // id received for each UIPV so far: a merged UIPV is requested through each of its UIPCs
+        std::unordered_map< moris_index, moris_id > tReceivedIdOfUipv;
+
         // process answers from each proc communicated with
         for ( uint iProc = 0; iProc < tCommTableSize; iProc++ )
         {
@@ -2734,6 +2750,19 @@ namespace moris::xtk
                 // get the current SPG index and ID from the data provided
                 moris_index tUipvIndex = tNotOwnedUIPVsToProcs( iProc )( iVert );
                 moris_id    tUipvId    = tReceivedVertIds( iProc )( iVert );
+
+                // all UIPCs of a UIPV must name the same vertex on the owner
+                auto tInserted = tReceivedIdOfUipv.emplace( tUipvIndex, tUipvId );
+                MORIS_ERROR( tInserted.second || tInserted.first->second == tUipvId,
+                        "Enriched_Interpolation_Mesh::handle_requested_unzipped_vertex_ID_answers() - "
+                        "Proc #%i: unzipped vertex #%i (base vertex ID %i) was merged locally, but its owner proc #%i "
+                        "names two different vertices for it (IDs %i and %i).",
+                        par_rank(),
+                        tUipvIndex,
+                        mEnrichedInterpVerts( tUipvIndex )->get_base_vertex()->get_id(),
+                        tCommTable( iProc ),
+                        tInserted.first->second,
+                        tUipvId );
 
                 // store the received entity ID
                 mEnrichedInterpVerts( tUipvIndex )->set_vertex_id( tUipvId );
