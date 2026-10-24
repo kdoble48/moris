@@ -667,28 +667,33 @@ namespace moris::xtk
         //------------------------------------------------------------------------------
 
         /**
-         * @brief Determine which UIPVs are owned by the executing processor and store them.
-         * Also determine which UIPCs the not owned UIPVs are attached to.
+         * @brief Determine which UIPVs are owned by the executing processor and store them, each once.
+         * Also list every (not owned UIPV, UIPC) pair: a merged UIPV is shared by several UIPCs, and its id is
+         * requested through each of them, so that disagreeing answers can be detected.
          *
-         * @param aUipcsAssociatedWithNotOwnedUipvs List of UIPCs the not owned UIPVs (as stored in mNotOwnedUnzippedVertices) are attached to.
+         * @param aRequestedUipvs output: not owned UIPV of each pair
+         * @param aRequestedUipcs output: UIPC of each pair
          */
         void
         sort_unzipped_vertices_into_owned_and_not_owned(
-                Vector< moris_index >& aUipcsAssociatedWithNotOwnedUipvs );
+                Vector< moris_index >& aRequestedUipvs,
+                Vector< moris_index >& aRequestedUipcs );
 
         //------------------------------------------------------------------------------
 
         /**
          * @brief Compile information by which not owned UIPVs can be identified by the owning processors
          *
-         * @param aUipcsAssociatedWithNotOwnedUipvs List of UIPCs the not owned UIPVs (as stored in mNotOwnedUnzippedVertices) are attached to.
+         * @param aRequestedUipvs not owned UIPV of each (UIPV, UIPC) pair to request
+         * @param aRequestedUipcs UIPC of each pair
          * @param aNotOwnedUIPVsToProcs output: outer cell: index of the owning processor in comm-table || inner cell: index of the UIPV to be communicated
          * @param aBaseVertexIds output: outer cell: index of the owning processor in comm-table || inner cell: ID of the base vertex of the UIPV communicated
          * @param aUnzippedIpCellIds output: outer cell: index of the owning processor in comm-table || inner cell: ID of the IP cell the communicated UIPV is attached to
          */
         void
         prepare_requests_for_not_owned_unzipped_vertex_IDs(
-                Vector< moris_index > const &    aUipcsAssociatedWithNotOwnedUipvs,
+                Vector< moris_index > const &    aRequestedUipvs,
+                Vector< moris_index > const &    aRequestedUipcs,
                 Vector< Vector< moris_index > >& aNotOwnedUIPVsToProcs,
                 Vector< Matrix< IdMat > >&       aBaseVertexIds,
                 Vector< Matrix< IdMat > >&       aUnzippedIpCellIds );
@@ -711,7 +716,8 @@ namespace moris::xtk
         //------------------------------------------------------------------------------
 
         /**
-         * @brief Store the IDs received for not owned UIPVs
+         * @brief Store the IDs received for not owned UIPVs. A UIPV requested through several UIPCs must receive the same
+         * ID from each; disagreeing answers are an error.
          *
          * @param aNotOwnedUIPVsToProcs input: outer cell: index of the owning processor in comm-table || inner cell: index of the UIPV communicated
          * @param aReceivedVertIds input: outer cell: index of the owning processor in comm-table || inner cell: IDs of the UIPVs communicated
