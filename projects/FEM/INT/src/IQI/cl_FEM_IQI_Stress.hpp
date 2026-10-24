@@ -27,7 +27,8 @@ namespace moris::fem
 
     /**
      * pointwise stress measures (von Mises, principal, normal, shear, or the full stress vector) of an elasticity CM;
-     * derived IQIs (e.g. IQI_Max_Stress) reuse the scalar measures and their derivatives wrt the CM flux
+     * derived IQIs (e.g. IQI_Max_Stress) reuse the scalar measures and their derivatives wrt the CM flux.
+     * The measures themselves are implemented once in fn_FEM_Stress_Measures.
      */
     class IQI_Stress : public IQI
     {
@@ -101,49 +102,6 @@ namespace moris::fem
          * @return derivative in the layout of the CM flux ( 3, 4 or 6 x 1 )
          */
         Matrix< DDRMat > eval_dStressdFlux();
-
-        //------------------------------------------------------------------------------
-        /**
-         * evaluate the Von-Mises stress using the stress vector provided by the constitutive model
-         * @return the value of the Von-Mises stress
-         */
-        real eval_Von_Mises_stress();
-
-        //------------------------------------------------------------------------------
-        /**
-         * derivative of the von Mises stress wrt the CM flux components
-         * @param[ in ] aVonMises the von Mises stress at the evaluation point
-         * @return derivative in the layout of the CM flux ( 3, 4 or 6 x 1 )
-         */
-        Matrix< DDRMat > eval_dVonMisesdFlux( real aVonMises );
-
-        //------------------------------------------------------------------------------
-        /**
-         * evaluate the i-th principal stress using the stress vector provided by the constitutive model
-         * @param[ in ] aPrincipalStressIndex number i of the principal stress to get,
-         *               i.e. 1,2,3 for the first, second and third principal stress, respectively
-         * @return the value of the requested principal stress
-         */
-        real eval_principal_stress( uint aPrincipalStressIndex );
-
-        //------------------------------------------------------------------------------
-        /**
-         * evaluate the i-th normal stress using the stress vector provided by the constitutive model
-         * @param[ in ] aStressIndex number of the normal stress to get,
-         *               i.e. 1,2,3 for the x-, y-, and z-normal stresses, respectively
-         * @return the value of the requested normal stress
-         */
-        real eval_normal_stress( uint aStressIndex );
-
-        //------------------------------------------------------------------------------
-        /**
-         * evaluate the i-th shear stress using the stress vector provided by the constitutive model
-         * @param[ in ] aStressIndex number of the shear stress to get,
-         *               i.e. 1,2,3 for the yz-, xz-, and xy-shear stresses, respectively
-         *               in 2D the input is ignored, as there's only one shear stress
-         * @return the value of the requested shear stress
-         */
-        real eval_shear_stress( uint aStressIndex );
 
         //------------------------------------------------------------------------------
         /**
