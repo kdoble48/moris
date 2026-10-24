@@ -653,6 +653,28 @@ namespace moris::xtk
 
         // ----------------------------------------------------------------------------------
 
+        /**
+         * @brief Refuses a subphase link across a refinement transition that cannot be resolved: the coarser of the two
+         * background cells is cut and carries two or more subphases of one bulk phase on the shared face, and the finer
+         * cell has a subphase of that phase there. Without a geometric footprint check the finer cell's subphase would be
+         * linked to all of these pieces, including those it does not touch (MB-075).
+         *
+         * @param aCutIntegrationMesh cut integration mesh
+         * @param aCell background cell whose subphases on the shared face are aCellSubphases
+         * @param aNeighborCell neighbouring background cell, on another refinement level
+         * @param aCellSubphases subphases of aCell attached to the shared face
+         * @param aNeighborSubphases subphases of aNeighborCell attached to the shared face
+         */
+        void
+        check_unambiguous_transition_links(
+                Cut_Integration_Mesh*               aCutIntegrationMesh,
+                moris::mtk::Cell const *            aCell,
+                moris::mtk::Cell const *            aNeighborCell,
+                const Vector< moris::moris_index >& aCellSubphases,
+                const Vector< moris::moris_index >& aNeighborSubphases ) const;
+
+        // ----------------------------------------------------------------------------------
+
         void
         collect_ig_cells_and_side_ords_on_bg_facet(
                 Cut_Integration_Mesh*        aCutIntegrationMesh,

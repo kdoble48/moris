@@ -9,6 +9,8 @@
  */
 
 #include <algorithm>
+#include <map>
+#include <set>
 #include <unordered_map>
 #include "cl_XTK_Integration_Mesh_Generator.hpp"
 #include "cl_XTK_Decomposition_Algorithm_Factory.hpp"
@@ -1489,6 +1491,15 @@ namespace moris::xtk
                             tNeighborRepresentativeIgCells,
                             tNeighborRepresentativeIgCellsOrdinal );
 
+                    // the links below join every same-phase subphase pair on the two faces; refuse them where the coarse face
+                    // carries several pieces of one phase and the fine cell may not touch all of them (MB-075)
+                    this->check_unambiguous_transition_links(
+                            aCutIntegrationMesh,
+                            tCurrentCell,
+                            tOtherCell,
+                            tMyCellSubphaseIndices,
+                            tNeighborSubphaseIndices );
+
                     for ( uint i = 0; i < tMyCellSubphaseIndices.size(); i++ )
                     {
                         moris_index tMySubphaseIndex = tMyCellSubphaseIndices( i );
@@ -1512,6 +1523,20 @@ namespace moris::xtk
                 // trivial case: no transition between refinement levels
                 else
                 {
+                    // HMR reports a refinement transition only from the coarse side. Seen from the fine side, the coarse
+                    // neighbor comes without a transition location, and tFacetIndex is the fine cell's own facet, under which
+                    // none of the coarse cell's child facets are stored. Collect the neighbor's subphases through its own
+                    // facet, as the transition branch does (MB-075). On the same level both cells share the facet.
+                    bool        tCrossLevel         = tOtherCell->get_level() != tCurrentCell->get_level();
+                    moris_index tNeighborFacetIndex = tFacetIndex;
+                    if ( tCrossLevel )
+                    {
+                        tNeighborFacetIndex = aBackgroundMesh->get_entity_connected_to_entity_loc_inds(
+                                tOtherCell->get_index(),
+                                mtk::EntityRank::ELEMENT,
+                                aBackgroundMesh->get_facet_rank() )( tNeighborOrdinal );
+                    }
+
                     // iterate over sub-phases of center-Bg-cell relevant to current facet
                     for ( uint iMySP = 0; iMySP < tMyCellSubphaseIndices.size(); iMySP++ )
                     {
@@ -1534,12 +1559,23 @@ namespace moris::xtk
                                     aCutIntegrationMesh,    // mesh info
                                     tOtherCell,             // neighbor cell 'connection to'
                                     tNeighborOrdinal,       // side ordinal of neighbor cell the connection is going to
-                                    tFacetIndex,            // index of facet through which connection goes
+                                    tNeighborFacetIndex,    // the neighbor's own facet (differs from tFacetIndex across levels)
                                     aFacetConnectivity,     // facet connectivity info
-                                    ( *aBgFacetToChildFacet )( tFacetIndex ),
+                                    ( *aBgFacetToChildFacet )( tNeighborFacetIndex ),
                                     tNeighborSubphaseIndices,
                                     tNeighborRepresentativeIgCells,
                                     tNeighborRepresentativeIgCellsOrdinal );
+
+                            // across levels, the fine cell's subphase is linked to every same-phase piece of the coarse face (MB-075)
+                            if ( tCrossLevel )
+                            {
+                                this->check_unambiguous_transition_links(
+                                        aCutIntegrationMesh,
+                                        tCurrentCell,
+                                        tOtherCell,
+                                        { tMySubphaseIndex },
+                                        tNeighborSubphaseIndices );
+                            }
 
                             // iterate through neighbor Bg-cell's sub-phases connected to current facet and store them in the connectivity
                             // note: in the case that the transition includes one uncut element this should always be only one "my sub-phase" and one neighbor sub-phase
@@ -1630,8 +1666,13 @@ namespace moris::xtk
             std::map< std::pair< moris_index, moris_index >, moris_index > tSubphaseMap;
 
             // make sure that a cut Bg-element has information which IG-cell facets comprise the Bg-cell facet
-            MORIS_ASSERT( aBgFacetToChildrenFacets != nullptr,
-                    "Integration_Mesh_Generator::collect_subphases_attached_to_facet_on_cell() - Null ptr on facet that should have children facets" );
+            // (an error, not an assert: the size() below would dereference the null pointer, MB-075)
+            MORIS_ERROR( aBgFacetToChildrenFacets != nullptr,
+                    "Integration_Mesh_Generator::collect_subphases_attached_to_facet_on_cell() - background cell %d is cut, but "
+                    "background facet %d (side ordinal %d) has no child facets.",
+                    aBGCell->get_index(),
+                    aSharedFacetIndex,
+                    aFacetOrdinal );
 
             // get number of IG cells connected to current IP/BG cell's facet
             uint tNumConnectedIgCells = aBgFacetToChildrenFacets->size();
@@ -1731,6 +1772,54 @@ namespace moris::xtk
             aRepresentativeIgCellsOrdinal.push_back( aFacetOrdinal );
         }
     }    // end function: Integration_Mesh_Generator::collect_subphases_attached_to_facet_on_cell()
+
+    // ----------------------------------------------------------------------------------
+
+    void
+    Integration_Mesh_Generator::check_unambiguous_transition_links(
+            Cut_Integration_Mesh*               aCutIntegrationMesh,
+            mtk::Cell const *                   aCell,
+            mtk::Cell const *                   aNeighborCell,
+            const Vector< moris::moris_index >& aCellSubphases,
+            const Vector< moris::moris_index >& aNeighborSubphases ) const
+    {
+        // only a cut coarser cell is ambiguous: an uncut coarser cell covers the whole face of the finer one, so it touches
+        // every piece there
+        bool                                tCellIsCoarse    = aCell->get_level() < aNeighborCell->get_level();
+        mtk::Cell const *                   tCoarseCell      = tCellIsCoarse ? aCell : aNeighborCell;
+        mtk::Cell const *                   tFineCell        = tCellIsCoarse ? aNeighborCell : aCell;
+        const Vector< moris::moris_index >& tCoarseSubphases = tCellIsCoarse ? aCellSubphases : aNeighborSubphases;
+        const Vector< moris::moris_index >& tFineSubphases   = tCellIsCoarse ? aNeighborSubphases : aCellSubphases;
+
+        if ( !aCutIntegrationMesh->parent_cell_has_children( tCoarseCell->get_index() ) )
+        {
+            return;
+        }
+
+        // distinct coarse subphases on the shared face per bulk phase (a subphase can be listed once per facet pair)
+        std::map< moris_index, std::set< moris_index > > tCoarsePieces;
+        for ( moris_index iSubphase : tCoarseSubphases )
+        {
+            tCoarsePieces[ aCutIntegrationMesh->get_subphase_bulk_phase( iSubphase ) ].insert( iSubphase );
+        }
+
+        // a fine subphase of a phase with two or more coarse pieces would be linked to all of them
+        for ( moris_index iSubphase : tFineSubphases )
+        {
+            moris_index tBulkPhase = aCutIntegrationMesh->get_subphase_bulk_phase( iSubphase );
+            auto        tPieces    = tCoarsePieces.find( tBulkPhase );
+            MORIS_ERROR( tPieces == tCoarsePieces.end() || tPieces->second.size() < 2,
+                    "Integration_Mesh_Generator::construct_subphase_neighborhood() - background cell %d (level %u) and its neighbor %d "
+                    "(level %u) meet at a refinement transition where the cut cell has %u separate pieces of bulk phase %d on the shared "
+                    "face. XTK cannot tell which piece the finer cell touches. Widen the refinement band so the interface stays inside it.",
+                    tCoarseCell->get_index(),
+                    tCoarseCell->get_level(),
+                    tFineCell->get_index(),
+                    tFineCell->get_level(),
+                    (uint)tPieces->second.size(),
+                    tBulkPhase );
+        }
+    }
 
     // ----------------------------------------------------------------------------------
 

@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -80,6 +81,31 @@ namespace moris::xtk
                     const std::string&           aLagrangeToBspline = "0",
                     uint                         aRefineFirstPattern = 0 )
             {
+                this->build( aElements, aDimensions, aBsplineOrders, aBsplinePatterns, aLagrangeToBspline, aRefineFirstPattern, [ aRefineAboveX ]( const Matrix< DDRMat >& aCentre, uint ) { return aCentre( 0 ) > aRefineAboveX; }, aRefineAboveX < MORIS_REAL_MAX ? 1 : 0 );
+            }
+
+            // aRefine( centre, pass ): background cells whose centre satisfies it are refined one level, in aNumPasses passes
+            Grid_Mesh(
+                    const std::array< uint, 3 >&                                  aElements,
+                    const Point&                                                  aDimensions,
+                    const std::function< bool( const Matrix< DDRMat >&, uint ) >& aRefine,
+                    uint                                                          aNumPasses )
+            {
+                this->build( aElements, aDimensions, "1", "0", "0", 0, aRefine, aNumPasses );
+            }
+
+          private:
+            void
+            build(
+                    const std::array< uint, 3 >&                                  aElements,
+                    const Point&                                                  aDimensions,
+                    const std::string&                                            aBsplineOrders,
+                    const std::string&                                            aBsplinePatterns,
+                    const std::string&                                            aLagrangeToBspline,
+                    uint                                                          aRefineFirstPattern,
+                    const std::function< bool( const Matrix< DDRMat >&, uint ) >& aRefine,
+                    uint                                                          aNumPasses )
+            {
                 Module_Parameter_Lists tParameters( Module_Type::HMR );
                 tParameters( 0 ).add_parameter_list( prm::create_hmr_parameter_list() );
                 tParameters( 0 )( 0 ).set( "number_of_elements_per_dimension", aElements[ 0 ], aElements[ 1 ], aElements[ 2 ] );
@@ -102,7 +128,7 @@ namespace moris::xtk
                 mMeshManager = std::make_shared< mtk::Mesh_Manager >();
                 mHMR->set_performer( mMeshManager );
                 mHMR->perform_initial_refinement();
-                if ( aRefineAboveX < MORIS_REAL_MAX )
+                for ( uint iPass = 0; iPass < aNumPasses; iPass++ )
                 {
                     // flag as Database::flag_element does, without HMR::flag_element (MB-043: rank-local flag deadlocks)
                     hmr::Background_Mesh_Base* tBackgroundMesh = mHMR->get_database()->get_background_mesh();
@@ -113,7 +139,7 @@ namespace moris::xtk
                     {
                         hmr::Background_Element_Base* tElement = tBackgroundMesh->get_element( iElement );
                         tBackgroundMesh->calc_center_of_element( tElement, tCentre );
-                        if ( tCentre( 0 ) > aRefineAboveX )
+                        if ( aRefine( tCentre, iPass ) )
                         {
                             tElement->put_on_refinement_queue();
                             tElement->set_refined_flag( tWorkingPattern );
