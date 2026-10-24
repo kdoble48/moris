@@ -685,6 +685,10 @@ namespace moris::xtk
             uint        mSharedCorners = 0, mCornerTMatrixMismatch = 0;
             std::string mCornerTMatrixExample;
 
+            // background cells this rank holds (owned + aura); on rank 0 after aura_case: the min and max over ranks,
+            // which give the aura depth (e.g. 8 x 4 x 4 on 2 ranks: 64 owned + 16 per aura layer)
+            uint mNumBgCellsOnRank = 0, mMinBgCellsOnRank = 0, mMaxBgCellsOnRank = 0;
+
             // informational: aura copies of an IP cell whose vertex ids differ from the owner's (the aura copy keeps the
             // owner's pre-merge copy ids, which the owner's merge removed: finding 27), and vertices without a T-matrix
             uint        mIpCellIdMismatch = 0;
@@ -709,7 +713,7 @@ namespace moris::xtk
         };
 
         inline Aura_Result
-        aura_case( mtk::Interpolation_Mesh* aMesh, const Vector< Plane >& aPlanes, Regime aRegime )
+        aura_case_fields( mtk::Interpolation_Mesh* aMesh, const Vector< gen::Field_Function >& aFields, Regime aRegime )
         {
             Aura_Result tResult;
             uint        tRank = par_rank();
@@ -723,10 +727,9 @@ namespace moris::xtk
             try
             {
                 Vector< std::shared_ptr< gen::Geometry > > tGeometries;
-                for ( uint iPlane = 0; iPlane < aPlanes.size(); iPlane++ )
+                for ( const gen::Field_Function& iField : aFields )
                 {
-                    gPlanes[ iPlane ] = aPlanes( iPlane );
-                    tGeometries.push_back( create_geometry( gPlaneFields[ iPlane ], aRegime ) );
+                    tGeometries.push_back( create_geometry( iField, aRegime ) );
                 }
                 gen::Geometry_Engine_Parameters tParameters;
                 tParameters.mGeometries = tGeometries;
@@ -734,7 +737,11 @@ namespace moris::xtk
 
                 Model tModel( 3, aMesh, &tGeometryEngine );
                 tModel.mVerbose = false;
-                tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8, Subdivision_Method::C_HIERARCHY_TET4 } );
+                if ( not tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_HEX8, Subdivision_Method::C_HIERARCHY_TET4 } ) )
+                {
+                    throw std::runtime_error( "decomposition refused (e.g. intersected cells on different refinement levels)" );
+                }
+                tResult.mNumBgCellsOnRank = aMesh->get_num_elems();
                 tModel.perform_basis_enrichment( mtk::EntityRank::BSPLINE, 0 );
                 tModel.construct_face_oriented_ghost_penalization_cells();
 
@@ -963,6 +970,8 @@ namespace moris::xtk
             tResult.mEmptyOwnedVertices          = sum_all( tResult.mEmptyOwnedVertices );
             tResult.mEmptyAuraVertices           = sum_all( tResult.mEmptyAuraVertices );
             tResult.mClusterVerticesWithoutBasis = sum_all( tResult.mClusterVerticesWithoutBasis );
+            tResult.mMinBgCellsOnRank            = min_all( tResult.mNumBgCellsOnRank );
+            tResult.mMaxBgCellsOnRank            = max_all( tResult.mNumBgCellsOnRank );
 
             Vector< Matrix< DDRMat > > tBg       = gather_rows( tBgRows, 10 );
             Vector< Matrix< DDRMat > > tIgCells  = gather_rows( tIgCellRows, 2 );
@@ -1063,6 +1072,78 @@ namespace moris::xtk
                 }
             }
             return tResult;
+        }
+
+        // one geometry per plane (at most 6, the slots of gPlaneFields)
+        inline Aura_Result
+        aura_case( mtk::Interpolation_Mesh* aMesh, const Vector< Plane >& aPlanes, Regime aRegime )
+        {
+            Vector< gen::Field_Function > tFields;
+            for ( uint iPlane = 0; iPlane < aPlanes.size(); iPlane++ )
+            {
+                gPlanes[ iPlane ] = aPlanes( iPlane );
+                tFields.push_back( gPlaneFields[ iPlane ] );
+            }
+            return aura_case_fields( aMesh, tFields, aRegime );
+        }
+
+        // ----------------------------------------------------------------------------------
+        // thin features (finding 28): a union of axis-aligned boxes, positive inside. On the [0,2] x [0,1] x [0,1] box with
+        // 8 x 4 x 4 cells (h = 0.25) a box of half-thickness 0.06 centred on a node row holds only that row of nodes, so it
+        // is one node layer thick. A "U" of two such slabs joined by a bridge two cells beyond the processor face (x = 1)
+        // makes a quadratic basis next to the face see one connected piece on the rank that holds the bridge cell and two
+        // pieces on the rank whose aura stops short of it.
+
+        struct Box
+        {
+            Point mCentre;
+            Point mHalfWidth;
+        };
+
+        inline Vector< Box > gBoxes;
+
+        inline real
+        boxes_field( const Matrix< DDRMat >& aPoint, const Vector< real >& aParameters )
+        {
+            real tValue = -MORIS_REAL_MAX;
+            for ( const Box& iBox : gBoxes )
+            {
+                real tInside = MORIS_REAL_MAX;
+                for ( uint iDim = 0; iDim < 3; iDim++ )
+                {
+                    tInside = std::min( tInside, iBox.mHalfWidth[ iDim ] - std::abs( aPoint( iDim ) - iBox.mCentre[ iDim ] ) );
+                }
+                tValue = std::max( tValue, tInside );
+            }
+            return tValue;
+        }
+
+        struct Thin_Case
+        {
+            std::string   mName;
+            Vector< Box > mBoxes;
+        };
+
+        inline Vector< Thin_Case >
+        thin_cases()
+        {
+            const real tThin = 0.06;    // half-thickness: one node layer
+            const real tFull = 0.6;     // half-width through z (covers [0,1])
+
+            // a slab along x at node row y = aY, from aX0 to aX1
+            auto tSlab = [ & ]( real aY, real aX0, real aX1 ) -> Box {
+                return { { 0.5 * ( aX0 + aX1 ), aY, 0.5 }, { 0.5 * ( aX1 - aX0 ), tThin, tFull } };
+            };
+            // a bridge along y at node column x = aX, joining rows y = 0.25 and y = 0.75
+            auto tBridge = [ & ]( real aX ) -> Box {
+                return { { aX, 0.5, 0.5 }, { tThin, 0.25 + tThin, tFull } };
+            };
+
+            Vector< Thin_Case > tCases;
+            tCases.push_back( { "thin slab across the face", { tSlab( 0.25, 0.3, 1.7 ) } } );
+            tCases.push_back( { "U, bridge at x=1.5", { tSlab( 0.25, 0.4, 1.5 + tThin ), tSlab( 0.75, 0.4, 1.5 + tThin ), tBridge( 1.5 ) } } );
+            tCases.push_back( { "U, bridge at x=0.5", { tSlab( 0.25, 0.5 - tThin, 1.6 ), tSlab( 0.75, 0.5 - tThin, 1.6 ), tBridge( 0.5 ) } } );
+            return tCases;
         }
 
         inline std::ofstream*

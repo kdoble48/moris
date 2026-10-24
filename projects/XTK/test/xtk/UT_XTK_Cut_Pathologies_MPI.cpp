@@ -300,6 +300,35 @@ namespace moris::xtk
                 std::cout << "\n=== " << iConfig.mName << ", " << par_size() << " ranks ===\n";
             }
 
+            // report on rank 0 and check: one id per vertex, one vertex per id, one T-matrix per cell corner
+            auto tReport = []( const std::string& aName, const Aura_Result& aResult ) {
+                if ( par_rank() != 0 )
+                {
+                    return;
+                }
+                std::cout << std::setw( 28 ) << aName << "  vertices " << aResult.mDistinctIpVertices << "  with several ids "
+                          << aResult.mIpVerticesWithSeveralIds << " (of which on one rank " << aResult.mIpVerticesWithSeveralIdsOnOneRank << ")"
+                          << "  same id, different vertex " << aResult.mIpVertexMismatch << "/" << aResult.mSharedIpVertices
+                          << "  cell corners with different T-matrices " << aResult.mCornerTMatrixMismatch << "/" << aResult.mSharedCorners
+                          << "  bg cells per rank " << aResult.mMinBgCellsOnRank << "-" << aResult.mMaxBgCellsOnRank << "\n";
+                if ( aResult.mThrew )
+                {
+                    std::cout << "      THREW: " << aResult.mMessage.substr( 0, 160 ) << "\n";
+                }
+                if ( not aResult.mIpVertexIdExample.empty() )
+                {
+                    std::cout << "      first: " << aResult.mIpVertexIdExample << "\n";
+                }
+                if ( not aResult.mCornerTMatrixExample.empty() )
+                {
+                    std::cout << "      first corner: " << aResult.mCornerTMatrixExample << "\n";
+                }
+                CHECK( not aResult.mThrew );
+                CHECK( aResult.mIpVerticesWithSeveralIds == 0 );
+                CHECK( aResult.mIpVertexMismatch == 0 );
+                CHECK( aResult.mCornerTMatrixMismatch == 0 );
+            };
+
             for ( const Parallel_Case& iCase : parallel_cases() )
             {
                 // uncut, cut away from the processor face, cut on it
@@ -307,27 +336,19 @@ namespace moris::xtk
                 {
                     continue;
                 }
-                Aura_Result tResult = aura_case( tMesh, iCase.mPlanes, Regime::STORED );
-                if ( par_rank() != 0 )
-                {
-                    continue;
-                }
-                std::cout << std::setw( 28 ) << iCase.mName << "  vertices " << tResult.mDistinctIpVertices << "  with several ids "
-                          << tResult.mIpVerticesWithSeveralIds << " (of which on one rank " << tResult.mIpVerticesWithSeveralIdsOnOneRank << ")"
-                          << "  same id, different vertex " << tResult.mIpVertexMismatch << "/" << tResult.mSharedIpVertices
-                          << "  cell corners with different T-matrices " << tResult.mCornerTMatrixMismatch << "/" << tResult.mSharedCorners << "\n";
-                if ( not tResult.mIpVertexIdExample.empty() )
-                {
-                    std::cout << "      first: " << tResult.mIpVertexIdExample << "\n";
-                }
-                if ( not tResult.mCornerTMatrixExample.empty() )
-                {
-                    std::cout << "      first corner: " << tResult.mCornerTMatrixExample << "\n";
-                }
-                CHECK( not tResult.mThrew );
-                CHECK( tResult.mIpVerticesWithSeveralIds == 0 );
-                CHECK( tResult.mIpVertexMismatch == 0 );
-                CHECK( tResult.mCornerTMatrixMismatch == 0 );
+                tReport( iCase.mName, aura_case( tMesh, iCase.mPlanes, Regime::STORED ) );
+            }
+
+            // thin features need node rows at y = 0.25 and 0.75 (h = 0.25): the unrefined 8 x 4 x 4 mesh only (on the
+            // refined one they reach x > 1.5, cut cells sit on two levels and decomposition is refused)
+            if ( iConfig.mElements[ 0 ] != 8 or iConfig.mRefineAboveX < MORIS_REAL_MAX )
+            {
+                continue;
+            }
+            for ( const Thin_Case& iCase : thin_cases() )
+            {
+                gBoxes = iCase.mBoxes;
+                tReport( iCase.mName, aura_case_fields( tMesh, { &boxes_field }, Regime::STORED ) );
             }
         }
     }
