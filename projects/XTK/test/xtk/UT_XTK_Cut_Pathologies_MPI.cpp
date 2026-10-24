@@ -204,7 +204,12 @@ namespace moris::xtk
                           << "  basis " << tResult.mNumEnrichedBasis << "  ipv " << tResult.mNumIpVertices << "  ipc " << tResult.mNumIpCells
                           << "  cluster vertices w/o T " << tResult.mClusterVerticesWithoutBasis << "  empty T owned/aura " << tResult.mEmptyOwnedVertices
                           << "/" << tResult.mEmptyAuraVertices << "  ipc id diff " << tResult.mIpCellIdMismatch
-                          << "  ipv with several ids " << tResult.mIpVerticesWithSeveralIds << "\n";
+                          << "  ipv with several ids " << tResult.mIpVerticesWithSeveralIds << "  corner T diff " << tResult.mCornerTMatrixMismatch << "/"
+                          << tResult.mSharedCorners << "\n";
+                if ( not tResult.mCornerTMatrixExample.empty() )
+                {
+                    std::cout << "      first corner T diff: " << tResult.mCornerTMatrixExample << "\n";
+                }
                 for ( const std::string& iExample : { tResult.mBgCellExample, tResult.mIpVertexExample, tResult.mIpCellExample } )
                 {
                     if ( not iExample.empty() )
@@ -268,31 +273,62 @@ namespace moris::xtk
             return;
         }
 
-        Grid_Mesh                tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 } );
-        mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
-
-        for ( const Parallel_Case& iCase : parallel_cases() )
+        // linear B-splines on the Lagrange mesh give one-basis T-matrices; quadratic ones (as in our decks) have a
+        // 3-cell support that reaches past a rank's cells plus aura, and refinement adds truncated two-level T-matrices.
+        // The cuts below lie in unrefined cells, so the same-level guard for intersected cells is not triggered. Refining
+        // from x > 1.25 instead puts the x = 1 cut cells next to refined cells and crashes in the subphase neighbourhood
+        // (MB-075, findings/18_mb075_transition_segfault_fix.md), so the refined zone starts one cell further out.
+        struct Mesh_Config
         {
-            // uncut, cut away from the processor face, cut on it
-            if ( iCase.mName != "x=3 (no cut, control)" and iCase.mName != "x=0.3 (away from the face)" and iCase.mName != "x=1 (processor face)" )
+            std::string           mName;
+            std::array< uint, 3 > mElements;
+            real                  mRefineAboveX;
+            std::string           mBsplineOrders;
+        };
+        Vector< Mesh_Config > tConfigs = {
+            { "linear B-splines 4x2x2", { 4, 2, 2 }, MORIS_REAL_MAX, "1" },
+            { "quadratic B-splines 8x4x4", { 8, 4, 4 }, MORIS_REAL_MAX, "2" },
+            { "quadratic, refined x>1.5", { 8, 4, 4 }, 1.5, "2" },
+        };
+
+        for ( const Mesh_Config& iConfig : tConfigs )
+        {
+            Grid_Mesh                tBox( iConfig.mElements, { 2.0, 1.0, 1.0 }, iConfig.mRefineAboveX, iConfig.mBsplineOrders );
+            mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
+            if ( par_rank() == 0 )
             {
-                continue;
+                std::cout << "\n=== " << iConfig.mName << ", " << par_size() << " ranks ===\n";
             }
-            Aura_Result tResult = aura_case( tMesh, iCase.mPlanes, Regime::STORED );
-            if ( par_rank() != 0 )
+
+            for ( const Parallel_Case& iCase : parallel_cases() )
             {
-                continue;
+                // uncut, cut away from the processor face, cut on it
+                if ( iCase.mName != "x=3 (no cut, control)" and iCase.mName != "x=0.3 (away from the face)" and iCase.mName != "x=1 (processor face)" )
+                {
+                    continue;
+                }
+                Aura_Result tResult = aura_case( tMesh, iCase.mPlanes, Regime::STORED );
+                if ( par_rank() != 0 )
+                {
+                    continue;
+                }
+                std::cout << std::setw( 28 ) << iCase.mName << "  vertices " << tResult.mDistinctIpVertices << "  with several ids "
+                          << tResult.mIpVerticesWithSeveralIds << " (of which on one rank " << tResult.mIpVerticesWithSeveralIdsOnOneRank << ")"
+                          << "  same id, different vertex " << tResult.mIpVertexMismatch << "/" << tResult.mSharedIpVertices
+                          << "  cell corners with different T-matrices " << tResult.mCornerTMatrixMismatch << "/" << tResult.mSharedCorners << "\n";
+                if ( not tResult.mIpVertexIdExample.empty() )
+                {
+                    std::cout << "      first: " << tResult.mIpVertexIdExample << "\n";
+                }
+                if ( not tResult.mCornerTMatrixExample.empty() )
+                {
+                    std::cout << "      first corner: " << tResult.mCornerTMatrixExample << "\n";
+                }
+                CHECK( not tResult.mThrew );
+                CHECK( tResult.mIpVerticesWithSeveralIds == 0 );
+                CHECK( tResult.mIpVertexMismatch == 0 );
+                CHECK( tResult.mCornerTMatrixMismatch == 0 );
             }
-            std::cout << std::setw( 28 ) << iCase.mName << "  vertices " << tResult.mDistinctIpVertices << "  with several ids "
-                      << tResult.mIpVerticesWithSeveralIds << " (of which on one rank " << tResult.mIpVerticesWithSeveralIdsOnOneRank << ")"
-                      << "  same id, different vertex " << tResult.mIpVertexMismatch << "/" << tResult.mSharedIpVertices << "\n";
-            if ( not tResult.mIpVertexIdExample.empty() )
-            {
-                std::cout << "      first: " << tResult.mIpVertexIdExample << "\n";
-            }
-            CHECK( not tResult.mThrew );
-            CHECK( tResult.mIpVerticesWithSeveralIds == 0 );
-            CHECK( tResult.mIpVertexMismatch == 0 );
         }
     }
 

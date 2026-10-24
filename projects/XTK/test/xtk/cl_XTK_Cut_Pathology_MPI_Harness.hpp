@@ -533,13 +533,12 @@ namespace moris::xtk
                 for ( uint iRow = 0; iRow < aGathered( iRank ).n_rows(); iRow++ )
                 {
                     const Matrix< DDRMat >& tRows = aGathered( iRank );
-                    Key tKey = { std::llround( tRows( iRow, 2 ) / gLocationTolerance ), std::llround( tRows( iRow, 3 ) / gLocationTolerance ),
-                        std::llround( tRows( iRow, 4 ) / gLocationTolerance ), tRows( iRow, 6 ), tRows( iRow, 7 ) };
+                    Key                     tKey  = { std::llround( tRows( iRow, 2 ) / gLocationTolerance ), std::llround( tRows( iRow, 3 ) / gLocationTolerance ), std::llround( tRows( iRow, 4 ) / gLocationTolerance ), tRows( iRow, 6 ), tRows( iRow, 7 ) };
                     tIdsPerVertex[ tKey ][ (moris_id)tRows( iRow, 0 ) ].insert( iRank );
                 }
             }
-            aNumKeys    = tIdsPerVertex.size();
-            aWithinRank = 0;
+            aNumKeys      = tIdsPerVertex.size();
+            aWithinRank   = 0;
             uint tSeveral = 0;
             for ( const std::pair< const Key, std::map< moris_id, std::set< uint > > >& iVertex : tIdsPerVertex )
             {
@@ -575,6 +574,56 @@ namespace moris::xtk
                             tStream << " " << iRank;
                         }
                         tStream << ")";
+                    }
+                    aExample = tStream.str();
+                }
+            }
+            return tSeveral;
+        }
+
+        // corners of IP cells held by several ranks (columns: cell id, x, y, z, T-matrix hash high, low): the enriched
+        // T-matrix at a given corner of a given cell must be the same on every rank, since its basis ids are the rows and
+        // columns the cell assembles into. Returns the number of (cell, corner) pairs with more than one T-matrix
+        inline uint
+        count_corners_with_several_t_matrices( const Vector< Matrix< DDRMat > >& aGathered, uint& aNumShared, std::string& aExample )
+        {
+            using Key = std::tuple< moris_id, std::int64_t, std::int64_t, std::int64_t >;
+            std::map< Key, std::map< std::pair< real, real >, std::set< uint > > > tTMatrices;
+            std::map< Key, std::set< uint > >                                      tRanks;
+            for ( uint iRank = 0; iRank < aGathered.size(); iRank++ )
+            {
+                const Matrix< DDRMat >& tRows = aGathered( iRank );
+                for ( uint iRow = 0; iRow < tRows.n_rows(); iRow++ )
+                {
+                    Key tKey = { (moris_id)tRows( iRow, 0 ), std::llround( tRows( iRow, 1 ) / gLocationTolerance ), std::llround( tRows( iRow, 2 ) / gLocationTolerance ), std::llround( tRows( iRow, 3 ) / gLocationTolerance ) };
+                    tTMatrices[ tKey ][ { tRows( iRow, 4 ), tRows( iRow, 5 ) } ].insert( iRank );
+                    tRanks[ tKey ].insert( iRank );
+                }
+            }
+            aNumShared    = 0;
+            uint tSeveral = 0;
+            for ( const std::pair< const Key, std::map< std::pair< real, real >, std::set< uint > > >& iCorner : tTMatrices )
+            {
+                aNumShared += tRanks[ iCorner.first ].size() > 1;
+                if ( iCorner.second.size() < 2 )
+                {
+                    continue;
+                }
+                tSeveral++;
+                if ( aExample.empty() )
+                {
+                    std::ostringstream tStream;
+                    tStream << "cell " << std::get< 0 >( iCorner.first ) << " corner (" << std::get< 1 >( iCorner.first ) * gLocationTolerance << ", "
+                            << std::get< 2 >( iCorner.first ) * gLocationTolerance << ", " << std::get< 3 >( iCorner.first ) * gLocationTolerance << ") has "
+                            << iCorner.second.size() << " different T-matrices on ranks";
+                    for ( const std::pair< const std::pair< real, real >, std::set< uint > >& iT : iCorner.second )
+                    {
+                        tStream << " {";
+                        for ( uint iRank : iT.second )
+                        {
+                            tStream << " " << iRank;
+                        }
+                        tStream << " }";
                     }
                     aExample = tStream.str();
                 }
@@ -631,6 +680,11 @@ namespace moris::xtk
             uint        mIpVerticesWithSeveralIds = 0, mIpVerticesWithSeveralIdsOnOneRank = 0, mDistinctIpVertices = 0;
             std::string mIpVertexIdExample;
 
+            // a corner of an IP cell (keyed by cell id = subphase id and location, so independent of vertex ids) whose
+            // enriched T-matrix (basis ids, owners, weights) differs between the ranks that hold the cell: finding 28
+            uint        mSharedCorners = 0, mCornerTMatrixMismatch = 0;
+            std::string mCornerTMatrixExample;
+
             // informational: aura copies of an IP cell whose vertex ids differ from the owner's (the aura copy keeps the
             // owner's pre-merge copy ids, which the owner's merge removed: finding 27), and vertices without a T-matrix
             uint        mIpCellIdMismatch = 0;
@@ -660,9 +714,10 @@ namespace moris::xtk
             Aura_Result tResult;
             uint        tRank = par_rank();
 
-            Vector< Vector< real > > tBgRows, tIgCellRows, tSubphaseRows, tVertexRows, tCellRows, tBasisRows;
+            Vector< Vector< real > >                         tBgRows, tIgCellRows, tSubphaseRows, tVertexRows, tCellRows, tBasisRows, tCornerRows;
+            std::map< moris_index, std::pair< real, real > > tTMatrixHashOfVertex;    // enriched IP vertex index -> T-matrix hash
             std::map< std::string, std::pair< uint, real > > tLocalSets;
-            bool tThrew = false;
+            bool                                             tThrew = false;
 
             // a rank that throws inside a collective call leaves the others waiting; the sweep then hangs (timeout)
             try
@@ -772,6 +827,7 @@ namespace moris::xtk
                         ( tOwned ? tResult.mEmptyOwnedVertices : tResult.mEmptyAuraVertices )++;
                         continue;
                     }
+                    tTMatrixHashOfVertex[ tVertex.get_index() ] = { tBasisHash.high(), tBasisHash.low() };
 
                     // id | owner, x, y, z, #basis, (basis id, basis owner, weight)
                     tVertexRows.push_back( { (real)tVertex.get_id(), (real)tVertex.get_owner(), tCoords( 0 ), tCoords( 1 ), tCoords( 2 ),
@@ -797,6 +853,13 @@ namespace moris::xtk
                         tLocations.push_back( { std::llround( tX( 0 ) / gLocationTolerance ), std::llround( tX( 1 ) / gLocationTolerance ),
                                 std::llround( tX( 2 ) / gLocationTolerance ) } );
                         tIds.push_back( iVertex->get_id() );
+
+                        // the enriched T-matrix at this corner of this IP cell (cell id = subphase id, rank independent)
+                        std::map< moris_index, std::pair< real, real > >::const_iterator tHash = tTMatrixHashOfVertex.find( iVertex->get_index() );
+                        if ( tHash != tTMatrixHashOfVertex.end() )
+                        {
+                            tCornerRows.push_back( { (real)tCell.get_id(), tX( 0 ), tX( 1 ), tX( 2 ), tHash->second.first, tHash->second.second } );
+                        }
                     }
                     std::sort( tLocations.begin(), tLocations.end() );
                     std::sort( tIds.begin(), tIds.end() );
@@ -906,6 +969,7 @@ namespace moris::xtk
             Vector< Matrix< DDRMat > > tSps      = gather_rows( tSubphaseRows, 2 );
             Vector< Matrix< DDRMat > > tVertices = gather_rows( tVertexRows, 9 );
             Vector< Matrix< DDRMat > > tCells    = gather_rows( tCellRows, 7 );
+            Vector< Matrix< DDRMat > > tCorners  = gather_rows( tCornerRows, 6 );
             Vector< Matrix< DDRMat > > tBasis    = gather_rows( tBasisRows, 1 );
 
             // set names may differ between ranks (a rank without a cut has no interface set): gather names + values
@@ -932,6 +996,8 @@ namespace moris::xtk
                 tResult.mIpCellMismatch   = count_disagreeing_copies( tCells, 1, 3, tResult.mIpCellExample, tResult.mSharedIpCells );
                 uint tSharedForIds        = 0;
                 tResult.mIpCellIdMismatch = count_disagreeing_copies( tCells, 4, 5, tResult.mIpCellIdExample, tSharedForIds );
+                tResult.mCornerTMatrixMismatch =
+                        count_corners_with_several_t_matrices( tCorners, tResult.mSharedCorners, tResult.mCornerTMatrixExample );
 
                 tResult.mDuplicateIgCellIds   = count_duplicate_owned_ids( tIgCells, tResult.mOwnedIgCells, tResult.mInvalidIgCellIds );
                 tResult.mDuplicateSubphaseIds = count_duplicate_owned_ids( tSps, tResult.mOwnedSubphases, tResult.mInvalidSubphaseIds );
