@@ -76,130 +76,6 @@ namespace moris::xtk::connectivity_check
 
     // ----------------------------------------------------------------------------------
 
-    Matrix< IndexMat >
-    graph_matrix( const Graph& aGraph, uint aNumColumns )
-    {
-        Matrix< IndexMat > tMatrix( aGraph.size(), aNumColumns, MORIS_INDEX_MAX );
-        for ( uint iNode = 0; iNode < aGraph.size(); iNode++ )
-        {
-            MORIS_ERROR( aGraph[ iNode ].size() <= aNumColumns, "graph_matrix() - row longer than the number of columns" );
-            for ( uint iNeighbor = 0; iNeighbor < aGraph[ iNode ].size(); iNeighbor++ )
-            {
-                tMatrix( iNode, iNeighbor ) = aGraph[ iNode ][ iNeighbor ];
-            }
-        }
-        return tMatrix;
-    }
-
-    // ----------------------------------------------------------------------------------
-
-    void
-    write_front( std::vector< moris_index >& aFront, uint aPosition, moris_index aValue, Replica_Result& aResult )
-    {
-        if ( aPosition >= aFront.size() )
-        {
-            aFront.resize( 2 * aPosition + 2, MORIS_INDEX_MAX );
-        }
-        aFront[ aPosition ] = aValue;
-        aResult.mPeakFront  = std::max( aResult.mPeakFront, aPosition + 1 );
-        aResult.mOverflow   = aResult.mOverflow or aPosition >= aResult.mFrontSize;
-    }
-
-    // ----------------------------------------------------------------------------------
-
-    Replica_Result
-    flood_fill_replica( const Matrix< IndexMat >& aGraph, const Vector< moris_index >& aPhases )
-    {
-        const moris_index tDummy        = MORIS_INDEX_MAX;
-        uint              tNumElements  = aGraph.n_rows();
-        uint              tMaxNeighbors = aGraph.n_cols();
-
-        Replica_Result tResult;
-        tResult.mFrontSize = 10 * tNumElements + 1;
-        tResult.mLabels    = Vector< moris_index >( tNumElements, tDummy );
-
-        std::vector< bool >        tSet( tNumElements, false );
-        std::vector< moris_index > tFront( tResult.mFrontSize, 0 );
-        uint                       tCount   = 0;
-        moris_index                tCurrent = 0;
-
-        for ( uint iE = 0; iE < tNumElements; iE++ )
-        {
-            if ( tSet[ iE ] )
-            {
-                continue;
-            }
-            moris_index tPhase    = aPhases( iE );
-            tResult.mLabels( iE ) = tCurrent;
-            tSet[ iE ]            = true;
-
-            for ( uint iN = 0; iN < tMaxNeighbors; iN++ )
-            {
-                moris_index tNeighbor = aGraph( iE, iN );
-                if ( tNeighbor == tDummy )
-                {
-                    break;
-                }
-                if ( not tSet[ tNeighbor ] and aPhases( tNeighbor ) == tPhase )
-                {
-                    write_front( tFront, tCount, tNeighbor, tResult );
-                    tCount++;
-                }
-            }
-
-            while ( tCount != 0 )
-            {
-                moris_index tTop = tFront[ tCount - 1 ];
-                if ( aPhases( tTop ) == tPhase and not tSet[ tTop ] )
-                {
-                    tResult.mLabels( tTop ) = tCurrent;
-                    tSet[ tTop ]            = true;
-
-                    bool tReplaced = false;
-                    for ( uint iN = 0; iN < tMaxNeighbors; iN++ )
-                    {
-                        moris_index tNeighbor = aGraph( tTop, iN );
-                        if ( tNeighbor == tDummy )
-                        {
-                            if ( not tReplaced )
-                            {
-                                tCount--;
-                            }
-                            break;
-                        }
-                        if ( not tSet[ tNeighbor ] )
-                        {
-                            if ( not tReplaced )
-                            {
-                                tFront[ tCount - 1 ] = tNeighbor;
-                                tReplaced            = true;
-                            }
-                            else
-                            {
-                                write_front( tFront, tCount, tNeighbor, tResult );
-                                tCount++;
-                            }
-                        }
-                        if ( iN == tMaxNeighbors - 1 and not tReplaced )
-                        {
-                            tFront[ tCount - 1 ] = tDummy;
-                            tCount--;
-                        }
-                    }
-                }
-                else
-                {
-                    tFront[ tCount - 1 ] = tDummy;
-                    tCount--;
-                }
-            }
-            tCurrent++;
-        }
-        return tResult;
-    }
-
-    // ----------------------------------------------------------------------------------
-
     uint
     max_degree( const Graph& aGraph )
     {
@@ -1094,8 +970,8 @@ namespace moris::xtk::connectivity_check
                 mCounts.note( "basis " + std::to_string( iBasis ) + ": a connected component is split over two levels" );
             }
 
-            // the pruned graph XTK flood-fills (Enrichment::generate_pruned_subphase_graph_in_basis_support):
-            // its widest row against the 50 allocated columns, and the replica's peak front against 10 N + 1
+            // the pruned graph XTK flood-fills (Enrichment::generate_pruned_subphase_graph_in_basis_support): its widest
+            // row against the 50 columns allocated there
             Graph tPruned( tNum );
             for ( uint iLocal = 0; iLocal < tNum; iLocal++ )
             {
@@ -1110,14 +986,8 @@ namespace moris::xtk::connectivity_check
             }
             uint tDegree           = max_degree( tPruned );
             mCounts.mMaxGraphDegree = std::max( mCounts.mMaxGraphDegree, tDegree );
-            if ( tNum > 0 )
-            {
-                Replica_Result tReplica = flood_fill_replica( graph_matrix( tPruned, std::max( 50u, tDegree ) ), Vector< moris_index >( tNum, 1 ) );
-                mCounts.mFrontOverflow += tReplica.mOverflow;
-                mCounts.mMaxFrontRatio = std::max( mCounts.mMaxFrontRatio, real( tReplica.mPeakFront ) / tReplica.mFrontSize );
-            }
 
-            // E3: every enriched basis needs integration volume on some subphase of its level
+            // every enriched basis needs integration volume on some subphase of its level
             std::map< moris_index, real > tLevelVolume;
             for ( uint iLocal = 0; iLocal < tNum; iLocal++ )
             {
@@ -1336,8 +1206,7 @@ namespace moris::xtk::connectivity_check
                 << mCrossTalk << ", split components " << mSplitComponents << ", level count mismatches " << mLevelCountMismatch << ", missing "
                 << mMissingBasis << ", enriched total mismatch " << mEnrichedTotalMismatch << "\n"
                 << "                 zero-volume bases " << mZeroRowBases << ", below 1e-12 of a cell " << mTinyRowBases << ", max subphases per support "
-                << mMaxSupportSubphases << ", max graph degree " << mMaxGraphDegree << ", flood-fill front overflows " << mFrontOverflow
-                << " (max front ratio " << mMaxFrontRatio << ")\n";
+                << mMaxSupportSubphases << ", max graph degree " << mMaxGraphDegree << " (of the 50 columns XTK allocates)\n";
         tStream << "  bodies:        phases with a body-count mismatch " << mBodyMismatch << " (one rank only)\n";
         tStream << "  ghost:         facets " << mGhostPairs << ", without contact " << mGhostWithoutContact << "\n";
         tStream << "  result:        " << this->sparse_report();

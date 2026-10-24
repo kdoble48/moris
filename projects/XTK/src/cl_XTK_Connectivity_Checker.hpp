@@ -142,26 +142,6 @@ namespace moris::xtk::connectivity_check
 
     using Graph = std::vector< std::vector< moris_index > >;
 
-    // neighbour matrix as the enrichment builds it: one row per node, unused columns hold the dummy MORIS_INDEX_MAX
-    Matrix< IndexMat >
-    graph_matrix( const Graph& aGraph, uint aNumColumns );
-
-    struct Replica_Result
-    {
-        Vector< moris_index > mLabels;
-        uint                  mFrontSize = 0;        // the allocation of flood_fill: 10 N + 1
-        uint                  mPeakFront = 0;        // largest position written + 1
-        bool                  mOverflow  = false;    // a write at or past mFrontSize
-    };
-
-    void
-    write_front( std::vector< moris_index >& aFront, uint aPosition, moris_index aValue, Replica_Result& aResult );
-
-    // a statement-by-statement copy of flood_fill (fn_mesh_flood_fill.hpp:38-257, aIncludeAllElements = true, every
-    // element included) whose active front grows instead of overflowing, so the peak front can be measured
-    Replica_Result
-    flood_fill_replica( const Matrix< IndexMat >& aGraph, const Vector< moris_index >& aPhases );
-
     uint
     max_degree( const Graph& aGraph );
 
@@ -277,8 +257,6 @@ namespace moris::xtk::connectivity_check
         uint mTinyRowBases         = 0;    // ... below 1e-12 of a background cell
         uint mMaxSupportSubphases  = 0;
         uint mMaxGraphDegree       = 0;    // widest row of the pruned subphase graph (50 columns allocated in Enrichment::generate_pruned_subphase_graph_in_basis_support)
-        uint mFrontOverflow        = 0;    // pruned graphs whose flood-fill front would exceed 10 N + 1
-        real mMaxFrontRatio        = 0.0;
 
         // bodies per phase, on this rank (only meaningful on one rank)
         uint mBodyMismatch = 0;    // phases whose XTK body count differs from the reference
@@ -352,8 +330,6 @@ namespace moris::xtk::connectivity_check
             mTinyRowBases += aOther.mTinyRowBases;
             mMaxSupportSubphases = std::max( mMaxSupportSubphases, aOther.mMaxSupportSubphases );
             mMaxGraphDegree      = std::max( mMaxGraphDegree, aOther.mMaxGraphDegree );
-            mFrontOverflow += aOther.mFrontOverflow;
-            mMaxFrontRatio = std::max( mMaxFrontRatio, aOther.mMaxFrontRatio );
             mBodyMismatch += aOther.mBodyMismatch;
             mGhostPairs += aOther.mGhostPairs;
             mGhostWithoutContact += aOther.mGhostWithoutContact;
@@ -375,7 +351,7 @@ namespace moris::xtk::connectivity_check
                 &mLinks, &mReferenceLinks, &mMissingLinks, &mExtraLinks, &mExtraNoContact, &mExtraTransition, &mMarginalLinks, &mSelfLinks,
                 &mDuplicateLinks, &mAsymmetricLinks, &mCrossPhaseLinks, &mSameCellLinks, &mNonAdjacentCells, &mBadSideOrdinals,
                 &mNonconformingFaces, &mDuplicateVertexTriangles, &mTransitionFaces, &mBases, &mEnrichedBases, &mReferenceComponents, &mCrossTalk, &mSplitComponents,
-                &mLevelCountMismatch, &mMissingBasis, &mEnrichedTotalMismatch, &mZeroRowBases, &mTinyRowBases, &mFrontOverflow, &mBodyMismatch,
+                &mLevelCountMismatch, &mMissingBasis, &mEnrichedTotalMismatch, &mZeroRowBases, &mTinyRowBases, &mBodyMismatch,
                 &mGhostPairs, &mGhostWithoutContact };
             for ( uint* iValue : tSums )
             {
@@ -384,7 +360,6 @@ namespace moris::xtk::connectivity_check
             mMaxVolumeError      = max_all( mMaxVolumeError );
             mMaxSupportSubphases = max_all( mMaxSupportSubphases );
             mMaxGraphDegree      = max_all( mMaxGraphDegree );
-            mMaxFrontRatio       = max_all( mMaxFrontRatio );
         }
     };
 

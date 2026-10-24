@@ -7,7 +7,7 @@
  * cl_XTK_Connectivity_Test_Harness.hpp
  *
  * The reference machinery of the XTK connectivity tests (UT_XTK_Connectivity_Pathologies.cpp,
- * UT_XTK_Flood_Fill_Pathologies.cpp): union-find and partition comparison, a replica of the generic flood fill,
+ * UT_XTK_Flood_Fill_Pathologies.cpp): a call wrapper and test graphs for the generic flood fill,
  * test graphs, geometries, the reference checker of the three connectivity layers, the case runner and the sweep
  * bookkeeping. Header-only: free functions and mutable globals are inline.
  *
@@ -90,6 +90,22 @@ namespace moris::xtk
             return tUnionFind.labels();
         }
 
+        // neighbour matrix as the enrichment builds it: one row per node, unused columns hold the dummy MORIS_INDEX_MAX
+        inline Matrix< IndexMat >
+        graph_matrix( const Graph& aGraph, uint aNumColumns )
+        {
+            Matrix< IndexMat > tMatrix( aGraph.size(), aNumColumns, MORIS_INDEX_MAX );
+            for ( uint iNode = 0; iNode < aGraph.size(); iNode++ )
+            {
+                MORIS_ERROR( aGraph[ iNode ].size() <= aNumColumns, "graph_matrix() - row longer than the number of columns" );
+                for ( uint iNeighbor = 0; iNeighbor < aGraph[ iNode ].size(); iNeighbor++ )
+                {
+                    tMatrix( iNode, iNeighbor ) = aGraph[ iNode ][ iNeighbor ];
+                }
+            }
+            return tMatrix;
+        }
+
         // the real flood_fill, called as Enrichment::assign_subphase_bin_enrichment_levels_in_basis_support does
         inline Vector< moris_index >
         real_flood_fill( const Matrix< IndexMat >& aGraph, const Vector< moris_index >& aPhases, moris_index& aMaxValueAssigned )
@@ -154,40 +170,36 @@ namespace moris::xtk
             return tGraph;
         }
 
-        inline bool
-        same_labels( const Vector< moris_index >& aFirst, const Vector< moris_index >& aSecond )
-        {
-            return aFirst.size() == aSecond.size() and std::equal( aFirst.begin(), aFirst.end(), aSecond.begin() );
-        }
-
         struct Fuzz_Outcome
         {
-            uint mGraphs       = 0;
-            uint mRun          = 0;    // real flood_fill called
-            uint mSkipped      = 0;    // replica predicts a front overflow: the real call would write out of bounds
-            uint mReplicaWrong = 0;    // replica labels differ from flood_fill (the replica is then not faithful)
-            uint mWrong        = 0;    // flood_fill partition differs from the union-find reference
-            uint mBadMax       = 0;    // aMaxValueAssigned is not the number of components - 1
+            uint mGraphs  = 0;
+            uint mRun     = 0;    // real flood_fill called
+            uint mSkipped = 0;    // more row entries than the 10 N + 1 front holds: the real call could write out of bounds
+            uint mWrong   = 0;    // flood_fill partition differs from the union-find reference
+            uint mBadMax  = 0;    // aMaxValueAssigned is not the number of components - 1
         };
 
-        // runs one graph through the replica, and through flood_fill if that is safe; checks against union-find
+        // runs one graph through flood_fill if that is safe and checks it against union-find. flood_fill scans each node's
+        // row once and adds at most one front slot per row entry, so its front never exceeds the number of row entries;
+        // up to 10 N entries fit its 10 N + 1 allocation (fn_mesh_flood_fill.hpp:80)
         inline void
         fuzz_one( const Graph& aGraph, const Vector< moris_index >& aPhases, uint aNumColumns, Fuzz_Outcome& aOutcome )
         {
             aOutcome.mGraphs++;
-            Matrix< IndexMat >    tMatrix    = graph_matrix( aGraph, aNumColumns );
-            Replica_Result        tReplica   = flood_fill_replica( tMatrix, aPhases );
-            Vector< moris_index > tReference = reference_flood_fill( aGraph, aPhases );
-            if ( tReplica.mOverflow )
+            uint tRowEntries = 0;
+            for ( const std::vector< moris_index >& iRow : aGraph )
+            {
+                tRowEntries += iRow.size();
+            }
+            if ( tRowEntries > 10 * aGraph.size() )
             {
                 aOutcome.mSkipped++;
-                aOutcome.mWrong += not compare_partitions( tReference, tReplica.mLabels ).equal();
                 return;
             }
-            moris_index           tMax    = -1;
-            Vector< moris_index > tLabels = real_flood_fill( tMatrix, aPhases, tMax );
+            Vector< moris_index > tReference = reference_flood_fill( aGraph, aPhases );
+            moris_index           tMax       = -1;
+            Vector< moris_index > tLabels    = real_flood_fill( graph_matrix( aGraph, aNumColumns ), aPhases, tMax );
             aOutcome.mRun++;
-            aOutcome.mReplicaWrong += not same_labels( tLabels, tReplica.mLabels );
             aOutcome.mWrong += not compare_partitions( tReference, tLabels ).equal();
             aOutcome.mBadMax += tMax + 1 != (moris_index)count_distinct( tReference );
         }
@@ -875,9 +887,8 @@ namespace moris::xtk
                       << "  layer 3: bases " << tC.mBases << ", enriched bases " << tC.mEnrichedBases << ", reference components " << tC.mReferenceComponents
                       << ", cross-talk " << tC.mCrossTalk << ", split " << tC.mSplitComponents << ", level count mismatch " << tC.mLevelCountMismatch
                       << ", missing basis " << tC.mMissingBasis << ", total mismatch " << tC.mEnrichedTotalMismatch << "\n"
-                      << "           zero-volume enriched bases (E3) " << tC.mZeroRowBases << ", below 1e-12 " << tC.mTinyRowBases << ", max subphases in a support "
-                      << tC.mMaxSupportSubphases << ", max pruned-graph degree " << tC.mMaxGraphDegree << " (of 50), front overflow " << tC.mFrontOverflow
-                      << ", max front / (10N+1) " << tC.mMaxFrontRatio << "\n"
+                      << "           zero-volume enriched bases " << tC.mZeroRowBases << ", below 1e-12 " << tC.mTinyRowBases << ", max subphases in a support "
+                      << tC.mMaxSupportSubphases << ", max pruned-graph degree " << tC.mMaxGraphDegree << " (of 50)\n"
                       << "  bodies: cases with XTK body count != reference " << aTotals.mBodyCases << " | ghost pairs " << tC.mGhostPairs << ", without contact "
                       << tC.mGhostWithoutContact << "\n";
             if ( not aTotals.mFirstFailingCase.empty() )
@@ -911,8 +922,8 @@ namespace moris::xtk
                         sStream << "num_ranks,sweep,regime,case,threw,guard,decomposed,failures,cut_cells,subphases,sp_mismatch,coverage,mixed_phase_sp,volume_mismatch,"
                                    "links,reference_links,missing_links,extra_links,extra_no_contact,extra_transition,marginal_links,self,duplicate,asymmetric,"
                                    "cross_phase,same_cell,non_adjacent,bad_ordinals,nonconforming,transition_faces,bases,enriched_bases,reference_components,"
-                                   "cross_talk,split,level_count_mismatch,missing_basis,total_mismatch,zero_row,tiny_row,max_support_sp,max_degree,front_overflow,"
-                                   "max_front_ratio,body_mismatch,ref_bodies,xtk_bodies,ghost_pairs,ghost_without_contact,owned_sp,dup_owned_sp,sp_copy_mismatch,"
+                                   "cross_talk,split,level_count_mismatch,missing_basis,total_mismatch,zero_row,tiny_row,max_support_sp,max_degree,"
+                                   "body_mismatch,ref_bodies,xtk_bodies,ghost_pairs,ghost_without_contact,owned_sp,dup_owned_sp,sp_copy_mismatch,"
                                    "sp_hash,sp_id_hash,bg_id_hash,edges,edge_hash,owned_bases,dup_owned_bases,basis_hash,enriched_id_mismatch,cluster_without_owner,"
                                    "first_failure,message\n";
                     }
@@ -990,7 +1001,7 @@ namespace moris::xtk
                          << tC.mNonconformingFaces << "," << tC.mTransitionFaces << "," << tC.mBases << "," << tC.mEnrichedBases << "," << tC.mReferenceComponents
                          << "," << tC.mCrossTalk << "," << tC.mSplitComponents << "," << tC.mLevelCountMismatch << "," << tC.mMissingBasis << ","
                          << tC.mEnrichedTotalMismatch << "," << tC.mZeroRowBases << "," << tC.mTinyRowBases << "," << tC.mMaxSupportSubphases << ","
-                         << tC.mMaxGraphDegree << "," << tC.mFrontOverflow << "," << tC.mMaxFrontRatio << "," << tC.mBodyMismatch << ","
+                         << tC.mMaxGraphDegree << "," << tC.mBodyMismatch << ","
                          << bodies_string( aOutcome.mReferenceBodies ) << "," << bodies_string( aOutcome.mXtkBodies ) << "," << tC.mGhostPairs << ","
                          << tC.mGhostWithoutContact << "," << tP.mOwnedSubphases << "," << tP.mDuplicateOwned << "," << tP.mSubphaseCopyMismatch << ","
                          << key_string( tP.mSubphaseHash ) << "," << key_string( tP.mSubphaseIdHash ) << "," << key_string( tP.mBgIdHash ) << "," << tP.mEdges << "," << key_string( tP.mEdgeHash )

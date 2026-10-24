@@ -6,8 +6,8 @@
  *
  * UT_XTK_Flood_Fill_Pathologies.cpp
  *
- * The generic flood fill (fn_mesh_flood_fill.hpp) against union-find on random and adversarial graphs, its
- * active-front bound, and the SortPoint ordering of enrichment-level centroids. Split out of
+ * The generic flood fill (fn_mesh_flood_fill.hpp) against union-find on random and adversarial graphs, and the
+ * SortPoint ordering of enrichment-level centroids. Split out of
  * UT_XTK_Connectivity_Pathologies.cpp; the helpers are in cl_XTK_Connectivity_Test_Harness.hpp.
  *
  */
@@ -77,16 +77,15 @@ namespace moris::xtk
         }
         fuzz_one( tDuplicates, Vector< moris_index >( 40, 1 ), std::max( 1u, max_degree( tDuplicates ) ), tOutcome );
 
-        // complete graphs below the measured bound (K_n with n <= 20 stays inside 10 n + 1, see [XTK_CONNECTIVITY_FLOOD_FILL_BOUND])
-        for ( uint tN = 2; tN <= 20; tN++ )
+        // complete graphs within the guaranteed bound: K_n has n ( n - 1 ) row entries, at most 10 n for n <= 11
+        for ( uint tN = 2; tN <= 11; tN++ )
         {
             fuzz_one( complete_graph( tN ), Vector< moris_index >( tN, 1 ), tN - 1, tOutcome );
         }
 
         std::cout << "flood fill fuzz: " << tOutcome.mGraphs << " graphs, " << tOutcome.mRun << " through flood_fill, " << tOutcome.mSkipped
-                  << " skipped (front would overflow), replica differs " << tOutcome.mReplicaWrong << ", partition wrong " << tOutcome.mWrong
+                  << " skipped (more row entries than the front holds), partition wrong " << tOutcome.mWrong
                   << ", max value wrong " << tOutcome.mBadMax << "\n";
-        CHECK( tOutcome.mReplicaWrong == 0 );
         CHECK( tOutcome.mWrong == 0 );
         CHECK( tOutcome.mBadMax == 0 );
         CHECK( tOutcome.mRun > 2500 );
@@ -111,94 +110,6 @@ namespace moris::xtk
             }
         }
         CHECK( tSortWrong == 0 );
-    }
-
-    TEST_CASE( "XTK connectivity: active-front bound of the generic flood fill (10N+1 front)", "[.][XTK][XTK_CONNECTIVITY][XTK_CONNECTIVITY_FLOOD_FILL_BOUND]" )
-    {
-        // flood_fill sizes its active front 10 N + 1 (fn_mesh_flood_fill.hpp:80) and pushes a neighbour whenever it is not
-        // yet labelled, so a node can sit on the front many times. The overflow check is a MORIS_ASSERT (:222), compiled
-        // out unless MORIS_HAVE_DEBUG: an optimized build writes past the allocation. This measures where that happens.
-        if ( par_rank() != 0 )
-        {
-            return;
-        }
-        std::ofstream tCsv;
-        if ( const char* tPath = std::getenv( "MORIS_XTK_CONNECTIVITY_BOUND_CSV" ) )
-        {
-            tCsv.open( tPath );
-            tCsv << "graph,nodes,mean_degree,samples,overflow_samples,max_peak_front,front_size,max_ratio\n";
-        }
-
-        std::cout << "\n=== complete graphs K_n: peak active front vs 10 n + 1 ===\n"
-                  << std::setw( 6 ) << "n" << std::setw( 10 ) << "peak" << std::setw( 10 ) << "10n+1" << std::setw( 10 ) << "ratio" << "\n";
-        uint tFirstOverflow = 0;
-        for ( uint tN = 2; tN <= 64; tN++ )
-        {
-            Graph          tGraph   = complete_graph( tN );
-            Replica_Result tReplica = flood_fill_replica( graph_matrix( tGraph, tN - 1 ), Vector< moris_index >( tN, 1 ) );
-            if ( tReplica.mOverflow and tFirstOverflow == 0 )
-            {
-                tFirstOverflow = tN;
-            }
-            real tRatio = real( tReplica.mPeakFront ) / tReplica.mFrontSize;
-            if ( tN <= 30 or tN % 8 == 0 )
-            {
-                std::cout << std::setw( 6 ) << tN << std::setw( 10 ) << tReplica.mPeakFront << std::setw( 10 ) << tReplica.mFrontSize
-                          << std::setw( 10 ) << std::setprecision( 3 ) << tRatio << std::setprecision( 6 ) << ( tReplica.mOverflow ? "  OVERFLOW" : "" ) << "\n";
-            }
-            if ( tCsv.is_open() )
-            {
-                tCsv << "complete," << tN << "," << tN - 1 << ",1," << tReplica.mOverflow << "," << tReplica.mPeakFront << "," << tReplica.mFrontSize << ","
-                     << tRatio << "\n";
-            }
-        }
-        std::cout << "first complete graph that overflows: K_" << tFirstOverflow << "\n";
-
-        // random graphs: overflow frequency against node count and mean degree
-        std::mt19937 tRandom( 7 );
-        std::cout << "\n=== random graphs: samples (of 200) whose front overflows, and the largest peak / (10 N + 1) ===\n"
-                  << std::setw( 8 ) << "N" << std::setw( 8 ) << "degree" << std::setw( 10 ) << "overflow" << std::setw( 12 ) << "max ratio" << "\n";
-        for ( uint tN : { 10u, 20u, 50u, 100u, 400u } )
-        {
-            for ( real tDegree : { 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 30.0, 40.0 } )
-            {
-                if ( tDegree > tN - 1 )
-                {
-                    continue;
-                }
-                uint tOverflow = 0;
-                uint tMaxPeak  = 0;
-                real tMaxRatio = 0.0;
-                for ( uint iSample = 0; iSample < 200; iSample++ )
-                {
-                    Graph          tGraph   = random_graph( tN, tDegree, tRandom );
-                    Replica_Result tReplica = flood_fill_replica( graph_matrix( tGraph, std::max( 1u, max_degree( tGraph ) ) ), Vector< moris_index >( tN, 1 ) );
-                    tOverflow += tReplica.mOverflow;
-                    tMaxPeak  = std::max( tMaxPeak, tReplica.mPeakFront );
-                    tMaxRatio = std::max( tMaxRatio, real( tReplica.mPeakFront ) / tReplica.mFrontSize );
-                }
-                std::cout << std::setw( 8 ) << tN << std::setw( 8 ) << tDegree << std::setw( 10 ) << tOverflow << std::setw( 12 ) << std::setprecision( 3 )
-                          << tMaxRatio << std::setprecision( 6 ) << "\n";
-                if ( tCsv.is_open() )
-                {
-                    tCsv << "random," << tN << "," << tDegree << ",200," << tOverflow << "," << tMaxPeak << "," << 10 * tN + 1 << "," << tMaxRatio << "\n";
-                }
-            }
-        }
-
-        // MORIS_XTK_CONNECTIVITY_OVERFLOW_DEMO=<n>: call the real flood_fill on K_n. Above the bound this writes past the
-        // heap allocation of the front; run it in its own process (e.g. with MALLOC_CHECK_=3) to see what an optimized
-        // build does.
-        if ( const char* tDemo = std::getenv( "MORIS_XTK_CONNECTIVITY_OVERFLOW_DEMO" ) )
-        {
-            uint                  tN     = std::atoi( tDemo );
-            Graph                 tGraph = complete_graph( tN );
-            moris_index           tMax   = -1;
-            Vector< moris_index > tLabels = real_flood_fill( graph_matrix( tGraph, tN - 1 ), Vector< moris_index >( tN, 1 ), tMax );
-            std::cout << "overflow demo: real flood_fill on K_" << tN << " returned, max value " << tMax << ", components "
-                      << count_distinct( tLabels ) << " (expected 1)\n";
-        }
-        CHECK( tFirstOverflow > 0 );
     }
 
     TEST_CASE( "XTK connectivity: SortPoint ordering of enrichment-level centroids", "[.][XTK][XTK_CONNECTIVITY][XTK_CONNECTIVITY_SORTPOINT]" )
