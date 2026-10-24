@@ -81,9 +81,7 @@ namespace moris::xtk
                     const std::string&           aLagrangeToBspline = "0",
                     uint                         aRefineFirstPattern = 0 )
             {
-                this->build( aElements, aDimensions, aBsplineOrders, aBsplinePatterns, aLagrangeToBspline, aRefineFirstPattern,
-                        [ aRefineAboveX ]( const Matrix< DDRMat >& aCentre, uint ) { return aCentre( 0 ) > aRefineAboveX; },
-                        aRefineAboveX < MORIS_REAL_MAX ? 1 : 0 );
+                this->build( aElements, aDimensions, aBsplineOrders, aBsplinePatterns, aLagrangeToBspline, aRefineFirstPattern, [ aRefineAboveX ]( const Matrix< DDRMat >& aCentre, uint ) { return aCentre( 0 ) > aRefineAboveX; }, aRefineAboveX < MORIS_REAL_MAX ? 1 : 0 );
             }
 
             // aRefine( centre, pass ): background cells whose centre satisfies it are refined one level, in aNumPasses passes
