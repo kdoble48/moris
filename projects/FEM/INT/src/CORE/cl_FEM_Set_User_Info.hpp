@@ -11,10 +11,12 @@
 #ifndef SRC_FEM_CL_FEM_SET_USER_INFO_HPP_
 #define SRC_FEM_CL_FEM_SET_USER_INFO_HPP_
 
+#include <algorithm>
 #include <utility>
 
 #include "moris_typedefs.hpp"    //MRS/COR/src
 #include "cl_Vector.hpp"         //MRS/CNT/src
+#include "cl_Logger.hpp"         //MRS/IOS/src
 #include "cl_FEM_Enums.hpp"      //FEM/MSI/src
 #include "cl_FEM_IWG.hpp"        //FEM/MSI/src
 #include "cl_FEM_IQI.hpp"        //FEM/MSI/src
@@ -422,6 +424,14 @@ namespace moris::fem
          */
         void add_IWG( const std::shared_ptr< fem::IWG > &aIWG )
         {
+            // an IWG added twice to a set is assembled twice, e.g. when a set name is repeated in its mesh_set_names
+            if ( std::find( mIWGs.begin(), mIWGs.end(), aIWG ) != mIWGs.end() )
+            {
+                MORIS_LOG_WARNING( "IWG %s is defined more than once on mesh set %s and will be assembled once per definition; check its mesh_set_names.",
+                        aIWG->get_name().c_str(),
+                        mMeshSetName.c_str() );
+            }
+
             mIWGs.push_back( aIWG );
         }
 
@@ -452,6 +462,14 @@ namespace moris::fem
          */
         void add_IQI( const std::shared_ptr< fem::IQI > &aIQI )
         {
+            // an IQI added twice to a set is evaluated twice, e.g. when a set name is repeated in its mesh_set_names
+            if ( std::find( mIQIs.begin(), mIQIs.end(), aIQI ) != mIQIs.end() )
+            {
+                MORIS_LOG_WARNING( "IQI %s is defined more than once on mesh set %s and will be evaluated once per definition; check its mesh_set_names.",
+                        aIQI->get_name().c_str(),
+                        mMeshSetName.c_str() );
+            }
+
             mIQIs.push_back( aIQI );
         }
 
