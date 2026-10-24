@@ -518,6 +518,70 @@ namespace moris::xtk
             return tBad.size();
         }
 
+        // the converse of count_disagreeing_copies for enriched IP vertices: one vertex, identified by its location and
+        // its enriched T-matrix (columns 2-4 and 6-7 of the vertex rows), must carry one id on every rank that holds it.
+        // Ids are assigned per unzipped copy before merge_duplicate_interpolation_vertices, and each rank keeps its own
+        // first local copy (finding 27 in studies/xtk_holistic_review/findings/15_walkthrough_stops_2_3.md §8.7).
+        // Returns the number of vertices with more than one id; aWithinRank counts those where one rank holds two of them
+        inline uint
+        count_vertices_with_several_ids( const Vector< Matrix< DDRMat > >& aGathered, uint& aWithinRank, uint& aNumKeys, std::string& aExample )
+        {
+            using Key = std::tuple< std::int64_t, std::int64_t, std::int64_t, real, real >;
+            std::map< Key, std::map< moris_id, std::set< uint > > > tIdsPerVertex;
+            for ( uint iRank = 0; iRank < aGathered.size(); iRank++ )
+            {
+                for ( uint iRow = 0; iRow < aGathered( iRank ).n_rows(); iRow++ )
+                {
+                    const Matrix< DDRMat >& tRows = aGathered( iRank );
+                    Key tKey = { std::llround( tRows( iRow, 2 ) / gLocationTolerance ), std::llround( tRows( iRow, 3 ) / gLocationTolerance ),
+                        std::llround( tRows( iRow, 4 ) / gLocationTolerance ), tRows( iRow, 6 ), tRows( iRow, 7 ) };
+                    tIdsPerVertex[ tKey ][ (moris_id)tRows( iRow, 0 ) ].insert( iRank );
+                }
+            }
+            aNumKeys    = tIdsPerVertex.size();
+            aWithinRank = 0;
+            uint tSeveral = 0;
+            for ( const std::pair< const Key, std::map< moris_id, std::set< uint > > >& iVertex : tIdsPerVertex )
+            {
+                if ( iVertex.second.size() < 2 )
+                {
+                    continue;
+                }
+                tSeveral++;
+                std::map< uint, uint > tIdsOnRank;
+                for ( const std::pair< const moris_id, std::set< uint > >& iId : iVertex.second )
+                {
+                    for ( uint iRank : iId.second )
+                    {
+                        tIdsOnRank[ iRank ]++;
+                    }
+                }
+                bool tWithin = false;
+                for ( const std::pair< const uint, uint >& iRank : tIdsOnRank )
+                {
+                    tWithin = tWithin or iRank.second > 1;
+                }
+                aWithinRank += tWithin;
+                if ( aExample.empty() )
+                {
+                    std::ostringstream tStream;
+                    tStream << "vertex at (" << std::get< 0 >( iVertex.first ) * gLocationTolerance << ", " << std::get< 1 >( iVertex.first ) * gLocationTolerance
+                            << ", " << std::get< 2 >( iVertex.first ) * gLocationTolerance << ") has ids";
+                    for ( const std::pair< const moris_id, std::set< uint > >& iId : iVertex.second )
+                    {
+                        tStream << " " << iId.first << " (rank";
+                        for ( uint iRank : iId.second )
+                        {
+                            tStream << " " << iRank;
+                        }
+                        tStream << ")";
+                    }
+                    aExample = tStream.str();
+                }
+            }
+            return tSeveral;
+        }
+
         // ids that two different entities carry (column 0 = id, column 1 = 1 if owned): owned ids must be unique
         inline uint
         count_duplicate_owned_ids( const Vector< Matrix< DDRMat > >& aGathered, uint& aNumOwned, uint& aNumInvalid )
@@ -562,8 +626,13 @@ namespace moris::xtk
             uint        mSharedIpCells = 0, mIpCellMismatch = 0;
             std::string mBgCellExample, mIpVertexExample, mIpCellExample;
 
-            // informational: aura copies of an IP cell whose vertex ids differ from the owner's (rim vertices are local
-            // copies), and vertices without a T-matrix
+            // one enriched IP vertex (same location and T-matrix) carrying several ids (finding 27); of these, the ones
+            // where a single rank holds two of the ids (an unmerged duplicate) rather than two ranks disagreeing
+            uint        mIpVerticesWithSeveralIds = 0, mIpVerticesWithSeveralIdsOnOneRank = 0, mDistinctIpVertices = 0;
+            std::string mIpVertexIdExample;
+
+            // informational: aura copies of an IP cell whose vertex ids differ from the owner's (the aura copy keeps the
+            // owner's pre-merge copy ids, which the owner's merge removed: finding 27), and vertices without a T-matrix
             uint        mIpCellIdMismatch = 0;
             std::string mIpCellIdExample;
             uint        mEmptyOwnedVertices = 0, mEmptyAuraVertices = 0;
@@ -719,7 +788,7 @@ namespace moris::xtk
                 {
                     mtk::Cell& tCell = tEnrIpMesh.get_mtk_cell( iC );
 
-                    // vertex locations (must agree) and vertex ids (aura rim vertices are local copies: reported only)
+                    // vertex locations (must agree) and vertex ids (reported only: aura copies keep pre-merge ids, finding 27)
                     Vector< std::array< std::int64_t, 3 > > tLocations;
                     Vector< moris_id >                      tIds;
                     for ( mtk::Vertex* iVertex : tCell.get_vertex_pointers() )
@@ -858,6 +927,8 @@ namespace moris::xtk
             {
                 tResult.mBgCellMismatch   = count_disagreeing_copies( tBg, 1, 9, tResult.mBgCellExample, tResult.mSharedBgCells );
                 tResult.mIpVertexMismatch = count_disagreeing_copies( tVertices, 1, 7, tResult.mIpVertexExample, tResult.mSharedIpVertices );
+                tResult.mIpVerticesWithSeveralIds =
+                        count_vertices_with_several_ids( tVertices, tResult.mIpVerticesWithSeveralIdsOnOneRank, tResult.mDistinctIpVertices, tResult.mIpVertexIdExample );
                 tResult.mIpCellMismatch   = count_disagreeing_copies( tCells, 1, 3, tResult.mIpCellExample, tResult.mSharedIpCells );
                 uint tSharedForIds        = 0;
                 tResult.mIpCellIdMismatch = count_disagreeing_copies( tCells, 4, 5, tResult.mIpCellIdExample, tSharedForIds );

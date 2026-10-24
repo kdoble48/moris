@@ -203,7 +203,8 @@ namespace moris::xtk
                           << "  dup sp " << tResult.mDuplicateSubphaseIds << "+" << tResult.mInvalidSubphaseIds << "/" << tResult.mOwnedSubphases
                           << "  basis " << tResult.mNumEnrichedBasis << "  ipv " << tResult.mNumIpVertices << "  ipc " << tResult.mNumIpCells
                           << "  cluster vertices w/o T " << tResult.mClusterVerticesWithoutBasis << "  empty T owned/aura " << tResult.mEmptyOwnedVertices
-                          << "/" << tResult.mEmptyAuraVertices << "  ipc id diff " << tResult.mIpCellIdMismatch << "\n";
+                          << "/" << tResult.mEmptyAuraVertices << "  ipc id diff " << tResult.mIpCellIdMismatch
+                          << "  ipv with several ids " << tResult.mIpVerticesWithSeveralIds << "\n";
                 for ( const std::string& iExample : { tResult.mBgCellExample, tResult.mIpVertexExample, tResult.mIpCellExample } )
                 {
                     if ( not iExample.empty() )
@@ -250,6 +251,48 @@ namespace moris::xtk
             CHECK( tNumThrew == 0 );
             CHECK( tNumCopyMismatch == 0 );
             CHECK( tNumDuplicateIds == 0 );
+        }
+    }
+
+    TEST_CASE( "XTK pathology: a merged enriched IP vertex carries one id on every rank", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_IPV_IDS]" )
+    {
+        // Finding 27 (studies/xtk_holistic_review/findings/15_walkthrough_stops_2_3.md §8.7): enriched IP vertex ids are
+        // assigned per unzipped copy (one copy per subphase) before merge_duplicate_interpolation_vertices, and each rank
+        // keeps the id of its own first local copy. The owner and the other ranks can therefore keep different copies'
+        // ids for the same vertex. Checked here: every vertex, identified by its location and enriched T-matrix, has a
+        // single id across all ranks. Vertices without a T-matrix (aura) are skipped. Run on 2 ranks:
+        //   mpirun -n 2 XTK-test.exe "[XTK_PATHOLOGY_MPI_IPV_IDS]"
+        if ( par_size() < 2 )
+        {
+            WARN( "needs at least 2 ranks" );
+            return;
+        }
+
+        Grid_Mesh                tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 } );
+        mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
+
+        for ( const Parallel_Case& iCase : parallel_cases() )
+        {
+            // uncut, cut away from the processor face, cut on it
+            if ( iCase.mName != "x=3 (no cut, control)" and iCase.mName != "x=0.3 (away from the face)" and iCase.mName != "x=1 (processor face)" )
+            {
+                continue;
+            }
+            Aura_Result tResult = aura_case( tMesh, iCase.mPlanes, Regime::STORED );
+            if ( par_rank() != 0 )
+            {
+                continue;
+            }
+            std::cout << std::setw( 28 ) << iCase.mName << "  vertices " << tResult.mDistinctIpVertices << "  with several ids "
+                      << tResult.mIpVerticesWithSeveralIds << " (of which on one rank " << tResult.mIpVerticesWithSeveralIdsOnOneRank << ")"
+                      << "  same id, different vertex " << tResult.mIpVertexMismatch << "/" << tResult.mSharedIpVertices << "\n";
+            if ( not tResult.mIpVertexIdExample.empty() )
+            {
+                std::cout << "      first: " << tResult.mIpVertexIdExample << "\n";
+            }
+            CHECK( not tResult.mThrew );
+            CHECK( tResult.mIpVerticesWithSeveralIds == 0 );
+            CHECK( tResult.mIpVertexMismatch == 0 );
         }
     }
 
