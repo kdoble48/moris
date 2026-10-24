@@ -120,6 +120,9 @@ namespace moris::fem
             // multiplying aWStar by user defined thickness (2*pi*r for axisymmetric)
             aWStar *= ( tPropThickness != nullptr ) ? tPropThickness->val()( 0 ) : 1;
 
+            // derivative of the stress measure wrt the flux, shared by all dof types the CM depends on
+            Matrix< DDRMat > tdStressdFlux;
+
             // get the number of leader dof type dependencies
             uint tNumDofDependencies = mRequestedLeaderGlobalDofTypes.size();
 
@@ -148,9 +151,14 @@ namespace moris::fem
                 // if constitutive model has dependency on the dof type
                 if ( tCMElasticity->check_dof_dependency( tDofType ) )
                 {
-                    // derivative of the stress measure wrt the dofs: d s / d flux ( flux layout ) contracted with d flux / d dof
-                    Matrix< DDRMat > tDStressVal =
-                            trans( eval_dstress_measure_dflux( mStressType, tCMElasticity->flux() ) ) * tCMElasticity->dFluxdDOF( tDofType );
+                    // derivative of the stress measure wrt the flux ( flux layout ), evaluated once per point
+                    if ( tdStressdFlux.numel() == 0 )
+                    {
+                        tdStressdFlux = eval_dstress_measure_dflux( mStressType, tCMElasticity->flux() );
+                    }
+
+                    // derivative of the stress measure wrt the dofs: d s / d flux contracted with d flux / d dof
+                    Matrix< DDRMat > tDStressVal = trans( tdStressdFlux ) * tCMElasticity->dFluxdDOF( tDofType );
 
                     // compute the Jacobian
                     tJac += ( -1.0 ) * aWStar * ( tFISig->N_trans() * tDStressVal );

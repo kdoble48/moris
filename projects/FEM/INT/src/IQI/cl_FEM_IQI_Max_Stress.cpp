@@ -12,6 +12,7 @@
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
 #include "cl_FEM_IQI_Max_Stress.hpp"
 #include "cl_FEM_CM_Struc_Linear.hpp"
+#include "fn_FEM_Geometric_Sensitivity.hpp"
 #include "fn_dot.hpp"
 
 namespace moris::fem
@@ -93,6 +94,13 @@ namespace moris::fem
             uint tLeaderDofIndex      = mSet->get_dof_index_for_type( tDofType( 0 ), mtk::Leader_Follower::LEADER );
             uint tLeaderDepStartIndex = mSet->get_res_dof_assembly_map()( tLeaderDofIndex )( 0, 0 );
             uint tLeaderDepStopIndex  = mSet->get_res_dof_assembly_map()( tLeaderDofIndex )( 0, 1 );
+
+            // the aggregation properties are not differentiated wrt the dofs
+            for ( const std::shared_ptr< Property >& tProp : mLeaderProp )
+            {
+                MORIS_ERROR( tProp == nullptr || !tProp->check_dof_dependency( tDofType ),
+                        "IQI_Max_Stress::compute_dQIdu - dof-dependent aggregation properties are not supported." );
+            }
 
             // if the elasticity CM depends on the dof type
             if ( tCMElasticity->check_dof_dependency( tDofType ) )
@@ -193,10 +201,23 @@ namespace moris::fem
         }
 
         // the spatial derivatives are implemented for the linear structural CMs
-        const CM_Struc_Linear* tCMStrucLinear = dynamic_cast< const CM_Struc_Linear* >(
+        CM_Struc_Linear* tCMStrucLinear = dynamic_cast< CM_Struc_Linear* >(
                 mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) ).get() );
 
-        return tCMStrucLinear != nullptr && tCMStrucLinear->has_spatial_strain_derivatives();
+        if ( tCMStrucLinear == nullptr || !tCMStrucLinear->has_spatial_strain_derivatives() )
+        {
+            return false;
+        }
+
+        // the spatial variation of the CM properties must be known, and the aggregation properties must be constant in
+        // space (their spatial derivatives are not part of compute_dQIdx_geometry_integrand) (MB-062)
+        bool tAggregationConstant = true;
+        for ( const std::shared_ptr< Property >& tProp : mLeaderProp )
+        {
+            tAggregationConstant = tAggregationConstant && is_spatially_constant( tProp );
+        }
+
+        return tCMStrucLinear->has_spatial_constitutive_derivatives() && tAggregationConstant;
     }
 
     //------------------------------------------------------------------------------
@@ -226,15 +247,18 @@ namespace moris::fem
         Matrix< DDRMat > tdStressdFlux = this->eval_dStressdFlux();
         real             tdQIdStress   = this->eval_dintegrand_dstress( tStressValue );
 
-        // constitutive matrix
-        const Matrix< DDRMat >& tConst = tCMElasticity->constitutive();
+        // constitutive matrix and strain
+        const Matrix< DDRMat >& tConst  = tCMElasticity->constitutive();
+        const Matrix< DDRMat >& tStrain = tCMElasticity->strain();
 
         Matrix< DDRMat > tdStraindx;
+        Matrix< DDRMat > tdConstdx;
         for ( uint iDir = 0; iDir < tSpaceDim; iDir++ )
         {
-            // derivative of the flux wrt x_k
+            // derivative of the flux wrt x_k: dsigma = C deps + dC eps
             tCMElasticity->eval_dStraindx( iDir, tdStraindx );
-            Matrix< DDRMat > tdFluxdx = tConst * tdStraindx;
+            tCMElasticity->eval_dConstdx( iDir, tdConstdx );
+            Matrix< DDRMat > tdFluxdx = tConst * tdStraindx + tdConstdx * tStrain;
 
             adQIdx( iDir ) = aWStar * tdQIdStress * dot( tdStressdFlux, tdFluxdx );
         }
