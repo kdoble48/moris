@@ -11,6 +11,7 @@
 #include "cl_FEM_IWG_Struc_Stress.hpp"
 #include "cl_FEM_Set.hpp"
 #include "cl_FEM_Field_Interpolator_Manager.hpp"
+#include "fn_FEM_Stress_Measures.hpp"
 // LINALG/src
 #include "fn_trans.hpp"
 
@@ -21,6 +22,10 @@ namespace moris::fem
 
     IWG_Struc_Stress::IWG_Struc_Stress( enum Stress_Type aStressType )
     {
+        // the projected measure carries no component index, so only the von Mises stress is supported
+        MORIS_ERROR( aStressType == Stress_Type::VON_MISES_STRESS,
+                "IWG_Struc_Stress - only the von Mises stress is supported." );
+
         // set stress type
         mStressType = aStressType;
 
@@ -65,19 +70,12 @@ namespace moris::fem
             // multiplying aWStar by user defined thickness (2*pi*r for axisymmetric)
             aWStar *= ( tPropThickness != nullptr ) ? tPropThickness->val()( 0 ) : 1;
 
-            // get stress vector from Constitutive model
-            const Matrix< DDRMat >& tStressTensor =
-                    mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) )->flux();
-
-            Matrix< DDRMat > tDummy;
-            moris::real      tStressVal;
-            Matrix< DDRMat > tDStressVal;
-
-            this->eval_stress_criterion(
-                    tStressVal,
-                    tDStressVal,
-                    tStressTensor,
-                    tDummy );
+            // stress measure of the discrete solution (see fn_FEM_Stress_Measures)
+            real tStressVal = eval_stress_measure(
+                    mStressType,
+                    mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) )->flux(),
+                    0,
+                    0 );
 
             // get sub-matrix
             auto tRes = mSet->get_residual()( 0 )(
@@ -150,21 +148,9 @@ namespace moris::fem
                 // if constitutive model has dependency on the dof type
                 if ( tCMElasticity->check_dof_dependency( tDofType ) )
                 {
-                    // get stress vector from Constitutive model
-                    const Matrix< DDRMat >& tStressTensor =
-                            mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) )->flux();
-
-                    const Matrix< DDRMat >& tDStressTensor =
-                            mLeaderCM( static_cast< uint >( IWG_Constitutive_Type::ELAST_LIN_ISO ) )->dFluxdDOF( tDofType );
-
-                    moris::real      tStressVal;
-                    Matrix< DDRMat > tDStressVal;
-
-                    this->eval_stress_criterion(
-                            tStressVal,
-                            tDStressVal,
-                            tStressTensor,
-                            tDStressTensor );
+                    // derivative of the stress measure wrt the dofs: d s / d flux ( flux layout ) contracted with d flux / d dof
+                    Matrix< DDRMat > tDStressVal =
+                            trans( eval_dstress_measure_dflux( mStressType, tCMElasticity->flux() ) ) * tCMElasticity->dFluxdDOF( tDofType );
 
                     // compute the Jacobian
                     tJac += ( -1.0 ) * aWStar * ( tFISig->N_trans() * tDStressVal );
@@ -199,171 +185,4 @@ namespace moris::fem
 
         //------------------------------------------------------------------------------
 
-        void
-        IWG_Struc_Stress::eval_stress_criterion(
-                moris::real&             aStressVal,
-                Matrix< DDRMat >&        aDStressVal,
-                Matrix< DDRMat > const & aStressTensor,
-                Matrix< DDRMat > const & aDStressTensor )
-        {
-            // switch for different stress types
-            switch ( mStressType )
-            {
-                case Stress_Type::VON_MISES_STRESS:
-                    this->eval_Von_Mises_stress(
-                            aStressVal,
-                            aDStressVal,
-                            aStressTensor,
-                            aDStressTensor );
-                    break;
-
-                default:
-                    MORIS_ERROR( false, "IWG_Struc_Stress::compute_residual - Unknown Stress Type." );
-            }
-        }
-
-        //------------------------------------------------------------------------------
-
-        void
-        IWG_Struc_Stress::eval_Von_Mises_stress(
-                moris::real&             aStressVal,
-                Matrix< DDRMat >&        aDStressVal,
-                Matrix< DDRMat > const & aStressTensor,
-                Matrix< DDRMat > const & aDStressTensor )
-        {
-
-            uint tNumStressComponents = aStressTensor.n_rows();
-            uint tNumNodes            = aDStressTensor.n_cols();
-
-            moris::real tEpsilon = std::numeric_limits< real >::epsilon() * 10;
-
-            switch ( tNumStressComponents )
-            {
-                // 2D plane stress
-                case 3:
-                {
-                    // compute contributions to von mises stress
-                    real tNormalStressContribution =
-                            std::pow( aStressTensor( 0 ) - aStressTensor( 1 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 1 ), 2.0 ) +                         //
-                            std::pow( aStressTensor( 0 ), 2.0 );
-                    real tShearStressContribution =
-                            std::pow( aStressTensor( 2 ), 2.0 );
-
-                    // compute Von-Mises stress value
-                    aStressVal = std::sqrt( 0.5 * tNormalStressContribution + 3.0 * tShearStressContribution );
-
-                    if ( aDStressTensor.numel() > 0 )
-                    {
-                        aDStressVal.set_size( 1, tNumNodes, 0.0 );
-
-                        aDStressVal += aDStressTensor.get_row( 0 ) * ( aStressTensor( 0 ) - aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 1 ) * ( -1.0 ) * ( aStressTensor( 0 ) - aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 1 ) * ( aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 0 ) * ( -1.0 ) * ( -aStressTensor( 0 ) );
-                        aDStressVal += aDStressTensor.get_row( 2 ) * 6.0 * ( aStressTensor( 2 ) );
-
-                        if ( std::abs( aStressVal ) < 2.0 * tEpsilon )
-                        {
-                            aDStressVal = aDStressVal * ( 0.5 / ( 2.0 * tEpsilon + aStressVal ) );
-                        }
-                        else
-                        {
-                            aDStressVal = aDStressVal * ( 0.5 / ( aStressVal ) );
-                        }
-                    }
-                }
-
-                break;
-
-                // 2D plane strain and axisymmetric
-                case 4:
-                {
-                    real tNormalStressContribution =
-                            std::pow( aStressTensor( 0 ) - aStressTensor( 1 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 1 ) - aStressTensor( 2 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 2 ) - aStressTensor( 0 ), 2.0 );
-                    real tShearStressContribution =
-                            std::pow( aStressTensor( 3 ), 2.0 );
-
-                    // compute Von-Mises stress value
-                    aStressVal = std::sqrt( 0.5 * tNormalStressContribution + 3.0 * tShearStressContribution );
-
-                    if ( aDStressTensor.numel() > 0 )
-                    {
-                        aDStressVal.set_size( 1, tNumNodes, 0.0 );
-
-                        aDStressVal += aDStressTensor.get_row( 0 ) * ( aStressTensor( 0 ) - aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 1 ) * ( -1.0 ) * ( aStressTensor( 0 ) - aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 1 ) * ( aStressTensor( 1 ) - aStressTensor( 2 ) );
-                        aDStressVal += aDStressTensor.get_row( 2 ) * ( -1.0 ) * ( aStressTensor( 1 ) - aStressTensor( 2 ) );
-                        aDStressVal += aDStressTensor.get_row( 2 ) * ( aStressTensor( 2 ) - aStressTensor( 0 ) );
-                        aDStressVal += aDStressTensor.get_row( 0 ) * ( -1.0 ) * ( aStressTensor( 2 ) - aStressTensor( 0 ) );
-                        aDStressVal += aDStressTensor.get_row( 3 ) * 6.0 * ( aStressTensor( 3 ) );
-
-                        if ( std::abs( aStressVal ) < 2 * tEpsilon )
-                        {
-                            aDStressVal = aDStressVal * ( 0.5 / ( 2.0 * tEpsilon + aStressVal ) );
-                        }
-                        else
-                        {
-                            aDStressVal = aDStressVal * ( 0.5 / ( aStressVal ) );
-                        }
-                    }
-                }
-
-                break;
-
-                // 3D
-                case 6:
-                {
-                    real tNormalStressContribution =
-                            std::pow( aStressTensor( 0 ) - aStressTensor( 1 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 1 ) - aStressTensor( 2 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 2 ) - aStressTensor( 0 ), 2.0 );
-                    real tShearStressContribution =
-                            std::pow( aStressTensor( 3 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 4 ), 2.0 ) +    //
-                            std::pow( aStressTensor( 5 ), 2.0 );
-
-                    // compute Von-Mises stress value
-                    aStressVal = std::sqrt( 0.5 * tNormalStressContribution + 3.0 * tShearStressContribution );
-
-                    if ( aDStressTensor.numel() > 0 )
-                    {
-                        aDStressVal.set_size( 1, tNumNodes, 0.0 );
-
-                        aDStressVal += aDStressTensor.get_row( 0 ) * ( aStressTensor( 0 ) - aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 1 ) * ( -1.0 ) * ( aStressTensor( 0 ) - aStressTensor( 1 ) );
-                        aDStressVal += aDStressTensor.get_row( 1 ) * ( aStressTensor( 1 ) - aStressTensor( 2 ) );
-                        aDStressVal += aDStressTensor.get_row( 2 ) * ( -1.0 ) * ( aStressTensor( 1 ) - aStressTensor( 2 ) );
-                        aDStressVal += aDStressTensor.get_row( 2 ) * ( aStressTensor( 2 ) - aStressTensor( 0 ) );
-                        aDStressVal += aDStressTensor.get_row( 0 ) * ( -1.0 ) * ( aStressTensor( 2 ) - aStressTensor( 0 ) );
-                        aDStressVal += aDStressTensor.get_row( 3 ) * 6.0 * ( aStressTensor( 3 ) );
-                        aDStressVal += aDStressTensor.get_row( 4 ) * 6.0 * ( aStressTensor( 4 ) );
-                        aDStressVal += aDStressTensor.get_row( 5 ) * 6.0 * ( aStressTensor( 5 ) );
-
-                        if ( std::abs( aStressVal ) < 2 * tEpsilon )
-                        {
-                            aDStressVal = aDStressVal * ( 0.5 / ( 2.0 * tEpsilon + aStressVal ) );
-                        }
-                        else
-                        {
-                            aDStressVal = aDStressVal * ( 0.5 / ( aStressVal ) );
-                        }
-                    }
-                }
-
-                break;
-
-                // Unknown size - error
-                default:
-                    MORIS_ERROR( false,
-                            "IWG_Struc_Stress::get_stress_vector - CM stress vector of unknown size; 3, 4 or 6 components expected." );
-            }
-        }
-
-        //------------------------------------------------------------------------------
-
-        //------------------------------------------------------------------------------
 }    // namespace moris::fem
