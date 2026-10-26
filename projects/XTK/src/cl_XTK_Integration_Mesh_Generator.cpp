@@ -529,24 +529,26 @@ namespace moris::xtk
     {
         Tracer tTracer( "XTK", "Integration_Mesh_Generator", "check_intersected_background_cell_levels ", mXTKModel->mVerboseLevel, 1 );
 
-        bool tFlag = true;
+        // lowest and highest level of the intersected cells on this processor; a processor without
+        // intersected cells keeps the neutral values and does not restrict the global range
+        moris_index tMinLevel = MORIS_INDEX_MAX;
+        moris_index tMaxLevel = -1;
 
-        moris_index tReferenceLevel = 0;
-        if ( aMeshGenerationData.mAllIntersectedBgCellInds.size() > 0 )
+        for ( moris_index iBgCellIndex : aMeshGenerationData.mAllIntersectedBgCellInds )
         {
-            tReferenceLevel = aBackgroundMesh->get_mtk_cell( aMeshGenerationData.mAllIntersectedBgCellInds( 0 ) ).get_level();
+            moris_index tLevel = aBackgroundMesh->get_mtk_cell( iBgCellIndex ).get_level();
+
+            tMinLevel = std::min( tMinLevel, tLevel );
+            tMaxLevel = std::max( tMaxLevel, tLevel );
         }
 
-        for ( size_t iBgCellIndex = 1; iBgCellIndex < aMeshGenerationData.mAllIntersectedBgCellInds.size(); iBgCellIndex++ )
-        {
-            moris_index tLevel = aBackgroundMesh->get_mtk_cell( aMeshGenerationData.mAllIntersectedBgCellInds( iBgCellIndex ) ).get_level();
-            if ( tReferenceLevel != tLevel )
-            {
-                tFlag = false;
-            }
-        }
+        // compare the levels across all processors: processors that are each uniform on different levels
+        // must fail the check as one processor holding all cells does
+        moris_index tGlobalMinLevel = min_all( tMinLevel );
+        moris_index tGlobalMaxLevel = max_all( tMaxLevel );
 
-        aCutIntegrationMesh->mSameLevelChildMeshes = all_land( tFlag );
+        // without intersected cells on any processor the minimum stays above the maximum and the check passes
+        aCutIntegrationMesh->mSameLevelChildMeshes = tGlobalMaxLevel <= tGlobalMinLevel;
     }
 
     // ----------------------------------------------------------------------------------

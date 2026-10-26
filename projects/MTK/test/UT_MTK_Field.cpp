@@ -639,5 +639,120 @@ namespace moris
             }
         }
 
+        //---------------------------------------------------------------------------
+
+        /**
+         * Projects a quadratic circle level set from the nodes of a uniform 2D HMR mesh onto its B-splines and returns
+         * the largest difference between the input nodal values and the nodal values of the projected field. The field
+         * is in the span of quadratic B-splines, so a solved projection reproduces it.
+         *
+         * @param aNumElements number of elements per direction
+         * @param aLagrangeOrder Lagrange (interpolation) mesh order
+         * @param aBSplineOrder B-spline order
+         * @param aNumCoefficients number of B-spline coefficients (output)
+         * @return max nodal difference
+         */
+        static real
+        project_circle_to_bsplines(
+                uint  aNumElements,
+                uint  aLagrangeOrder,
+                uint  aBSplineOrder,
+                uint& aNumCoefficients )
+        {
+            Module_Parameter_Lists tParameters( Module_Type::HMR );
+
+            tParameters.set( "number_of_elements_per_dimension", aNumElements, aNumElements );
+            tParameters.set( "domain_dimensions", 1.0, 1.0 );
+            tParameters.set( "domain_offset", 0.0, 0.0 );
+            tParameters.set( "lagrange_output_meshes", std::string( "0" ) );
+
+            tParameters.set( "lagrange_orders", std::to_string( aLagrangeOrder ) );
+            tParameters.set( "lagrange_pattern", std::string( "0" ) );
+            tParameters.set( "bspline_orders", std::to_string( aBSplineOrder ) );
+            tParameters.set( "bspline_pattern", std::string( "0" ) );
+
+            tParameters.set( "lagrange_to_bspline", "0" );
+
+            tParameters.set( "refinement_buffer", 0 );
+            tParameters.set( "staircase_buffer", 0 );
+
+            tParameters.set( "use_number_aura", false );
+
+            tParameters.set( "severity_level", 2 );
+
+            hmr::HMR tHMR( tParameters );
+            tHMR.perform_initial_refinement();
+            tHMR.finalize();
+
+            hmr::Interpolation_Mesh_HMR* tInterpolationMesh = tHMR.create_interpolation_mesh( 0 );
+            mtk::Integration_Mesh*       tIntegrationMesh =
+                    create_integration_mesh_from_interpolation_mesh( MeshType::HMR, tInterpolationMesh, 0 );
+
+            mtk::Mesh_Pair tMeshPair( tInterpolationMesh, tIntegrationMesh, true );
+
+            // quadratic circle level set at the Lagrange nodes
+            uint             tNumNodes = tInterpolationMesh->get_num_nodes();
+            Matrix< DDRMat > tNodalValues( tNumNodes, 1 );
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                Matrix< DDRMat > tCoordinates = tInterpolationMesh->get_node_coordinate( iNode );
+                tNodalValues( iNode )         = std::pow( tCoordinates( 0 ) - 0.5, 2 ) + std::pow( tCoordinates( 1 ) - 0.5, 2 ) - 0.09;
+            }
+
+            mtk::Field_Discrete tField( tMeshPair, 0 );
+            tField.unlock_field();
+            tField.set_values( tNodalValues );
+
+            aNumCoefficients = tField.get_number_of_coefficients();
+
+            // node-to-B-spline L2 projection
+            mtk::Mapper tMapper;
+            tMapper.perform_mapping( &tField, EntityRank::NODE, EntityRank::BSPLINE );
+
+            // nodal values of the projected field (recomputed from the coefficients)
+            const Matrix< DDRMat >& tProjectedValues = tField.get_values();
+
+            real tMaxError = 0.0;
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                tMaxError = std::max( tMaxError, std::abs( tProjectedValues( iNode ) - tNodalValues( iNode ) ) );
+            }
+
+            return tMaxError;
+        }
+
+        //---------------------------------------------------------------------------
+
+        TEST_CASE( "MTK Map Node to B-spline, B-spline order above Lagrange order", "[MTK],[MTK_Map_Node_To_BSpline_Order],[MB-035]" )
+        {
+            if ( par_size() == 1 )
+            {
+                uint tNumCoefficients = 0;
+
+                SECTION( "small mesh, direct solver: the singular projection still reproduces the nodal values" )
+                {
+                    real tError = project_circle_to_bsplines( 16, 1, 2, tNumCoefficients );
+                    CHECK( tNumCoefficients == 18 * 18 );
+                    CHECK( tError < 1e-10 );
+                }
+
+                SECTION( "large mesh, iterative solver: an unsolved projection is an error, not a field" )
+                {
+                    real tError = 0.0;
+                    CHECK_THROWS( tError = project_circle_to_bsplines( 160, 1, 2, tNumCoefficients ) );
+
+                    // no field: without the check, the unconverged solution was returned as the field
+                    CHECK( tError == 0.0 );
+                }
+
+                SECTION( "large mesh, iterative solver, Lagrange order = B-spline order: projection is solved" )
+                {
+                    real tError = project_circle_to_bsplines( 160, 2, 2, tNumCoefficients );
+                    CHECK( tNumCoefficients == 162 * 162 );
+                    CHECK( tError < 1e-10 );
+                }
+            }
+        }
+
     }    // namespace mtk
 }    // namespace moris

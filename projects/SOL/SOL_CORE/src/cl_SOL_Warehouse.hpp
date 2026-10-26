@@ -253,6 +253,14 @@ namespace moris
 
             //--------------------------------------------------------------------------------------------------------
 
+            NLA::Nonlinear_Solver*
+            get_nonlinear_solver( uint aNonlinearSolverIndex )
+            {
+                return mNonlinearSolvers( aNonlinearSolverIndex );
+            };
+
+            //--------------------------------------------------------------------------------------------------------
+
             enum sol::MapType
             get_tpl_type()
             {
