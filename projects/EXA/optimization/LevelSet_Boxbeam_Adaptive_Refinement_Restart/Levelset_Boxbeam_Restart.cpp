@@ -520,16 +520,13 @@ namespace moris
 
 
     //------------------------------------------------------------------------------
-    // Restart point: the regression test resumes from iteration 11. A showcase run resumes from the
-    // newest refinement pattern the create run wrote (HMR_Background_Refinement_Iter_N.hdf5, written
-    // at each interface reinitialization) and the ADV file of the same iteration.
+    // Restart point: the newest refinement pattern the create run wrote (HMR_Background_Refinement_Iter_N.hdf5,
+    // written at each interface reinitialization and labelled with the iteration that triggered it) and the ADV
+    // file of the same iteration. The pattern is found on disk rather than hardcoded: the reinitialization fires
+    // either at the interval or earlier, when XTK requests a remesh because the interface left the refined band.
     int
     restart_iteration()
     {
-        if ( moris::exa::mode() != moris::exa::Mode::SHOWCASE )
-        {
-            return 11;
-        }
         int tLatest = -1;
         const std::string tPrefix = "HMR_Background_Refinement_Iter_";
         for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
@@ -545,7 +542,11 @@ namespace moris
                 }
             }
         }
-        return tLatest >= 0 ? tLatest : 11;
+        MORIS_ERROR( tLatest > 0,
+                "restart_iteration - no HMR_Background_Refinement_Iter_N.hdf5 with a matching ADV file found; "
+                "run Levelset_Boxbeam_Create_File first." );
+
+        return tLatest;
     }
 
     void
