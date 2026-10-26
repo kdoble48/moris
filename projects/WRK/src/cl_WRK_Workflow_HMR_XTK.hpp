@@ -55,6 +55,7 @@ namespace moris
     namespace wrk
     {
         class Performer_Manager;
+        class TD_Design_Operator;
         //------------------------------------------------------------------------------
         // Naming convention here means the background mesh is constructed by HMR and the integration mesh is constructed by XTK
         class Workflow_HMR_XTK : public Workflow
@@ -83,6 +84,9 @@ namespace moris
 
             /// in-place taper over accepted iterates (created from the reinit performer's parameters on first use)
             std::unique_ptr< SDF_Wean_Monitor > mWeanMonitor;
+
+            /// topological-derivative design operator (MORISGENERAL sublist TD_OPERATOR), null if the sublist is not set
+            std::shared_ptr< TD_Design_Operator > mTDDesignOperator;
 
             /**
              * Errors if any GEN design uses discretization_mode = "additive" while HMR remeshing or level-set
@@ -134,6 +138,26 @@ namespace moris
             bool is_reinit_active() const override
             {
                 return !mSDFWeanedOff;
+            }
+
+            //------------------------------------------------------------------------------
+            /**
+             * Topological-derivative design operator (TD_OPERATOR sublist): the filtered topological derivative g~ of the
+             * last evaluation, a full ADV vector (level-set coefficients at their ADV positions, zero elsewhere). Errors if
+             * the sublist is not set or no evaluation has run. Rank 0 reads a cached vector; no collective call.
+             */
+            Vector< real > get_design_direction();
+
+            /**
+             * a^T M b with the B-spline mass matrix of the TD operator's design field (full ADV vectors)
+             */
+            real mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond );
+
+            /** the TD design operator, null if the TD_OPERATOR sublist is not set */
+            std::shared_ptr< TD_Design_Operator >
+            get_td_design_operator() const
+            {
+                return mTDDesignOperator;
             }
 
             //------------------------------------------------------------------------------

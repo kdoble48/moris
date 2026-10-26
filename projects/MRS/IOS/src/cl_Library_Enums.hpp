@@ -147,7 +147,8 @@ namespace moris
     {
         REMESHING,
         REFINEMENT,
-        MAPPING
+        MAPPING,
+        TD_OPERATOR
     };
 
     // -----------------------------------------------------------------------------

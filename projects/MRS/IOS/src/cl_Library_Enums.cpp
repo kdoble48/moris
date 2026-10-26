@@ -84,8 +84,8 @@ namespace moris
 
             case Module_Type::MORISGENERAL:
                 // needs reworking anyways
-                return { "Remeshing", "Refinement", "Mapping" };
-                
+                return { "Remeshing", "Refinement", "Mapping", "TD_Operator" };
+
             case Module_Type::END_ENUM:
                 return {};
 
@@ -174,7 +174,7 @@ namespace moris
                 break;    // standard name
 
             case Module_Type::MORISGENERAL:
-                tNames = { "", "", "" };
+                tNames = { "", "", "", "" };
                 break;
 
             default:

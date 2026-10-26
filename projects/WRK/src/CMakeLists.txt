@@ -25,6 +25,7 @@ set(HEADERS
     cl_WRK_perform_remeshing.hpp
     cl_WRK_DataBase_Performer.hpp
     cl_WRK_Reinitialize_Performer.hpp
+    cl_WRK_TD_Design_Operator.hpp
     )
  
 set(GEN_INCLUDES
@@ -55,6 +56,7 @@ set(LIB_SOURCES
     cl_WRK_perform_remeshing.cpp
     cl_WRK_DataBase_Performer.cpp
     cl_WRK_Reinitialize_Performer.cpp
+    cl_WRK_TD_Design_Operator.cpp
     )
 
 # List library dependencies

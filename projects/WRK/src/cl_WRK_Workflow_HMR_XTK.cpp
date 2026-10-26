@@ -32,6 +32,7 @@
 #include "cl_MIG.hpp"
 
 #include "cl_WRK_Reinitialize_Performer.hpp"
+#include "cl_WRK_TD_Design_Operator.hpp"
 
 namespace moris::wrk
 {
@@ -97,6 +98,15 @@ namespace moris::wrk
 
                 // construct the parameter list
                 mPerformerManager->mReinitializePerformer( 0 ) = std::make_shared< wrk::Reinitialize_Performer >( mPerformerManager->mLibrary );
+            }
+
+            // topological-derivative design operator: only when the deck filled the TD_OPERATOR sublist
+            const uint tTDIndex = static_cast< uint >( MORISGENERAL_Submodule::TD_OPERATOR );
+            if ( tMORISParameterList.size() > tTDIndex
+                    and !tMORISParameterList( tTDIndex ).empty()
+                    and tMORISParameterList( tTDIndex )( 0 ).exists( "td_field_names" ) )
+            {
+                mTDDesignOperator = std::make_shared< wrk::TD_Design_Operator >( tMORISParameterList( tTDIndex )( 0 ) );
             }
         }
 
@@ -881,6 +891,16 @@ namespace moris::wrk
         mPerformerManager->mMDLPerformer( 0 )->perform();
         mMDLFieldsOnCurrentMesh = true;
 
+        // topological-derivative design operator: g_e from the FEM fields of this solve -> filtered direction, cached for
+        // the ADVs of this evaluation (every evaluation, trials included; collective, serial for now)
+        if ( mTDDesignOperator )
+        {
+            mTDDesignOperator->perform(
+                    *mPerformerManager->mGENPerformer( 0 ),
+                    mPerformerManager->mMDLPerformer( 0 )->get_mtk_fields(),
+                    aNewADVs );
+        }
+
         // perform mapping at this stage between solution field and adv field as some data will be deleted
         // This is FIELD_REMAP mode only - INTERFACE_SDF mode handles reinitialization earlier (after XTK)
         if ( mPerformerManager->mReinitializePerformer.size() > 0 )
@@ -984,6 +1004,30 @@ namespace moris::wrk
             MORIS_LOG_INFO( "SDF in-place redistance weaned off: %s; no further redistances", mWeanMonitor->mReason.c_str() );
             mSDFWeanedOff = true;
         }
+    }
+
+    //------------------------------------------------------------------------------
+
+    Vector< real >
+    Workflow_HMR_XTK::get_design_direction()
+    {
+        MORIS_ERROR( mTDDesignOperator != nullptr,
+                "Workflow_HMR_XTK::get_design_direction - no TD_OPERATOR sublist in MORISGENERALParameterList." );
+        MORIS_ERROR( mTDDesignOperator->get_num_evaluations() > 0,
+                "Workflow_HMR_XTK::get_design_direction - no evaluation yet." );
+
+        return mTDDesignOperator->get_design_direction();
+    }
+
+    //------------------------------------------------------------------------------
+
+    real
+    Workflow_HMR_XTK::mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond )
+    {
+        MORIS_ERROR( mTDDesignOperator != nullptr,
+                "Workflow_HMR_XTK::mass_inner_product - no TD_OPERATOR sublist in MORISGENERALParameterList." );
+
+        return mTDDesignOperator->mass_product( aFirst, aSecond );
     }
 
     //------------------------------------------------------------------------------

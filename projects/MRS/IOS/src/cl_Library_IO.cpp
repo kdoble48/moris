@@ -1432,6 +1432,14 @@ namespace moris
                     }
                     break;
 
+                    case 3:
+                    {
+                        // TD_OPERATOR: an empty list like the other MORISGENERAL children; a deck fills it with
+                        // prm::create_td_operator_parameter_list(), and the workflow builds the operator only then
+                        return prm::create_moris_general_parameter_list();
+                    }
+                    break;
+
                     default:
                         break;
                 }
