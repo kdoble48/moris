@@ -90,6 +90,31 @@ namespace moris::opt
         }
 
         /**
+         * Forwards the design direction (TD_SLERP) of the only sub-interface; several sub-interfaces are not supported
+         * (their ADV vectors are not mapped)
+         */
+        Vector< real >
+        get_design_direction() override
+        {
+            MORIS_ERROR( mInterfaces.size() == 1,
+                    "Interface_Manager::get_design_direction - supported for one criteria interface only (%u given).",
+                    (uint)mInterfaces.size() );
+            return mInterfaces( 0 )->get_design_direction();
+        }
+
+        /**
+         * Forwards the design mass inner product (TD_SLERP) of the only sub-interface
+         */
+        real
+        mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond ) override
+        {
+            MORIS_ERROR( mInterfaces.size() == 1,
+                    "Interface_Manager::mass_inner_product - supported for one criteria interface only (%u given).",
+                    (uint)mInterfaces.size() );
+            return mInterfaces( 0 )->mass_inner_product( aFirst, aSecond );
+        }
+
+        /**
          * Gets the local advs based on whether or not they are shared
          */
         Vector< real > get_local_advs(

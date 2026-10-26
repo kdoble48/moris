@@ -130,6 +130,33 @@ namespace moris::opt
             return true;
         }
 
+        /**
+         * Design direction of a direction-driven algorithm (TD_SLERP): the filtered topological derivative g~ of the
+         * last criteria evaluation, a full ADV vector. Called on rank 0 (the optimizer's rank) right after an accepted
+         * evaluation. Default: error (the interface has no direction).
+         */
+        virtual Vector< real >
+        get_design_direction()
+        {
+            MORIS_ERROR( false,
+                    "Criteria_Interface::get_design_direction - this criteria interface provides no design direction "
+                    "(TD_SLERP needs the MORISGENERAL TD_OPERATOR sublist and the HMR_XTK workflow)." );
+            return {};
+        }
+
+        /**
+         * Inner product a^T M b with the mass matrix of the design field (full ADV vectors), the inner product of the
+         * TD_SLERP update. Called on rank 0. Default: error.
+         */
+        virtual real
+        mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond )
+        {
+            MORIS_ERROR( false,
+                    "Criteria_Interface::mass_inner_product - this criteria interface provides no design mass matrix "
+                    "(TD_SLERP needs the MORISGENERAL TD_OPERATOR sublist and the HMR_XTK workflow)." );
+            return 0.0;
+        }
+
         void
         set_reinitialize_iter( uint aReinitializeIter )
         {

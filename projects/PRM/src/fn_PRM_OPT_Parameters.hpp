@@ -22,7 +22,8 @@ namespace moris::opt
         SQP,
         SWEEP,
         ROL,
-        ADAM_PROJ
+        ADAM_PROJ,
+        TD_SLERP
     };
 }
 
@@ -445,6 +446,31 @@ namespace moris::prm
         return tParameterList;
     }
 
+    inline Parameter_List
+    create_td_slerp_parameter_list()
+    {
+        // Topological-derivative level-set evolution on the unit sphere (Algorithm_TD_Slerp; Amstutz and Andrae 2006,
+        // Teixeira et al. 2025 Algorithm 1): phi <- [sin((1-k) theta) phi/|phi|_M + sin(k theta) g~/|g~|_M] / sin(theta),
+        // g~ the filtered topological derivative of the criteria interface (MORISGENERAL TD_OPERATOR), M its mass matrix.
+        // No gradients and no constraints are used; the objective is the deck's J (compliance + l |Omega|).
+        Parameter_List tParameterList( "TD_SLERP" );
+
+        tParameterList.insert( "algorithm", "td_slerp" );    // Algorithm name, don't change
+        tParameterList.insert( "restart_index", 0 );         // accepted-iteration index to resume from (restart_file holds phi)
+        tParameterList.insert( "max_its", 200 );             // maximum number of accepted iterations (exit N_MAX)
+
+        tParameterList.insert( "theta_tol", 1.0 );             // exit THETA (converged) once theta < theta_tol (degrees)
+        tParameterList.insert( "theta_pi_tol", 1.0 );          // exit THETA_PI once theta > 180 - theta_pi_tol (degrees)
+        tParameterList.insert( "kappa_init", 1.0 );            // step fraction of the first trial of every iteration
+        tParameterList.insert( "kappa_min", 9.765625e-4 );     // line search fails (exit LINE_SEARCH) once kappa < kappa_min (2^-10)
+        tParameterList.insert( "accept_rel_tol", 1.0e-10 );    // accept a trial if J_t <= J_i (1 + accept_rel_tol) (non-strict)
+        tParameterList.insert( "kappa_policy", "reset" );      // "reset": kappa = kappa_init every iteration; "carry": start
+                                                               // from the previous accepted kappa (Amstutz and Andrae 2006)
+        tParameterList.insert( "normalize_start", true );      // divide the start phi_0 by |phi_0|_M (and evaluate it again)
+
+        return tParameterList;
+    }
+
     //--------------------------------------------------------------------------------------------------------------
 
     /**
@@ -471,6 +497,8 @@ namespace moris::prm
                 return create_rol_parameter_list();
             case opt::Optimization_Algorithm_Type::ADAM_PROJ:
                 return create_adam_proj_parameter_list();
+            case opt::Optimization_Algorithm_Type::TD_SLERP:
+                return create_td_slerp_parameter_list();
             default:
                 MORIS_ERROR( false, "Unknown optimization algorithm type provided." );
                 return Parameter_List( "Error" );

@@ -16,6 +16,7 @@
 #include "cl_OPT_Algorithm_Sweep.hpp"
 #include "cl_OPT_Algorithm_ROL.hpp"
 #include "cl_OPT_Algorithm_Adam_Projected.hpp"
+#include "cl_OPT_Algorithm_TD_Slerp.hpp"
 
 namespace moris::opt
 {
@@ -50,6 +51,10 @@ namespace moris::opt
         else if ( tAlgorithmName == "adam_proj" )
         {
             return std::make_shared< Algorithm_Adam_Projected >( aAlgorithmParameterList );
+        }
+        else if ( tAlgorithmName == "td_slerp" )
+        {
+            return std::make_shared< Algorithm_TD_Slerp >( aAlgorithmParameterList );
         }
         else
         {

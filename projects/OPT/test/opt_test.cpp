@@ -30,6 +30,8 @@
 #include "fn_OPT_Rosenbrock.hpp"
 #include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_OPT_Algorithm_Sweep.hpp"
+#include "cl_OPT_Algorithm_TD_Slerp.hpp"
+#include "fn_OPT_create_algorithm.hpp"
 #include "cl_Tracer.hpp"
 #include "fn_OPT_Test_Interface.hpp"
 #include "HDF5_Tools.hpp"
@@ -1848,5 +1850,459 @@ namespace moris::opt
 
         Matrix< IdMat > tOtherIds = { { 10 }, { 20 }, { gNoID }, { 40 } };
         CHECK_THROWS( Problem::map_restart_values_to_layout( tFileIds, tOtherIds, tFileValues ) );
+    }
+    //------------------------------------------------------------------------------------------------------------------
+    // TD_SLERP (sandbox-topopt IMPL_PLAN class C, U12-U17): topological-derivative level-set evolution on the unit sphere
+    // of the M inner product, driven through a mock criteria interface that supplies J, the design direction g~ and M.
+
+    namespace td_slerp
+    {
+        enum class Mode
+        {
+            OVERSHOOT,      // J = -<phi, a>_M / |phi|_M; g~ at angle -1.5 alpha from a (alpha = angle(phi, a)): k = 1 overshoots
+            FIXED_POINT,    // g~ = 2.5 phi (stationary point g~ = s phi, s > 0)
+            ANTIPODE,       // g~ = -2.5 phi
+            RISING          // J = |phi / |phi|_M - phi_0 / |phi_0|_M|_M: every trial raises J; g~ = a
+        };
+
+        class Mock_Interface : public Criteria_Interface
+        {
+          public:
+            Matrix< DDRMat > mM;        // SPD mass matrix
+            Vector< real >   mStart;    // initial ADVs
+            Vector< real >   mA;        // target direction
+            Mode             mMode;
+            real             mSign = 1.0;    // sign flip: J_s( phi ) = J( s phi ), g_s( phi ) = s g( s phi )
+
+            std::vector< std::vector< real > > mEvaluated;     // every evaluated design (as submitted)
+            std::vector< real >                mObjectives;    // J of every evaluation
+            std::vector< uint >                mFetchAfter;    // number of evaluations done at every direction fetch
+            Vector< real >                     mLast;          // s phi of the last evaluation
+
+            Mock_Interface( const Matrix< DDRMat >& aM, const Vector< real >& aStart, const Vector< real >& aA, Mode aMode, real aSign = 1.0 )
+                    : mM( aM )
+                    , mStart( aStart )
+                    , mA( aA )
+                    , mMode( aMode )
+                    , mSign( aSign )
+            {
+            }
+
+            real
+            dot( const Vector< real >& aFirst, const Vector< real >& aSecond ) const
+            {
+                real tSum = 0.0;
+                for ( uint i = 0; i < aFirst.size(); i++ )
+                {
+                    for ( uint j = 0; j < aSecond.size(); j++ )
+                    {
+                        tSum += aFirst( i ) * mM( i, j ) * aSecond( j );
+                    }
+                }
+                return tSum;
+            }
+
+            real
+            mnorm( const Vector< real >& aVector ) const
+            {
+                return std::sqrt( this->dot( aVector, aVector ) );
+            }
+
+            void
+            initialize( Vector< real >& aADVs, Vector< real >& aLowerBounds, Vector< real >& aUpperBounds, Matrix< IdMat >& ) override
+            {
+                if ( par_rank() == 0 )    // the optimizer's rank holds the design
+                {
+                    aADVs        = mStart;
+                    aLowerBounds = Vector< real >( mStart.size(), -10.0 );
+                    aUpperBounds = Vector< real >( mStart.size(), 10.0 );
+                }
+            }
+
+            real
+            objective( const Vector< real >& aPhi ) const
+            {
+                if ( mMode == Mode::RISING )
+                {
+                    Vector< real > tDiff( aPhi.size() );
+                    real           tNorm  = this->mnorm( aPhi );
+                    real           tNorm0 = this->mnorm( mStart );
+                    for ( uint i = 0; i < aPhi.size(); i++ )
+                    {
+                        tDiff( i ) = aPhi( i ) / tNorm - mSign * mStart( i ) / tNorm0;    // mStart is s phi_0
+                    }
+                    return this->mnorm( tDiff );
+                }
+                return -this->dot( aPhi, mA ) / ( this->mnorm( aPhi ) * this->mnorm( mA ) );
+            }
+
+            Vector< real >
+            direction( const Vector< real >& aPhi ) const
+            {
+                uint           tN = aPhi.size();
+                Vector< real > tG( tN, 0.0 );
+                if ( mMode == Mode::FIXED_POINT || mMode == Mode::ANTIPODE )
+                {
+                    real tS = mMode == Mode::FIXED_POINT ? 2.5 : -2.5;
+                    for ( uint i = 0; i < tN; i++ ) tG( i ) = tS * aPhi( i );
+                    return tG;
+                }
+                real tNormA = this->mnorm( mA );
+                if ( mMode == Mode::RISING )
+                {
+                    for ( uint i = 0; i < tN; i++ ) tG( i ) = mA( i ) / tNormA;
+                    return tG;
+                }
+                // OVERSHOOT: in the plane of a and phi, at angle -1.5 alpha from a (the far side of a), |g~|_M = 3.7
+                real tNormPhi = this->mnorm( aPhi );
+                real tCos     = std::max( -1.0, std::min( 1.0, this->dot( aPhi, mA ) / ( tNormPhi * tNormA ) ) );
+                real tAlpha   = std::acos( tCos );
+                if ( std::sin( tAlpha ) < 1.0e-14 )
+                {
+                    for ( uint i = 0; i < tN; i++ ) tG( i ) = 3.7 * mA( i ) / tNormA;
+                    return tG;
+                }
+                for ( uint i = 0; i < tN; i++ )
+                {
+                    real tU = ( aPhi( i ) / tNormPhi - tCos * mA( i ) / tNormA ) / std::sin( tAlpha );
+                    tG( i ) = 3.7 * ( std::cos( 1.5 * tAlpha ) * mA( i ) / tNormA - std::sin( 1.5 * tAlpha ) * tU );
+                }
+                return tG;
+            }
+
+            Vector< real >
+            perform( Vector< real >& aNewADVs ) override
+            {
+                if ( aNewADVs.size() == 0 )
+                {
+                    return Vector< real >( 1, 0.0 );    // ranks > 0 (dummy solve)
+                }
+                std::vector< real > tCopy( aNewADVs.size() );
+                mLast = aNewADVs;
+                for ( uint i = 0; i < aNewADVs.size(); i++ )
+                {
+                    tCopy[ i ] = aNewADVs( i );
+                    mLast( i ) = mSign * aNewADVs( i );
+                }
+                mEvaluated.push_back( tCopy );
+                real tJ = this->objective( mLast );
+                mObjectives.push_back( tJ );
+                return Vector< real >( 1, tJ );
+            }
+
+            Matrix< DDRMat >
+            compute_dcriteria_dadv() override
+            {
+                return Matrix< DDRMat >( 1, mStart.size(), 0.0 );
+            }
+
+            Vector< real >
+            get_design_direction() override
+            {
+                mFetchAfter.push_back( mEvaluated.size() );
+                Vector< real > tG = this->direction( mLast );
+                for ( uint i = 0; i < tG.size(); i++ ) tG( i ) = mSign * tG( i );
+                return tG;
+            }
+
+            real
+            mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond ) override
+            {
+                return this->dot( aFirst, aSecond );
+            }
+        };
+
+        Matrix< DDSMat >
+        constraint_types()
+        {
+            return Matrix< DDSMat >( 0, 1 );
+        }
+
+        Matrix< DDRMat >
+        objectives( const Vector< real >&, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, 1, aCriteria( 0 ) );
+        }
+
+        Matrix< DDRMat >
+        constraints( const Vector< real >&, const Vector< real >& )
+        {
+            return Matrix< DDRMat >( 0, 1 );
+        }
+
+        Matrix< DDRMat >
+        zeros( const Vector< real >& aADVs, const Vector< real >& )
+        {
+            return Matrix< DDRMat >( 1, aADVs.size(), 0.0 );
+        }
+
+        struct Result
+        {
+            Algorithm_TD_Slerp::Exit mExit        = Algorithm_TD_Slerp::Exit::NONE;
+            uint                     mAccepted    = 0;
+            uint                     mEvaluations = 0;
+            std::vector< real >      mObjectives;
+            std::vector< real >      mThetas;
+            std::vector< real >      mKappas;
+            real                     mFinalObjective = 0.0;
+        };
+
+        Result
+        run( const std::shared_ptr< Mock_Interface >& aInterface, Parameter_List aAlgorithmParameterList )
+        {
+            Parameter_List             tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+            std::shared_ptr< Problem > tProblem              = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList, aInterface, &constraint_types, &objectives, &constraints, &zeros, &zeros, &zeros, &zeros );
+            tProblem->initialize();
+
+            Algorithm_TD_Slerp tAlgorithm( aAlgorithmParameterList );
+            Result             tResult;
+            {
+                Tracer tTracer( "OPT", "Manager", "Perform" );    // solve() books its iteration on the Manager's trace
+                tAlgorithm.solve( 0, tProblem );
+            }
+
+            if ( par_rank() == 0 )
+            {
+                tResult.mExit           = tAlgorithm.get_exit();
+                tResult.mAccepted       = tAlgorithm.get_num_accepted();
+                tResult.mEvaluations    = tAlgorithm.get_num_evaluations();
+                tResult.mObjectives     = tAlgorithm.get_objective_history();
+                tResult.mThetas         = tAlgorithm.get_theta_history();
+                tResult.mKappas         = tAlgorithm.get_kappa_history();
+                tResult.mFinalObjective = tProblem->get_objectives()( 0 );
+            }
+            return tResult;
+        }
+
+        // the two mass matrices: identity, then a non-diagonal SPD one (1D linear B-spline mass pattern)
+        Matrix< DDRMat >
+        mass_matrix( bool aIdentity )
+        {
+            Matrix< DDRMat > tM( 4, 4, 0.0 );
+            for ( uint i = 0; i < 4; i++ )
+            {
+                tM( i, i ) = aIdentity ? 1.0 : 4.0 / 6.0;
+                if ( !aIdentity && i > 0 )
+                {
+                    tM( i, i - 1 ) = 1.0 / 6.0;
+                    tM( i - 1, i ) = 1.0 / 6.0;
+                }
+            }
+            return tM;
+        }
+
+        std::vector< real >
+        read_restart_advs( uint aIter )
+        {
+            hid_t  tFileID = open_hdf5_file( "ADV_Alg_0_Iter_" + std::to_string( aIter ) + ".hdf5", false, true );
+            herr_t tStatus = 0;
+
+            std::vector< real > tADVs;
+            load_vector_from_hdf5_file( tFileID, "ADVs", tADVs, tStatus );
+            close_hdf5_file( tFileID );
+            return tADVs;
+        }
+
+        const Vector< real > gStart = { -0.7, 0.2, 0.9, -0.3 };    // not on the unit sphere
+        const Vector< real > gA     = { -0.2, 0.9, 0.6, 0.3 };     // about 55 deg from gStart (both M)
+    }    // namespace td_slerp
+
+    TEST_CASE( "TD_SLERP parameter list and factory", "[optimization][td_slerp][U12]" )
+    {
+        Parameter_List tParameterList = moris::prm::create_optimization_algorithm_parameter_list( Optimization_Algorithm_Type::TD_SLERP );
+        CHECK( tParameterList.get< std::string >( "algorithm" ) == "td_slerp" );
+        CHECK( tParameterList.get< real >( "kappa_min" ) == std::pow( 2.0, -10 ) );
+        CHECK( tParameterList.get< real >( "theta_tol" ) == 1.0 );
+        CHECK( tParameterList.get< std::string >( "kappa_policy" ) == "reset" );
+
+        std::shared_ptr< Algorithm > tAlgorithm = create_algorithm( tParameterList );
+        CHECK( std::dynamic_pointer_cast< Algorithm_TD_Slerp >( tAlgorithm ) != nullptr );
+
+        tParameterList.set( "kappa_policy", "other" );
+        CHECK_THROWS( create_algorithm( tParameterList ) );
+    }
+
+    TEST_CASE( "TD_SLERP keeps every evaluated design on the unit M sphere and decreases J", "[optimization][td_slerp][U13]" )
+    {
+        for ( bool tIdentity : { true, false } )
+        {
+            std::shared_ptr< td_slerp::Mock_Interface > tInterface = std::make_shared< td_slerp::Mock_Interface >(
+                    td_slerp::mass_matrix( tIdentity ), td_slerp::gStart, td_slerp::gA, td_slerp::Mode::OVERSHOOT );
+            td_slerp::Result tResult = td_slerp::run( tInterface, moris::prm::create_td_slerp_parameter_list() );
+
+            if ( par_rank() == 0 )
+            {
+                // the overshooting direction: k = 1 is rejected, k = 1/2 accepted every iteration, then THETA
+                CHECK( tResult.mExit == Algorithm_TD_Slerp::Exit::THETA );
+                REQUIRE( tResult.mAccepted >= 3 );
+                CHECK( tResult.mKappas.size() == tResult.mAccepted );
+                for ( real tKappa : tResult.mKappas )
+                {
+                    CHECK( tKappa == 0.5 );
+                }
+                // the start as given, the normalized start, two trials per iteration
+                CHECK( tResult.mEvaluations == 2 + 2 * tResult.mAccepted );
+                CHECK( tResult.mThetas.back() < 1.0 );
+                CHECK( tInterface->mEvaluated[ 0 ][ 0 ] == td_slerp::gStart( 0 ) );
+
+                // unit M norm of every evaluated design after the start as given (normalize_start)
+                for ( uint k = 1; k < tInterface->mEvaluated.size(); k++ )
+                {
+                    Vector< real > tV( 4 );
+                    for ( uint i = 0; i < 4; i++ ) tV( i ) = tInterface->mEvaluated[ k ][ i ];
+                    CHECK( std::abs( tInterface->mnorm( tV ) - 1.0 ) < 1.0e-14 );
+                }
+
+                // accepted J non-increasing, approaching the minimum -1 (phi -> a)
+                for ( uint i = 1; i < tResult.mObjectives.size(); i++ )
+                {
+                    CHECK( tResult.mObjectives[ i ] <= tResult.mObjectives[ i - 1 ] );
+                }
+                CHECK( tResult.mObjectives.back() < -0.9999 );
+            }
+        }
+    }
+
+    TEST_CASE( "TD_SLERP exits THETA at a fixed point and THETA_PI at the antipode before any update", "[optimization][td_slerp][U14][U15]" )
+    {
+        for ( bool tIdentity : { true, false } )
+        {
+            for ( td_slerp::Mode tMode : { td_slerp::Mode::FIXED_POINT, td_slerp::Mode::ANTIPODE } )
+            {
+                std::shared_ptr< td_slerp::Mock_Interface > tInterface = std::make_shared< td_slerp::Mock_Interface >(
+                        td_slerp::mass_matrix( tIdentity ), td_slerp::gStart, td_slerp::gA, tMode );
+                td_slerp::Result tResult = td_slerp::run( tInterface, moris::prm::create_td_slerp_parameter_list() );
+
+                if ( par_rank() == 0 )
+                {
+                    CHECK( tResult.mExit == ( tMode == td_slerp::Mode::FIXED_POINT ? Algorithm_TD_Slerp::Exit::THETA : Algorithm_TD_Slerp::Exit::THETA_PI ) );
+                    CHECK( tResult.mEvaluations == 2 );    // the start as given and normalized
+                    CHECK( tResult.mAccepted == 0 );
+                    CHECK( tInterface->mFetchAfter.size() == 1 );
+                    CHECK( std::abs( tResult.mThetas[ 0 ] - ( tMode == td_slerp::Mode::FIXED_POINT ? 0.0 : 180.0 ) ) < 1.0e-5 );
+                }
+            }
+        }
+    }
+
+    TEST_CASE( "TD_SLERP line search halves kappa to kappa_min, exits LINE_SEARCH and restores phi_i", "[optimization][td_slerp][U16]" )
+    {
+        for ( bool tIdentity : { true, false } )
+        {
+            std::shared_ptr< td_slerp::Mock_Interface > tInterface = std::make_shared< td_slerp::Mock_Interface >(
+                    td_slerp::mass_matrix( tIdentity ), td_slerp::gStart, td_slerp::gA, td_slerp::Mode::RISING );
+            td_slerp::Result tResult = td_slerp::run( tInterface, moris::prm::create_td_slerp_parameter_list() );
+
+            if ( par_rank() == 0 )
+            {
+                CHECK( tResult.mExit == Algorithm_TD_Slerp::Exit::LINE_SEARCH );
+                CHECK( tResult.mAccepted == 0 );
+
+                // the start (as given, normalized) plus the trials k = 1, 1/2, ..., 2^-10 (2^-10 = kappa_min is tried,
+                // 2^-11 is not)
+                CHECK( tResult.mEvaluations == 13 );
+                CHECK( tInterface->mFetchAfter.size() == 1 );
+
+                // the problem reports J_i, the last restart file holds phi_i = the normalized start
+                CHECK( tResult.mFinalObjective == tInterface->mObjectives[ 1 ] );
+                // the files are numbered by evaluation from 0 in each solve: 0 .. 12, the restored design in 13
+                std::vector< real > tRestored = td_slerp::read_restart_advs( tResult.mEvaluations );
+                REQUIRE( tRestored.size() == 4 );
+                for ( uint i = 0; i < 4; i++ )
+                {
+                    CHECK( tRestored[ i ] == tInterface->mEvaluated[ 1 ][ i ] );
+                }
+                real tNorm0 = tInterface->mnorm( td_slerp::gStart );
+                for ( uint i = 0; i < 4; i++ )
+                {
+                    CHECK( std::abs( tRestored[ i ] - td_slerp::gStart( i ) / tNorm0 ) < 1.0e-15 );
+                }
+            }
+        }
+    }
+
+    TEST_CASE( "TD_SLERP is sign-flip equivariant and fetches g~ only after accepted evaluations", "[optimization][td_slerp][U17]" )
+    {
+        for ( bool tIdentity : { true, false } )
+        {
+            Vector< real > tFlippedStart = td_slerp::gStart;
+            for ( uint i = 0; i < 4; i++ ) tFlippedStart( i ) = -tFlippedStart( i );
+
+            std::shared_ptr< td_slerp::Mock_Interface > tPlain = std::make_shared< td_slerp::Mock_Interface >(
+                    td_slerp::mass_matrix( tIdentity ), td_slerp::gStart, td_slerp::gA, td_slerp::Mode::OVERSHOOT );
+            std::shared_ptr< td_slerp::Mock_Interface > tFlipped = std::make_shared< td_slerp::Mock_Interface >(
+                    td_slerp::mass_matrix( tIdentity ), tFlippedStart, td_slerp::gA, td_slerp::Mode::OVERSHOOT, -1.0 );
+
+            td_slerp::Result tResultPlain   = td_slerp::run( tPlain, moris::prm::create_td_slerp_parameter_list() );
+            td_slerp::Result tResultFlipped = td_slerp::run( tFlipped, moris::prm::create_td_slerp_parameter_list() );
+
+            if ( par_rank() == 0 )
+            {
+                // (phi, g~) -> (-phi, -g~): the same decisions and the negated iterates
+                CHECK( tResultFlipped.mExit == tResultPlain.mExit );
+                CHECK( tResultFlipped.mAccepted == tResultPlain.mAccepted );
+                REQUIRE( tFlipped->mEvaluated.size() == tPlain->mEvaluated.size() );
+                for ( uint k = 0; k < tPlain->mEvaluated.size(); k++ )
+                {
+                    CHECK( tFlipped->mObjectives[ k ] == Approx( tPlain->mObjectives[ k ] ).epsilon( 1.0e-13 ) );
+                    for ( uint i = 0; i < 4; i++ )
+                    {
+                        CHECK( std::abs( tFlipped->mEvaluated[ k ][ i ] + tPlain->mEvaluated[ k ][ i ] ) < 1.0e-14 );
+                    }
+                }
+
+                // g~ fetched once after the start and once after every accepted evaluation, never after a rejected one
+                CHECK( tPlain->mFetchAfter.size() == tResultPlain.mAccepted + 1 );
+                CHECK( tPlain->mFetchAfter[ 0 ] == 2 );
+                real tAcceptedJ = tPlain->mObjectives[ 1 ];
+                for ( uint k = 1; k < tPlain->mFetchAfter.size(); k++ )
+                {
+                    uint tLastEvaluation = tPlain->mFetchAfter[ k ] - 1;
+                    CHECK( tPlain->mObjectives[ tLastEvaluation ] <= tAcceptedJ * ( 1.0 + 1.0e-10 ) );
+                    tAcceptedJ = tPlain->mObjectives[ tLastEvaluation ];
+                }
+            }
+        }
+    }
+
+    TEST_CASE( "TD_SLERP restart_index resumes the accepted-iteration count; a bound hit is fatal", "[optimization][td_slerp][U17]" )
+    {
+        Parameter_List tParameterList = moris::prm::create_td_slerp_parameter_list();
+        tParameterList.set( "restart_index", 2 );
+        tParameterList.set( "max_its", 3 );
+
+        // a restart design is on the unit sphere already: evaluated once, not rescaled
+        td_slerp::Mock_Interface tScale( td_slerp::mass_matrix( false ), td_slerp::gStart, td_slerp::gA, td_slerp::Mode::OVERSHOOT );
+        Vector< real >           tUnitStart = td_slerp::gStart;
+        real                     tNorm      = tScale.mnorm( td_slerp::gStart );
+        for ( uint i = 0; i < 4; i++ ) tUnitStart( i ) = td_slerp::gStart( i ) / tNorm;
+
+        std::shared_ptr< td_slerp::Mock_Interface > tInterface = std::make_shared< td_slerp::Mock_Interface >(
+                td_slerp::mass_matrix( false ), tUnitStart, td_slerp::gA, td_slerp::Mode::OVERSHOOT );
+        td_slerp::Result tResult = td_slerp::run( tInterface, tParameterList );
+
+        if ( par_rank() == 0 )
+        {
+            CHECK( tResult.mExit == Algorithm_TD_Slerp::Exit::N_MAX );
+            CHECK( tResult.mAccepted == 3 );
+            CHECK( tResult.mKappas.size() == 1 );      // one accepted iteration in this run
+            CHECK( tResult.mEvaluations == 1 + 2 );    // the start once, then k = 1 (rejected) and k = 1/2
+            for ( uint i = 0; i < 4; i++ )
+            {
+                CHECK( tInterface->mEvaluated[ 0 ][ i ] == tUnitStart( i ) );
+            }
+        }
+
+        // bounds +-10 with |phi|_M = 1: a start that is not normalized and beyond a bound
+        Parameter_List tNoNormalize = moris::prm::create_td_slerp_parameter_list();
+        tNoNormalize.set( "normalize_start", false );
+        Vector< real >                              tFar          = { 20.0, 0.0, 0.0, 0.0 };
+        std::shared_ptr< td_slerp::Mock_Interface > tFarInterface = std::make_shared< td_slerp::Mock_Interface >(
+                td_slerp::mass_matrix( true ), tFar, td_slerp::gA, td_slerp::Mode::OVERSHOOT );
+        if ( par_size() == 1 )
+        {
+            CHECK_THROWS( td_slerp::run( tFarInterface, tNoNormalize ) );
+        }
     }
 }    // namespace moris::opt

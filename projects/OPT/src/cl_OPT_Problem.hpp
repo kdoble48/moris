@@ -182,6 +182,18 @@ namespace moris::opt
             mInterface->notify_accepted_iterate( aPrevious, aAccepted );
         }
 
+        /** design direction of the last criteria evaluation (TD_SLERP), full ADV vector; rank 0 */
+        Vector< real > get_design_direction()
+        {
+            return mInterface->get_design_direction();
+        }
+
+        /** a^T M b with the design mass matrix of the interface (TD_SLERP); rank 0 */
+        real mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond )
+        {
+            return mInterface->mass_inner_product( aFirst, aSecond );
+        }
+
         /** whether the in-place redistance is still active (not tapered off) */
         bool is_reinit_active() const
         {

@@ -146,12 +146,12 @@ namespace moris
              * last evaluation, a full ADV vector (level-set coefficients at their ADV positions, zero elsewhere). Errors if
              * the sublist is not set or no evaluation has run. Rank 0 reads a cached vector; no collective call.
              */
-            Vector< real > get_design_direction();
+            Vector< real > get_design_direction() override;
 
             /**
              * a^T M b with the B-spline mass matrix of the TD operator's design field (full ADV vectors)
              */
-            real mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond );
+            real mass_inner_product( const Vector< real >& aFirst, const Vector< real >& aSecond ) override;
 
             /** the TD design operator, null if the TD_OPERATOR sublist is not set */
             std::shared_ptr< TD_Design_Operator >
