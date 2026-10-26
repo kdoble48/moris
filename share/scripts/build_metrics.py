@@ -5,11 +5,13 @@ Policy: every build-system change is justified by a measured build-time or size
 reduction. This script produces the measurement.
 
 Usage:
-    python3 build_metrics.py <build_dir> [--label baseline] [--out <dir>]
+    python3 build_metrics.py <build_dir> [--label baseline] [--out <dir>] [--all-sessions]
 
 Metrics captured:
-  - .ninja_log: total edge CPU time, wall span of last session, link-vs-compile
-    split, top-20 most expensive edges (latest entry per output wins)
+  - .ninja_log: total edge CPU time, wall span, link-vs-compile split, top-20
+    most expensive edges. By default only the LAST ninja session that did work
+    (the incremental build just run); --all-sessions keeps every session, latest
+    entry per output (the whole tree's cost, as before).
   - sizes: every executable (bin/, *.exe, projects/**), every static lib (*.a),
     every shared object (lib/*.so), and the whole build tree
 Writes one JSON per invocation: <out>/<label>_<builddir>_<date>.json and prints
@@ -26,11 +28,15 @@ from pathlib import Path
 LINK_SUFFIXES = (".exe", ".so", ".a")
 
 
-def parse_ninja_log(build_dir: Path):
-    log = build_dir / ".ninja_log"
-    if not log.exists():
-        return None
-    latest = {}  # output -> (start_ms, end_ms)
+def read_sessions(log: Path):
+    """Split .ninja_log into ninja sessions: lists of (output, start_ms, end_ms).
+
+    Times are relative to the start of each ninja invocation, and ninja appends an entry when an edge finishes,
+    so end times never decrease within a session; a decrease starts a new one. A no-op invocation writes nothing.
+    After ninja recompacts the log, the rewritten old entries are unordered and split into spurious short
+    sessions; the entries appended afterwards still form the last session.
+    """
+    sessions, prev_end = [[]], -1
     for line in log.read_text(errors="replace").splitlines():
         if line.startswith("#"):
             continue
@@ -41,7 +47,22 @@ def parse_ninja_log(build_dir: Path):
             start, end = int(parts[0]), int(parts[1])
         except ValueError:
             continue
-        latest[parts[3]] = (start, end)
+        if end < prev_end:
+            sessions.append([])
+        prev_end = end
+        sessions[-1].append((parts[3], start, end))
+    return [s for s in sessions if s]
+
+
+def parse_ninja_log(build_dir: Path, all_sessions: bool = False):
+    log = build_dir / ".ninja_log"
+    if not log.exists():
+        return None
+    sessions = read_sessions(log)
+    rows = [r for s in sessions for r in s] if all_sessions else (sessions[-1] if sessions else [])
+    latest = {out: (start, end) for out, start, end in rows}  # output -> (start_ms, end_ms), latest wins
+    # Wall span is only meaningful within one session (times restart at 0 in each).
+    wall_s = None if all_sessions or not rows else (max(e for _, _, e in rows) - min(s for _, s, _ in rows)) / 1000.0
 
     edges = []
     for out, (start, end) in latest.items():
@@ -61,6 +82,8 @@ def parse_ninja_log(build_dir: Path):
         k["seconds"] = round(k["seconds"] + e["seconds"], 1)
     top = sorted(edges, key=lambda e: -e["seconds"])[:20]
     return {
+        "scope": "all_sessions" if all_sessions else "last_session",
+        "wall_s": round(wall_s, 1) if wall_s is not None else None,
         "edges": len(edges),
         "total_edge_cpu_min": round(total / 60.0, 1),
         "by_kind": by_kind,
@@ -105,6 +128,10 @@ def diff(a_path: str, b_path: str):
         print(f"  edge CPU:  {an['total_edge_cpu_min']} -> {bn['total_edge_cpu_min']} min "
               f"({bn['total_edge_cpu_min'] - an['total_edge_cpu_min']:+.1f})")
         print(f"  link share: {an['link_share_pct']}% -> {bn['link_share_pct']}%")
+        if an.get("wall_s") is not None and bn.get("wall_s") is not None:
+            print(f"  wall:      {an['wall_s']} -> {bn['wall_s']} s ({bn['wall_s'] - an['wall_s']:+.1f})")
+        if an.get("scope", "all_sessions") != bn.get("scope", "all_sessions"):
+            print(f"  warning: comparing scope {an.get('scope', 'all_sessions')} with {bn.get('scope', 'all_sessions')}")
     for key in ("executables", "static_libs", "shared_libs"):
         at, bt = a["sizes"][key]["total_mb"], b["sizes"][key]["total_mb"]
         print(f"  {key}: {at} -> {bt} MB ({bt - at:+.1f}), "
@@ -124,14 +151,16 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     snap = {"label": label, "build_dir": str(build_dir), "date": date.today().isoformat(),
-            "ninja": parse_ninja_log(build_dir), "sizes": collect_sizes(build_dir)}
+            "ninja": parse_ninja_log(build_dir, "--all-sessions" in sys.argv), "sizes": collect_sizes(build_dir)}
     out = out_dir / f"{label}_{build_dir.name}_{snap['date']}.json"
     out.write_text(json.dumps(snap, indent=2))
 
     n, s = snap["ninja"], snap["sizes"]
     if n:
-        print(f"[{label}] {build_dir.name}: {n['edges']} edges, {n['total_edge_cpu_min']} CPU-min, "
-              f"link share {n['link_share_pct']}%")
+        wall = "" if n["wall_s"] is None else (f", wall {n['wall_s']:.1f} s" if n["wall_s"] < 120
+                                                else f", wall {n['wall_s'] / 60:.1f} min")
+        print(f"[{label}] {build_dir.name} ({n['scope'].replace('_', ' ')}): {n['edges']} edges, "
+              f"{n['total_edge_cpu_min']} CPU-min{wall}, link share {n['link_share_pct']}%")
     print(f"  exes: {s['executables']['count']} = {s['executables']['total_mb']} MB | "
           f".a: {s['static_libs']['count']} = {s['static_libs']['total_mb']} MB | "
           f".so: {s['shared_libs']['count']} = {s['shared_libs']['total_mb']} MB | "
