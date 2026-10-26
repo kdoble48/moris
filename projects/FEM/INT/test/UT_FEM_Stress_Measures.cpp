@@ -112,6 +112,23 @@ TEST_CASE( "Stress_Measures_Components_And_Principal", "[moris],[fem],[Stress_Me
     CHECK( eval_shear_stress( tFlux2D, 3 ) == tSxy );
     CHECK( eval_normal_stress( tFlux2D, 3 ) == 0.0 );
 
+    // component indices are 1-based; 0 and 4 are out of range
+    CHECK_THROWS( eval_normal_stress( tFlux3D, 0 ) );
+    CHECK_THROWS( eval_normal_stress( tFlux3D, 4 ) );
+    CHECK_THROWS( eval_shear_stress( tFlux3D, 0 ) );
+    CHECK_THROWS( eval_shear_stress( tFlux3D, 4 ) );
+
+    // in 2D s_xy is the only shear stress: asking for s_yz or s_xz is an error, not a zero (MB-068)
+    Matrix< DDRMat > tFluxPlaneStrain = { { tSxx }, { tSyy }, { 0.3 * ( tSxx + tSyy ) }, { tSxy } };
+    CHECK( eval_shear_stress( tFluxPlaneStrain, 3 ) == tSxy );
+    for ( const Matrix< DDRMat >& tFlux : { tFlux2D, tFluxPlaneStrain } )
+    {
+        CHECK_THROWS( eval_shear_stress( tFlux, 1 ) );
+        CHECK_THROWS( eval_shear_stress( tFlux, 2 ) );
+    }
+    CHECK( eval_shear_stress( tFlux3D, 1 ) == 0.0 );
+    CHECK( eval_shear_stress( tFlux3D, 2 ) == 0.0 );
+
     // flux layout round trip
     for ( const Matrix< DDRMat >& tFlux : { tFlux2D, tFlux3D } )
     {

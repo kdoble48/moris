@@ -248,6 +248,10 @@ namespace moris::fem
     real
     eval_normal_stress( const Matrix< DDRMat >& aFlux, uint aStressIndex )
     {
+        MORIS_ERROR( aStressIndex >= 1 && aStressIndex <= 3,
+                "eval_normal_stress - normal stress index %u out of range; 1, 2 or 3 expected.",
+                aStressIndex );
+
         // pick stress value
         return standardize_stress_vector( aFlux )( aStressIndex - 1 );
     }
@@ -257,6 +261,15 @@ namespace moris::fem
     real
     eval_shear_stress( const Matrix< DDRMat >& aFlux, uint aStressIndex )
     {
+        MORIS_ERROR( aStressIndex >= 1 && aStressIndex <= 3,
+                "eval_shear_stress - shear stress index %u out of range; 1, 2 or 3 expected.",
+                aStressIndex );
+
+        // in 2D s_yz and s_xz do not exist: a request for them is a setup error, not a zero stress (MB-068)
+        MORIS_ERROR( aFlux.numel() == 6 || aStressIndex == 3,
+                "eval_shear_stress - in 2D the only shear stress is s_xy (index 3, vectorial_field_index 2); index %u requested.",
+                aStressIndex );
+
         // pick stress value
         return standardize_stress_vector( aFlux )( aStressIndex + 2 );
     }

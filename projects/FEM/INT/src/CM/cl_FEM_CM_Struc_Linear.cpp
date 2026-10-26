@@ -1138,11 +1138,15 @@ namespace moris::fem
 
         if ( mSpaceDim == 2 )
         {
+            // the flux is ( s_xx, s_yy, s_xy ) in plane stress and ( s_xx, s_yy, s_zz, s_xy ) in plane strain and
+            // axisymmetric: the shear stress is the last entry (MB-066)
+            const uint tShearIndex = mFlux.numel() - 1;
+
             tStressMatrix.set_size( mSpaceDim, mSpaceDim );
             tStressMatrix( 0, 0 ) = mFlux( 0 );
             tStressMatrix( 1, 1 ) = mFlux( 1 );
-            tStressMatrix( 0, 1 ) = mFlux( 2 );
-            tStressMatrix( 1, 0 ) = mFlux( 2 );
+            tStressMatrix( 0, 1 ) = mFlux( tShearIndex );
+            tStressMatrix( 1, 0 ) = mFlux( tShearIndex );
         }
         else
         {

@@ -176,6 +176,6 @@ Linear_Solver_Belos::set_solver_internal_parameters()
 
     if ( mParameterList.get< moris::sint >( "Output Frequency" ) != -1 )
     {
-        mMyPl->set( "Output Frequency", mParameterList.get< moris::real >( "Output Frequency" ) );
+        mMyPl->set( "Output Frequency", mParameterList.get< moris::sint >( "Output Frequency" ) );
     }
 }

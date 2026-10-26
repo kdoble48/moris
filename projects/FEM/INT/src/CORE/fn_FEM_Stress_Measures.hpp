@@ -81,7 +81,7 @@ namespace moris::fem
 
     //------------------------------------------------------------------------------
     /**
-     * i-th shear stress ( 1, 2, 3 = s_yz, s_xz, s_xy; in 2D only 3 is non-zero )
+     * i-th shear stress ( 1, 2, 3 = s_yz, s_xz, s_xy; in 2D only 3 exists, and 1 or 2 is an error )
      */
     real eval_shear_stress( const Matrix< DDRMat >& aFlux, uint aStressIndex );
 

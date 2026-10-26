@@ -69,14 +69,11 @@ namespace moris::fem
 
     real IQI_Stress::eval_stress_value()
     {
-        // check if dof index was set
-        if ( ( mLeaderDofTypes( 0 ).size() > 1 ) && ( mStressType != Stress_Type::VON_MISES_STRESS ) )
+        // principal, normal and shear stresses need vectorial_field_index ( 0, 1 or 2 ), whatever the dof groups (MB-079)
+        uint tComponentIndex = 0;
+        if ( mStressType != Stress_Type::VON_MISES_STRESS )
         {
-            MORIS_ERROR( mIQITypeIndex != -1,
-                    "IQI_Stress::eval_stress_value - mIQITypeIndex not set, but is needed for principal, normal and shear stresses." );
-
-            MORIS_ERROR( mIQITypeIndex <= 2 && mIQITypeIndex >= 0,
-                    "IQI_Stress::eval_stress_value - mIQITypeIndex out of bounds, must be 0, 1, or 2 for the three spatial dimensions." );
+            tComponentIndex = this->get_component_index( 3, -1 );
         }
 
         // the in-plane / 3D distinction is needed by the principal stresses only
@@ -89,7 +86,7 @@ namespace moris::fem
         return eval_stress_measure(
                 mStressType,
                 mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) )->flux( mFluxType ),
-                mIQITypeIndex + 1,
+                tComponentIndex + 1,
                 tNumSpaceDims );
     }
 
