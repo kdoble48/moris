@@ -141,6 +141,7 @@ set(TEST_SOURCES
     UT_FEM_IQI_Dof.cpp
     UT_FEM_IQI_Component_Index.cpp
     UT_FEM_IQI_Strain_Energy.cpp
+    UT_FEM_IQI_Topological_Derivative.cpp
     UT_FEM_IQI_Cylindrical_Stress.cpp
     UT_FEM_IQI_Stress_3D.cpp
     UT_FEM_IQI_Stress_Vector.cpp

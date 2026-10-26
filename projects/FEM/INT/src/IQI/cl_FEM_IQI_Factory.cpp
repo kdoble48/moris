@@ -41,6 +41,7 @@
 #include "cl_FEM_IQI_Stabilization.hpp"
 #include "cl_FEM_IQI_Homogenized_Constitutive.hpp"
 #include "cl_FEM_IQI_Heat_Method_Penalty.hpp"
+#include "cl_FEM_IQI_Topological_Derivative.hpp"
 #include "cl_FEM_IQI_Thermal_Energy_Convective_Flux.hpp"
 #include "cl_FEM_IQI_Thermal_Energy_Diffusive_Flux.hpp"
 #include "cl_FEM_IQI_Advection_Strong_Residual.hpp"
@@ -178,6 +179,9 @@ namespace moris::fem
 
             case IQI_Type::HEAT_METHOD_PENALTY:
                 return std::make_shared< IQI_Heat_Method_Penalty >();
+
+            case IQI_Type::TOPOLOGICAL_DERIVATIVE:
+                return std::make_shared< IQI_Topological_Derivative >();
 
             case IQI_Type::ADVECTION_STRONG_RESIDUAL:
                 return std::make_shared< IQI_Advection_Strong_Residual >();

@@ -210,6 +210,7 @@ namespace moris::fem
             LINEAR_ELASTICITY_DAMAGE,
             MAX_DAMAGE,
             CYLINDRICAL_STRESS,
+            TOPOLOGICAL_DERIVATIVE,
             END_IQI_TYPE )
 
     ENUM_MACRO( Constitutive_Type,

@@ -271,6 +271,7 @@ set(HEADERS
     IQI/cl_FEM_IQI_Stabilization.hpp
     IQI/cl_FEM_IQI_Homogenized_Constitutive.hpp
     IQI/cl_FEM_IQI_Heat_Method_Penalty.hpp
+    IQI/cl_FEM_IQI_Topological_Derivative.hpp
     IQI/cl_FEM_IQI_Advection_Strong_Residual.hpp
     IQI/cl_FEM_IQI_Strong_Residual_SA.hpp
     IQI/cl_FEM_IQI_Strong_Residual_Incompressible_NS.hpp
@@ -531,6 +532,7 @@ set(LIB_SOURCES
     IQI/cl_FEM_IQI_Stabilization.cpp
     IQI/cl_FEM_IQI_Homogenized_Constitutive.cpp
     IQI/cl_FEM_IQI_Heat_Method_Penalty.cpp
+    IQI/cl_FEM_IQI_Topological_Derivative.cpp
     IQI/cl_FEM_IQI_Advection_Strong_Residual.cpp
     IQI/cl_FEM_IQI_Strong_Residual_SA.cpp
     IQI/cl_FEM_IQI_Strong_Residual_Incompressible_NS.cpp
