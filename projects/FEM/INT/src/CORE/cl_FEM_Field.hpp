@@ -29,6 +29,16 @@ namespace moris
     {
         //------------------------------------------------------------------------------
 
+        /**
+         * normalization of an ELEMENTAL field populated by an IQI: the cluster integral of the IQI is divided by
+         * the cluster volume (CLUSTER, the average over the cluster) or by the interpolation-cell measure (IP_CELL)
+         */
+        enum class Elemental_Normalization
+        {
+            CLUSTER,
+            IP_CELL
+        };
+
         //------------------------------------------------------------------------------
 
         class Field : public mtk::Field
@@ -48,6 +58,9 @@ namespace moris
 
             // ! bool indicating if field shall be populated with the help of an IQI
             bool mPopulateFieldWithIQI = false;
+
+            //! normalization of an ELEMENTAL field populated by an IQI
+            Elemental_Normalization mElementalNormalization = Elemental_Normalization::CLUSTER;
 
             //------------------------------------------------------------------------------
 
@@ -103,6 +116,22 @@ namespace moris
             //-----------------------------------------------------------------------------
 
             const std::string& get_IQI_name();
+
+            //-----------------------------------------------------------------------------
+
+            /**
+             * set the normalization of an ELEMENTAL field from its FEM FIELDS key value ( "cluster" or "ip_cell" )
+             * @param[ in ] aNormalization key value
+             */
+            void set_elemental_normalization( const std::string& aNormalization );
+
+            //-----------------------------------------------------------------------------
+
+            Elemental_Normalization
+            get_elemental_normalization() const
+            {
+                return mElementalNormalization;
+            }
 
             //-----------------------------------------------------------------------------
 

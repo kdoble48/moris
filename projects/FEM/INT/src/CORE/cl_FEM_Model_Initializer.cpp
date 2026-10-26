@@ -117,6 +117,9 @@ namespace moris::fem
             std::string tFieldName = tFieldParameter.get< std::string >( "field_name" );
             tField->set_label( tFieldName );
 
+            // normalization of an ELEMENTAL field populated by an IQI
+            tField->set_elemental_normalization( tFieldParameter.get< std::string >( "field_elemental_normalization" ) );
+
             // fill property map
             mFieldMap[ tFieldName ] = iField;
 

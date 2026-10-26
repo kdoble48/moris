@@ -1702,7 +1702,24 @@ namespace moris::fem
                         iIQI,
                         tSpaceTimeVolume );
 
-                tValues( 0 ) = tValues( 0 ) / tSpaceTimeVolume;
+                if ( aFields( tGlobalIndex )->get_elemental_normalization() == Elemental_Normalization::IP_CELL )
+                {
+                    // cluster integral per unit interpolation cell: divide by the space-time measure of the
+                    // leader interpolation cell (space measure times the time-slab length)
+                    const Matrix< DDRMat >& tTime = this->get_time();
+
+                    const real tIPCellMeasure = mLeaderInterpolationCell->compute_cell_measure() * ( tTime.max() - tTime.min() );
+
+                    MORIS_ASSERT( tIPCellMeasure > 0.0,
+                            "Interpolation_Element::populate_fields - non-positive interpolation cell measure." );
+
+                    tValues( 0 ) = tValues( 0 ) / tIPCellMeasure;
+                }
+                else
+                {
+                    // average over the cluster
+                    tValues( 0 ) = tValues( 0 ) / tSpaceTimeVolume;
+                }
 
                 aFields( tGlobalIndex )->set_field_value( tIndex, tValues );
             }

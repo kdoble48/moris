@@ -64,6 +64,11 @@ namespace moris::prm
         tParameterList.insert( "IQI_Name", "" );
         tParameterList.insert( "field_output_to_file", "" );
 
+        // ELEMENTAL fields from an IQI: "cluster" (default) divides the cluster integral by the cluster volume
+        // (average over the integration cells of the cluster), "ip_cell" by the interpolation-cell measure
+        // (the cluster integral per unit interpolation cell; for VOLUME this is the cut ratio)
+        tParameterList.insert( "field_elemental_normalization", "cluster" );
+
         return tParameterList;
     }
 

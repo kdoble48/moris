@@ -85,6 +85,32 @@ namespace moris::fem
 
     //-----------------------------------------------------------------------------
 
+    void
+    Field::set_elemental_normalization( const std::string& aNormalization )
+    {
+        if ( aNormalization == "cluster" )
+        {
+            mElementalNormalization = Elemental_Normalization::CLUSTER;
+        }
+        else if ( aNormalization == "ip_cell" )
+        {
+            MORIS_ERROR( this->get_field_entity_type() == mtk::Field_Entity_Type::ELEMENTAL,
+                    "fem::Field::set_elemental_normalization - field %s: ip_cell applies to ELEMENTAL fields only.",
+                    this->get_label().c_str() );
+
+            mElementalNormalization = Elemental_Normalization::IP_CELL;
+        }
+        else
+        {
+            MORIS_ERROR( false,
+                    "fem::Field::set_elemental_normalization - field %s: unknown field_elemental_normalization '%s' (cluster or ip_cell).",
+                    this->get_label().c_str(),
+                    aNormalization.c_str() );
+        }
+    }
+
+    //-----------------------------------------------------------------------------
+
     const std::string&
     Field::get_IQI_name()
     {
