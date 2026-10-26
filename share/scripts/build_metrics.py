@@ -5,41 +5,58 @@ Policy: every build-system change is justified by a measured build-time or size
 reduction. This script produces the measurement.
 
 Usage:
-    python3 build_metrics.py <build_dir> [--label baseline] [--out <dir>] [--all-sessions]
+    python3 build_metrics.py <build_dir> [--label baseline] [--out <dir>] [--before <log>] [--wall-s <s>]
+    python3 build_metrics.py --diff A.json B.json
 
 Metrics captured:
-  - .ninja_log: total edge CPU time, wall span, link-vs-compile split, top-20
-    most expensive edges. By default only the LAST ninja session that did work
-    (the incremental build just run); --all-sessions keeps every session, latest
-    entry per output (the whole tree's cost, as before).
+  - .ninja_log: total edge CPU time, link-vs-compile split, top-20 most
+    expensive edges (latest entry per output wins). By default the whole tree:
+    every entry in the log. To measure one build (an incremental rebuild),
+    copy the log first and pass the copy as --before; only the entries ninja
+    wrote after it count:
+        cp build_opt/.ninja_log /tmp/before.log; ninja -C build_opt moris
+        python3 build_metrics.py build_opt --label incr --before /tmp/before.log
+  - --wall-s: the build's wall time as measured by the caller (ninja's log has
+    no invocation start/end, and its edge times restart when ninja re-runs cmake)
   - sizes: every executable (bin/, *.exe, projects/**), every static lib (*.a),
     every shared object (lib/*.so), and the whole build tree
 Writes one JSON per invocation: <out>/<label>_<builddir>_<date>.json and prints
-a human summary. Compare two snapshots with:  python3 build_metrics.py --diff A.json B.json
+a human summary. --diff compares edge times only between snapshots of the same
+scope (whole_tree or since_before); sizes are always compared.
 """
 
+from __future__ import annotations
+
+import argparse
 import json
 import os
 import subprocess
-import sys
 from datetime import date
 from pathlib import Path
 
 LINK_SUFFIXES = (".exe", ".so", ".a")
 
 
-def read_sessions(log: Path):
-    """Split .ninja_log into ninja sessions: lists of (output, start_ms, end_ms).
+def log_entries(log: Path):
+    """The entry lines of a .ninja_log (start_ms, end_ms, mtime, output, hash), header and blanks dropped."""
+    if not log.exists():
+        return []
+    return [line for line in log.read_text(errors="replace").splitlines() if line and not line.startswith("#")]
 
-    Times are relative to the start of each ninja invocation, and ninja appends an entry when an edge finishes,
-    so end times never decrease within a session; a decrease starts a new one. A no-op invocation writes nothing.
-    After ninja recompacts the log, the rewritten old entries are unordered and split into spurious short
-    sessions; the entries appended afterwards still form the last session.
-    """
-    sessions, prev_end = [[]], -1
-    for line in log.read_text(errors="replace").splitlines():
-        if line.startswith("#"):
-            continue
+
+def parse_ninja_log(build_dir: Path, before: Path | None = None):
+    log = build_dir / ".ninja_log"
+    if not log.exists():
+        return None
+    entries = log_entries(log)
+    if before is not None:
+        # Entries already in the copy are older builds. Ninja appends one line per finished edge and, when it
+        # recompacts the log, rewrites the surviving entries unchanged, so the set difference is exactly what was
+        # written after the copy: robust to log order, a cmake re-run inside the build, and no-op builds (empty).
+        seen = set(log_entries(before))
+        entries = [line for line in entries if line not in seen]
+    latest = {}  # output -> (start_ms, end_ms)
+    for line in entries:
         parts = line.split("\t")
         if len(parts) < 4:
             continue
@@ -47,22 +64,7 @@ def read_sessions(log: Path):
             start, end = int(parts[0]), int(parts[1])
         except ValueError:
             continue
-        if end < prev_end:
-            sessions.append([])
-        prev_end = end
-        sessions[-1].append((parts[3], start, end))
-    return [s for s in sessions if s]
-
-
-def parse_ninja_log(build_dir: Path, all_sessions: bool = False):
-    log = build_dir / ".ninja_log"
-    if not log.exists():
-        return None
-    sessions = read_sessions(log)
-    rows = [r for s in sessions for r in s] if all_sessions else (sessions[-1] if sessions else [])
-    latest = {out: (start, end) for out, start, end in rows}  # output -> (start_ms, end_ms), latest wins
-    # Wall span is only meaningful within one session (times restart at 0 in each).
-    wall_s = None if all_sessions or not rows else (max(e for _, _, e in rows) - min(s for _, s, _ in rows)) / 1000.0
+        latest[parts[3]] = (start, end)
 
     edges = []
     for out, (start, end) in latest.items():
@@ -82,12 +84,11 @@ def parse_ninja_log(build_dir: Path, all_sessions: bool = False):
         k["seconds"] = round(k["seconds"] + e["seconds"], 1)
     top = sorted(edges, key=lambda e: -e["seconds"])[:20]
     return {
-        "scope": "all_sessions" if all_sessions else "last_session",
-        "wall_s": round(wall_s, 1) if wall_s is not None else None,
+        "scope": "whole_tree" if before is None else "since_before",
         "edges": len(edges),
         "total_edge_cpu_min": round(total / 60.0, 1),
         "by_kind": by_kind,
-        "link_share_pct": round(100.0 * by_kind.get("link", {}).get("seconds", 0) / total, 1) if total else 0,
+        "link_share_pct": round(100.0 * by_kind.get("link", {}).get("seconds", 0) / total, 1) if total else 0.0,
         "top20": top,
     }
 
@@ -125,13 +126,16 @@ def diff(a_path: str, b_path: str):
     print(f"delta ({Path(b_path).name} - {Path(a_path).name}):")
     an, bn = a.get("ninja") or {}, b.get("ninja") or {}
     if an and bn:
-        print(f"  edge CPU:  {an['total_edge_cpu_min']} -> {bn['total_edge_cpu_min']} min "
-              f"({bn['total_edge_cpu_min'] - an['total_edge_cpu_min']:+.1f})")
-        print(f"  link share: {an['link_share_pct']}% -> {bn['link_share_pct']}%")
-        if an.get("wall_s") is not None and bn.get("wall_s") is not None:
-            print(f"  wall:      {an['wall_s']} -> {bn['wall_s']} s ({bn['wall_s'] - an['wall_s']:+.1f})")
-        if an.get("scope", "all_sessions") != bn.get("scope", "all_sessions"):
-            print(f"  warning: comparing scope {an.get('scope', 'all_sessions')} with {bn.get('scope', 'all_sessions')}")
+        a_scope, b_scope = an.get("scope", "whole_tree"), bn.get("scope", "whole_tree")  # pre-scope JSONs: whole tree
+        if a_scope != b_scope:
+            print(f"  edge times NOT compared: scope {a_scope} vs {b_scope} (one build vs the whole tree)")
+        else:
+            print(f"  edge CPU:  {an['total_edge_cpu_min']} -> {bn['total_edge_cpu_min']} min "
+                  f"({bn['total_edge_cpu_min'] - an['total_edge_cpu_min']:+.1f}), scope {a_scope}")
+            print(f"  link share: {an['link_share_pct']}% -> {bn['link_share_pct']}%")
+    aw, bw = a.get("wall_s"), b.get("wall_s")
+    if aw is not None and bw is not None:
+        print(f"  wall:      {aw} -> {bw} s ({bw - aw:+.1f})")
     for key in ("executables", "static_libs", "shared_libs"):
         at, bt = a["sizes"][key]["total_mb"], b["sizes"][key]["total_mb"]
         print(f"  {key}: {at} -> {bt} MB ({bt - at:+.1f}), "
@@ -140,26 +144,38 @@ def diff(a_path: str, b_path: str):
 
 
 def main():
-    if "--diff" in sys.argv:
-        i = sys.argv.index("--diff")
-        diff(sys.argv[i + 1], sys.argv[i + 2])
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("build_dir", nargs="?", type=Path)
+    p.add_argument("--label", default="snapshot")
+    p.add_argument("--out", type=Path, help="output dir (default $MORIS_RUNS_DIR/benchmarks/build_metrics)")
+    p.add_argument("--before", type=Path, help="copy of .ninja_log taken before the build to measure")
+    p.add_argument("--wall-s", type=float, help="the build's wall time in seconds, measured by the caller")
+    p.add_argument("--diff", nargs=2, metavar=("A.json", "B.json"))
+    a = p.parse_args()
+    if a.diff:
+        diff(*a.diff)
         return
-    build_dir = Path(sys.argv[1]).resolve()
-    label = sys.argv[sys.argv.index("--label") + 1] if "--label" in sys.argv else "snapshot"
-    out_dir = Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv else Path(
-        os.environ.get("MORIS_RUNS_DIR", ".")) / "benchmarks" / "build_metrics"
+    if a.build_dir is None:
+        p.error("build_dir is required (or --diff A.json B.json)")
+    build_dir = a.build_dir.resolve()
+    if not build_dir.is_dir():
+        p.error(f"not a directory: {build_dir}")
+    if a.before is not None and not a.before.is_file():
+        p.error(f"--before: no such file: {a.before}")
+    out_dir = a.out or Path(os.environ.get("MORIS_RUNS_DIR", ".")) / "benchmarks" / "build_metrics"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    snap = {"label": label, "build_dir": str(build_dir), "date": date.today().isoformat(),
-            "ninja": parse_ninja_log(build_dir, "--all-sessions" in sys.argv), "sizes": collect_sizes(build_dir)}
-    out = out_dir / f"{label}_{build_dir.name}_{snap['date']}.json"
+    snap = {"label": a.label, "build_dir": str(build_dir), "date": date.today().isoformat(),
+            "ninja": parse_ninja_log(build_dir, a.before), "sizes": collect_sizes(build_dir)}
+    if a.wall_s is not None:
+        snap["wall_s"] = round(a.wall_s, 1)
+    out = out_dir / f"{a.label}_{build_dir.name}_{snap['date']}.json"
     out.write_text(json.dumps(snap, indent=2))
 
     n, s = snap["ninja"], snap["sizes"]
     if n:
-        wall = "" if n["wall_s"] is None else (f", wall {n['wall_s']:.1f} s" if n["wall_s"] < 120
-                                                else f", wall {n['wall_s'] / 60:.1f} min")
-        print(f"[{label}] {build_dir.name} ({n['scope'].replace('_', ' ')}): {n['edges']} edges, "
+        wall = f", wall {a.wall_s:.1f} s" if a.wall_s is not None else ""
+        print(f"[{a.label}] {build_dir.name} ({n['scope'].replace('_', ' ')}): {n['edges']} edges, "
               f"{n['total_edge_cpu_min']} CPU-min{wall}, link share {n['link_share_pct']}%")
     print(f"  exes: {s['executables']['count']} = {s['executables']['total_mb']} MB | "
           f".a: {s['static_libs']['count']} = {s['static_libs']['total_mb']} MB | "
