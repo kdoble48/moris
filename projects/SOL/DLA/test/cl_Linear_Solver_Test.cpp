@@ -211,8 +211,16 @@ namespace moris::dla
 
             Linear_Problem* tLinProblem = tSolFactory.create_linear_system( tSolverInterface, sol::MapType::Epetra );
 
-            Parameter_List                             tLinearSolverParameterList = prm::create_linear_algorithm_parameter_list_belos();
-            std::shared_ptr< Linear_Solver_Algorithm > tLinSolver                 = tSolFactory.create_solver( tLinearSolverParameterList );
+            Parameter_List tLinearSolverParameterList = prm::create_linear_algorithm_parameter_list_belos();
+
+            // a non-default output frequency used to abort the solve with std::bad_variant_access (MB-052)
+            SECTION( "default output frequency" ) {}
+            SECTION( "output frequency set" )
+            {
+                tLinearSolverParameterList.set( "Output Frequency", 1 );
+            }
+
+            std::shared_ptr< Linear_Solver_Algorithm > tLinSolver = tSolFactory.create_solver( tLinearSolverParameterList );
 
             Parameter_List tParamList( "" );
             tParamList.insert( "ifpack_prec_type", std::string( "ILU" ) );
