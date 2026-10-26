@@ -27,6 +27,7 @@
 #include "cl_MTK_Integrator.hpp"
 #include "cl_FEM_Property.hpp"
 #include "cl_FEM_CM_Factory.hpp"
+#include "cl_FEM_CM_Struc_Linear.hpp"
 #include "fn_FEM_Check.hpp"
 #include "FEM_Test_Proxy/cl_FEM_Inputs_for_Elasticity_UT.cpp"
 
@@ -375,6 +376,146 @@ TEST_CASE( "CM_Struc_Linear_Isotropic", "[CM_Struc_Lin_Iso]" )
                 }
             }
             // clean up
+            tLeaderFIs.clear();
+        }
+    }
+}/*END_TEST_CASE*/
+
+TEST_CASE( "CM_Struc_Linear_Isotropic_Geometric_Stiffness_2D", "[CM_Struc_Lin_Iso],[MB-066]" )
+{
+    // geometric stiffness of the linear CM in 2D for a homogeneous displacement u = A x, against the stress tensor
+    // computed by hand; in plane strain the flux is ( s_xx, s_yy, s_zz, s_xy ) and s_zz was used as the shear (MB-066)
+    real tE  = 1.0;
+    real tNu = 0.3;
+    real tA  = 0.1;
+
+    std::shared_ptr< fem::Property > tPropEMod = std::make_shared< fem::Property >();
+    tPropEMod->set_parameters( { { { tE } } } );
+
+    std::shared_ptr< fem::Property > tPropNu = std::make_shared< fem::Property >();
+    tPropNu->set_parameters( { { { tNu } } } );
+
+    Vector< Vector< MSI::Dof_Type > > tDispDofTypes = { { MSI::Dof_Type::UX, MSI::Dof_Type::UY } };
+
+    // bilinear quad, constant in time (the geometric stiffness requires it)
+    Matrix< DDRMat > tXHat = { { 0.0, 0.0 }, { 1.0, 0.0 }, { 1.0, 1.0 }, { 0.0, 1.0 } };
+    Matrix< DDRMat > tTHat = { { 0.0 }, { 1.0 } };
+
+    mtk::Interpolation_Rule tGIRule(
+            mtk::Geometry_Type::QUAD,
+            mtk::Interpolation_Type::LAGRANGE,
+            mtk::Interpolation_Order::LINEAR,
+            mtk::Interpolation_Type::LAGRANGE,
+            mtk::Interpolation_Order::LINEAR );
+
+    Geometry_Interpolator tGI( tGIRule );
+    tGI.set_coeff( tXHat, tTHat );
+
+    mtk::Interpolation_Rule tFIRule(
+            mtk::Geometry_Type::QUAD,
+            mtk::Interpolation_Type::LAGRANGE,
+            mtk::Interpolation_Order::LINEAR,
+            mtk::Interpolation_Type::CONSTANT,
+            mtk::Interpolation_Order::CONSTANT );
+
+    // shear modulus and the in-plane stiffness of an equal biaxial strain
+    real tG = tE / ( 2.0 * ( 1.0 + tNu ) );
+
+    for ( fem::Model_Type tModelType : { fem::Model_Type::PLANE_STRESS, fem::Model_Type::PLANE_STRAIN } )
+    {
+        real tBiaxial = ( tModelType == fem::Model_Type::PLANE_STRESS )
+                              ? tE / ( 1.0 - tNu )
+                              : tE / ( ( 1.0 + tNu ) * ( 1.0 - 2.0 * tNu ) );
+
+        // pure shear u = a ( y, x ) and equal biaxial stretch u = a ( x, y )
+        for ( bool tPureShear : { true, false } )
+        {
+            fem::CM_Factory tCMFactory;
+
+            std::shared_ptr< fem::Constitutive_Model > tCM = tCMFactory.create_CM( fem::Constitutive_Type::STRUC_LIN_ISO );
+            tCM->set_dof_type_list( tDispDofTypes );
+            tCM->set_property( tPropEMod, "YoungsModulus" );
+            tCM->set_property( tPropNu, "PoissonRatio" );
+            tCM->set_local_properties();
+            tCM->set_model_type( tModelType );
+            tCM->set_space_dim( 2 );
+
+            MSI::Equation_Set* tSet = new fem::Set();
+            tCM->set_set_pointer( static_cast< fem::Set* >( tSet ) );
+
+            tCM->mSet->mUniqueDofTypeList.resize( 100, MSI::Dof_Type::END_ENUM );
+            tCM->mSet->mUniqueDofTypeMap.set_size( static_cast< int >( MSI::Dof_Type::END_ENUM ) + 1, 1, -1 );
+            tCM->mSet->mUniqueDofTypeMap( static_cast< int >( MSI::Dof_Type::UX ) ) = 0;
+            tCM->mSet->mLeaderDofTypeMap.set_size( static_cast< int >( MSI::Dof_Type::END_ENUM ) + 1, 1, -1 );
+            tCM->mSet->mLeaderDofTypeMap( static_cast< int >( MSI::Dof_Type::UX ) ) = 0;
+
+            tCM->get_global_dof_type_list();
+
+            // nodal displacements and the stress tensor they produce
+            Matrix< DDRMat > tUHat( 4, 2 );
+            Matrix< DDRMat > tStress( 2, 2, 0.0 );
+            for ( uint iNode = 0; iNode < 4; iNode++ )
+            {
+                tUHat( iNode, 0 ) = tA * ( tPureShear ? tXHat( iNode, 1 ) : tXHat( iNode, 0 ) );
+                tUHat( iNode, 1 ) = tA * ( tPureShear ? tXHat( iNode, 0 ) : tXHat( iNode, 1 ) );
+            }
+            if ( tPureShear )
+            {
+                tStress( 0, 1 ) = tStress( 1, 0 ) = 2.0 * tG * tA;
+            }
+            else
+            {
+                tStress( 0, 0 ) = tStress( 1, 1 ) = tBiaxial * tA;
+            }
+
+            Vector< Field_Interpolator* > tLeaderFIs( 1 );
+            tLeaderFIs( 0 ) = new Field_Interpolator( 2, tFIRule, &tGI, tDispDofTypes( 0 ) );
+            tLeaderFIs( 0 )->set_coeff( tUHat );
+
+            Vector< Vector< enum gen::PDV_Type > >   tDummyDv;
+            Vector< Vector< enum mtk::Field_Type > > tDummyField;
+            Field_Interpolator_Manager               tFIManager( tDispDofTypes, tDummyDv, tDummyField, tSet );
+
+            tFIManager.mFI                     = tLeaderFIs;
+            tFIManager.mIPGeometryInterpolator = &tGI;
+            tFIManager.mIGGeometryInterpolator = &tGI;
+
+            tCM->mSet->mLeaderFIManager = &tFIManager;
+            tCM->set_field_interpolator_manager( &tFIManager );
+
+            Matrix< DDRMat > tParamPoint = { { 0.2 }, { -0.3 }, { 0.0 } };
+            tFIManager.set_space_time( tParamPoint );
+            tCM->reset_eval_flags();
+
+            const Matrix< DDRMat >& tKg =
+                    std::dynamic_pointer_cast< fem::CM_Struc_Linear >( tCM )->GeometricStiffness( tDispDofTypes( 0 ) );
+
+            // reference: K( q n + p, q n + s ) = dN_p/dx_i s_ij dN_s/dx_j for each displacement component q
+            const Matrix< DDRMat >& tdNdx = tLeaderFIs( 0 )->dnNdxn( 1 );
+
+            Matrix< DDRMat > tKgRef( 8, 8, 0.0 );
+            for ( uint q = 0; q < 2; q++ )
+            {
+                for ( uint p = 0; p < 4; p++ )
+                {
+                    for ( uint s = 0; s < 4; s++ )
+                    {
+                        for ( uint i = 0; i < 2; i++ )
+                        {
+                            for ( uint j = 0; j < 2; j++ )
+                            {
+                                tKgRef( 4 * q + p, 4 * q + s ) += tdNdx( i, p ) * tStress( i, j ) * tdNdx( j, s );
+                            }
+                        }
+                    }
+                }
+            }
+
+            REQUIRE( tKg.n_rows() == 8 );
+            REQUIRE( tKg.n_cols() == 8 );
+            CHECK( norm( tKg - tKgRef ) <= 1e-12 * norm( tKgRef ) );
+
+            // clean up (the field interpolator manager owns and deletes the field interpolator)
             tLeaderFIs.clear();
         }
     }
