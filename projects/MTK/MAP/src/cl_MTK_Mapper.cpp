@@ -697,7 +697,9 @@ namespace moris::mtk
 
             tParameterlist( 1 ).add_parameter_list( moris::prm::create_linear_solver_parameter_list() );
             tParameterlist( 2 ).add_parameter_list( moris::prm::create_nonlinear_algorithm_parameter_list() );
-            tParameterlist( 2 )( 0 ).set( "NLA_max_iter", 1 );
+            // the second iteration only assembles the residual of the solution, to check the solve below
+            tParameterlist( 2 )( 0 ).set( "NLA_max_iter", 2 );
+            tParameterlist( 2 )( 0 ).set( "NLA_rebuild_jacobian", false );
 
             tParameterlist( 3 ).add_parameter_list( moris::prm::create_nonlinear_solver_parameter_list() );
             tParameterlist( 3 )( 0 ).set( "NLA_DofTypes", "L2" );
@@ -719,9 +721,37 @@ namespace moris::mtk
             // STEP 4: Solve and check
             // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+            // a B-spline order above the Lagrange order makes the L2 system singular: the field is seen through its
+            // nodal values only, so the coefficients are not unique and an iterative solve may not converge
+            uint tBSplineOrder  = aField->get_discretization_order();
+            uint tLagrangeOrder = aField->get_mesh_pair().get_interpolation_mesh()->get_order();
+
+            if ( tBSplineOrder > tLagrangeOrder )
+            {
+                MORIS_LOG_WARNING( "Mapper::map_node_to_bspline - B-spline order %u is above the Lagrange order %u; "
+                                   "the L2 projection is singular. Use a Lagrange order of at least the B-spline order.",
+                        tBSplineOrder,
+                        tLagrangeOrder );
+            }
+
             tsa::Time_Solver* tTimeSolver = tSolverWarehouse.get_main_time_solver();
 
             tTimeSolver->solve();
+
+            // check the solve: an iterative solver that did not converge returns its last iterate
+            NLA::Nonlinear_Solver* tNonlinearSolver = tSolverWarehouse.get_nonlinear_solver( 0 );
+
+            real tRelativeResidual = tNonlinearSolver->get_residual_norm() / std::max( tNonlinearSolver->get_ref_norm(), MORIS_REAL_EPS );
+
+            MORIS_LOG_SPEC( "L2ProjectionRelativeResidual", tRelativeResidual );
+
+            MORIS_ERROR( tRelativeResidual < 1e-6,
+                    "Mapper::map_node_to_bspline - L2 projection onto B-splines not solved, relative residual %e "
+                    "(B-spline order %u, Lagrange order %u, %u coefficients).",
+                    tRelativeResidual,
+                    tBSplineOrder,
+                    tLagrangeOrder,
+                    sum_all( tNumberOfCoefficients ) );
 
             Matrix< DDRMat > tSolution;
             tTimeSolver->get_full_solution( tSolution );
