@@ -2,8 +2,10 @@
 
 A two-phase level-set topology optimization of a 2D cantilever box beam with a heat-method
 regularization, run in two stages. The first deck optimizes with adaptive remeshing and writes
-the ADV vector and the HMR refinement pattern to HDF5 every iteration; the second deck restarts
-the optimization from the iteration-11 files. The example tests OPT restart from an ADV file
+the ADV vector to HDF5 every iteration and the HMR refinement pattern at each interface
+reinitialization; the second deck restarts the optimization from the newest pattern the first
+deck wrote and the ADV file of the same iteration (iteration 10 in the regression run, where XTK
+requests a remesh one iteration before the `reinitialize_interface_iter` interval). The example tests OPT restart from an ADV file
 together with HMR restart from a stored refinement pattern. See also
 {doc}`LevelSet_Boxbeam_Adaptive_Refinement <LevelSet_Boxbeam_Adaptive_Refinement>`.
 
@@ -36,10 +38,10 @@ The design region is seeded by `Hole_Pattern_2D3D`, a periodic array of superell
 | Hole array (x × y) | 3 × 2 | 7 × 3 |
 | Hole radius | 0.4771 / 2 | 0.2771 / 3 |
 | GCMMA `max_its` | 12 | 5 |
-| OPT `restart_file` | `""` | `ADV_Alg_0_Iter_11.hdf5` |
-| GCMMA `restart_index` | 0 | 10 |
+| OPT `restart_file` | `""` | `ADV_Alg_0_Iter_N.hdf5`, N = newest pattern on disk |
+| GCMMA `restart_index` | 0 | N − 1 |
 | `reinitialize_interface_iter` | 10 | 50 |
-| HMR | `write_refinement_pattern_file = true` | `restart_refinement_pattern_file = HMR_Background_Refinement_Iter_11.hdf5`, Lagrange mesh written to `HMRLagrangeMesh.exo` |
+| HMR | `write_refinement_pattern_file = true` | `restart_refinement_pattern_file = HMR_Background_Refinement_Iter_N.hdf5`, Lagrange mesh written to `HMRLagrangeMesh.exo` |
 
 All other parameter lists are the same in both files. The two ctest cases run in declaration
 order in one executable; the restart case depends on the HDF5 files left by the first.
@@ -106,9 +108,9 @@ iteration with `Time_Offset = 10.0`
 - **Create File case:** deletes `*exo*` and `*hdf5*` files in the working directory, runs
   `Levelset_Boxbeam_Create_File.so`, and requires a return code of 0.
 - **Restart case:** runs `Levelset_Boxbeam_Restart.so`, requires a return code of 0, then opens
-  `Levelset_Boxbeam_Restart.exo.e-s.0016` and compares nodal field index 2 at nodes 0, 100, …,
-  800 against nine reference values (−0.000135399, 7.40848, 14.3591, 15.4603, 0.861916,
-  −0.499474, −7.59165, −13.1653, −15.2731) with relative tolerance 10⁻⁴.
+  `Levelset_Boxbeam_Restart.exo.e-s.0015` and compares nodal field index 2 at nodes 0, 100, …,
+  800 against nine reference values (−2.22042e−05, 5.62616, 8.72636, 10.3599, 3.9568e−06,
+  −1.24995, −6.64690, −10.3940, 0.303589) with relative tolerance 10⁻⁴.
 
 Both cases run on 1 processor.
 
