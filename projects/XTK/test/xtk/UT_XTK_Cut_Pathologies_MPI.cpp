@@ -13,7 +13,8 @@
  * region. Run it on 1, 2 and 4 ranks, e.g. mpirun -n 2 XTK-test.exe "[XTK_PATHOLOGY_MPI]", and compare the CSV files
  * (MORIS_XTK_PATHOLOGY_MPI_CSV=<file>).
  *
- * The sweeps are hidden ([.]) because they characterize current behaviour rather than gate it. Run one with
+ * The sweeps are hidden ([.]) because they characterize current behaviour rather than gate it; the refinement-level
+ * check ([XTK_PATHOLOGY_MPI_LEVELS]) is not hidden and runs with the suite on every number of ranks. Run a sweep with
  *   XTK-test.exe "[XTK_PATHOLOGY_HEX_SIGNS]"
  * Set MORIS_XTK_PATHOLOGY_CSV=<file> to write one row per decomposed case.
  *
@@ -616,11 +617,12 @@ namespace moris::xtk
         }
     }
 
-    TEST_CASE( "XTK pathology: intersected cells on different refinement levels on different ranks", "[.][XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_LEVELS]" )
+    TEST_CASE( "XTK pathology: intersected cells on different refinement levels on different ranks", "[XTK][XTK_PATHOLOGY][XTK_PATHOLOGY_MPI_LEVELS]" )
     {
-        // finding 6: check_intersected_background_cell_levels compares each rank's intersected cells with that rank's
-        // first one and combines with all_land, so ranks that are each uniform at different levels pass. The box is
-        // refined one level for x > 1.5; the processor face is x = 1 on 2 ranks, and each rank's aura reaches 0.5 past it.
+        // check_intersected_background_cell_levels has to compare the levels across ranks: ranks that are each uniform
+        // on different levels must refuse the decomposition as one rank does. The box is refined one level for
+        // x > 1.5; the processor face is x = 1 on 2 ranks, and each rank's aura reaches 0.5 past it, so the planes
+        // x = 0.3 and x = 1.8 cut level-0 cells on one rank and level-1 cells on the other.
         Grid_Mesh                tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 }, 1.5 );
         mtk::Interpolation_Mesh* tMesh = tBox.mMesh;
 
