@@ -143,7 +143,7 @@ namespace moris::fem
         //------------------------------------------------------------------------------
         /**
          * compute matrix dimension of the IQI
-         * @param[ out ] space dimension of the IQI
+         * @return ( 6, 1 ) for the standardized stress vector, ( 1, 1 ) for a scalar stress measure
          */
         std::pair< uint, uint > get_matrix_dim() override;
     };
