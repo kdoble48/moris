@@ -117,61 +117,9 @@ namespace moris::fem
             return std::make_pair( 1, 1 );
         }
 
-        // get the const. model pointer element corresponding to elasticity from the cell
-        std::shared_ptr< fem::Constitutive_Model >& tCMElasticity =
-                mLeaderCM( static_cast< uint >( IQI_Constitutive_Type::ELAST_LIN_ISO ) );
-
-        // obtain the model type
-        Model_Type tModelType = tCMElasticity->get_plane_type();
-
-        // obtain space dimension
-        uint tSpaceDim = tCMElasticity->get_num_space_dims();
-
-        // cases based on the dimension
-        switch ( tSpaceDim )
-        {
-            // 2D case
-            case 2:
-            {
-                // check the model tye
-                switch ( tModelType )
-                {
-                    // 2D plane stress
-                    case Model_Type::PLANE_STRESS:
-                    {
-                        return std::make_pair( 3, 1 );
-                        break;
-                    }
-
-                    // 2D plane strain and axisymmetric
-                    case Model_Type::PLANE_STRAIN:
-                    {
-                        return std::make_pair( 4, 1 );
-                        break;
-                    }
-
-                    // Unknown size - error
-                    default:
-                        MORIS_ERROR( false,
-                                "IQI_Stress::get_matrix_dim - CM stress vector of unknown size; 3, 4 or 6 components expected." );
-
-                        return std::make_pair( 0, 0 );
-                }
-            }
-
-            // 3D case
-            case 3:
-            {
-                return std::make_pair( 6, 1 );
-                break;
-            }
-
-            default:
-            {
-                MORIS_ASSERT( 0, "Space Dimension is not valid" );
-                return std::make_pair( 0, 0 );
-            }
-        }
+        // the stress vector is assembled in the standardized layout ( s_xx, s_yy, s_zz, s_yz, s_xz, s_xy )
+        // in every dimension and model type (see get_stress_vector), not in the layout of the CM flux (MB-067)
+        return std::make_pair( 6, 1 );
     }
 
     //------------------------------------------------------------------------------
