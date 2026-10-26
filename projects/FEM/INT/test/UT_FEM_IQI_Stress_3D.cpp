@@ -286,6 +286,62 @@ TEST_CASE( "IQI_Max_Normal_Stress_3D", "[moris],[fem],[IQI_Stress_3D],[MB-049]" 
 }
 
 //------------------------------------------------------------------------------
+// Normal, shear and principal stresses need vectorial_field_index also when the first leader dof group has a single
+// member (MB-079): NORMAL_STRESS read the standardized entry (uint) -1, SHEAR_STRESS returned s_zz
+//------------------------------------------------------------------------------
+
+TEST_CASE( "IQI_Stress_Index_Required_Single_Member_Dof_Group", "[moris],[fem],[IQI_Stress_3D],[MB-079]" )
+{
+    MSI::Equation_Set* tSet = make_set();
+    Elastic_Side       tSide( tSet, tAGeneral );
+
+    fem::IQI_Factory tIQIFactory;
+    for ( fem::IQI_Type tType : { fem::IQI_Type::NORMAL_STRESS, fem::IQI_Type::SHEAR_STRESS, fem::IQI_Type::PRINCIPAL_STRESS } )
+    {
+        std::shared_ptr< fem::IQI > tIQI = tIQIFactory.create_IQI( tType );
+        tIQI->set_constitutive_model( tSide.mCM, "ElastLinIso", mtk::Leader_Follower::LEADER );
+        tIQI->set_dof_type_list( { { MSI::Dof_Type::TEMP }, { MSI::Dof_Type::UX, MSI::Dof_Type::UY, MSI::Dof_Type::UZ } },
+                mtk::Leader_Follower::LEADER );
+        tIQI->set_set_pointer( static_cast< fem::Set* >( tSet ) );
+        tIQI->set_field_interpolator_manager( &tSide.mFIManager );
+
+        // vectorial_field_index unset
+        Matrix< DDRMat > tQI;
+        CHECK_THROWS( tIQI->compute_QI( tQI ) );
+
+        // out of range
+        tIQI->set_output_type_index( 3 );
+        CHECK_THROWS( tIQI->compute_QI( tQI ) );
+    }
+
+    // control: with the index set, NORMAL_STRESS 1 is s_yy and SHEAR_STRESS 2 is s_xy
+    std::shared_ptr< fem::IQI > tNormal = tIQIFactory.create_IQI( fem::IQI_Type::NORMAL_STRESS );
+    tNormal->set_constitutive_model( tSide.mCM, "ElastLinIso", mtk::Leader_Follower::LEADER );
+    tNormal->set_dof_type_list( { { MSI::Dof_Type::TEMP }, { MSI::Dof_Type::UX, MSI::Dof_Type::UY, MSI::Dof_Type::UZ } },
+            mtk::Leader_Follower::LEADER );
+    tNormal->set_set_pointer( static_cast< fem::Set* >( tSet ) );
+    tNormal->set_field_interpolator_manager( &tSide.mFIManager );
+    tNormal->set_output_type_index( 1 );
+
+    Matrix< DDRMat > tQI;
+    tNormal->compute_QI( tQI );
+    CHECK( tQI( 0 ) == tSide.mCM->flux()( 1 ) );
+
+    std::shared_ptr< fem::IQI > tShear = tIQIFactory.create_IQI( fem::IQI_Type::SHEAR_STRESS );
+    tShear->set_constitutive_model( tSide.mCM, "ElastLinIso", mtk::Leader_Follower::LEADER );
+    tShear->set_dof_type_list( { { MSI::Dof_Type::TEMP }, { MSI::Dof_Type::UX, MSI::Dof_Type::UY, MSI::Dof_Type::UZ } },
+            mtk::Leader_Follower::LEADER );
+    tShear->set_set_pointer( static_cast< fem::Set* >( tSet ) );
+    tShear->set_field_interpolator_manager( &tSide.mFIManager );
+    tShear->set_output_type_index( 2 );
+
+    tShear->compute_QI( tQI );
+    CHECK( tQI( 0 ) == tSide.mCM->flux()( 5 ) );
+
+    // the fem set is left for process teardown, as in the other FEM/INT unit tests
+}
+
+//------------------------------------------------------------------------------
 // JUMP_TRACTION (MB-048): zero when both sides carry the same stress; (sigma_L - sigma_F) n when they differ
 //------------------------------------------------------------------------------
 
