@@ -50,15 +50,25 @@ namespace moris::gen
 
     real Intersection_Node_Analytic::get_dresidual_dxi( Matrix< DDRMat >& aGradient ) const
     {
-        const Matrix< DDRMat >& tFirstX  = this->get_first_parent_node().get_global_coordinates();
-        const Matrix< DDRMat >& tSecondX = this->get_second_parent_node().get_global_coordinates();
-        Matrix< DDRMat >        tEdge    = tSecondX - tFirstX;
-        real                    tStep    = 1e-6 * norm( tEdge );
+        const Basis_Node&       tFirstParentNode  = this->get_first_parent_node();
+        const Basis_Node&       tSecondParentNode = this->get_second_parent_node();
+        const Matrix< DDRMat >& tFirstX           = tFirstParentNode.get_global_coordinates();
+        const Matrix< DDRMat >& tSecondX          = tSecondParentNode.get_global_coordinates();
+        Matrix< DDRMat >        tEdge             = tSecondX - tFirstX;
+        real                    tStep             = 1e-6 * norm( tEdge );
 
         aGradient = mInterfaceGeometry.get_dfield_dcoordinates_at_point( this->get_global_coordinates(), tStep );
 
         real tDrDxi = 0.5 * dot( aGradient, tEdge );
-        MORIS_ASSERT( std::abs( tDrDxi ) > MORIS_REAL_MIN, "Intersection_Node_Analytic: field tangent to the parent edge at the intersection." );
+
+        // A root inside a strict sign-change bracket has dr/dxi = 0 only where the field touches the isocontour
+        // tangentially at an inflection: take the chord slope 0.5 ( r_2 - r_1 ) (nonzero by the sign change), as the
+        // linear path does, instead of dividing by zero
+        if ( std::abs( tDrDxi ) <= MORIS_REAL_MIN )
+        {
+            tDrDxi = 0.5 * ( mInterfaceGeometry.get_field_value( tSecondParentNode.get_index(), tSecondX )
+                             - mInterfaceGeometry.get_field_value( tFirstParentNode.get_index(), tFirstX ) );
+        }
         return tDrDxi;
     }
 
@@ -66,8 +76,8 @@ namespace moris::gen
 
     real Intersection_Node_Analytic::get_dxi_dfield_from_ancestor( uint aAncestorIndex ) const
     {
-        // linear-interpolation derivative w.r.t. the end values; not used by this node's sensitivities (which are taken
-        // at the intersection point), kept for the interface
+        // Not used: append_dcoordinate_dadv() is overridden and takes the field sensitivities at the intersection point,
+        // not at the parents. Linear-interpolation value kept to satisfy the interface.
         real tThreshold = mInterfaceGeometry.get_isocontour_threshold();
         real tPhi0      = mInterfaceGeometry.get_field_value( this->get_first_parent_node().get_index(), this->get_first_parent_node().get_global_coordinates() );
         real tPhi1      = mInterfaceGeometry.get_field_value( this->get_second_parent_node().get_index(), this->get_second_parent_node().get_global_coordinates() );
@@ -100,13 +110,16 @@ namespace moris::gen
     {
         const Basis_Node& tFirstParentNode  = this->get_first_parent_node();
         const Basis_Node& tSecondParentNode = this->get_second_parent_node();
+        real              tXi               = this->get_local_coordinate();
 
         // parent vector (column)
         Matrix< DDRMat > tParentVector = trans( tSecondParentNode.get_global_coordinates() - tFirstParentNode.get_global_coordinates() );
 
-        // d x* / d p = 0.5 ( x_2 - x_1 ) d xi* / d p,  d xi* / d p = - ( d phi / d p )( x* ) / ( d r / d xi )
+        // spatial gradient and d r / d xi at the intersection point, once for all terms below
         Matrix< DDRMat > tGradient;
-        real             tDrDxi             = this->get_dresidual_dxi( tGradient );
+        real             tDrDxi = this->get_dresidual_dxi( tGradient );
+
+        // d x* / d p = 0.5 ( x_2 - x_1 ) d xi* / d p,  d xi* / d p = - ( d phi / d p )( x* ) / ( d r / d xi )
         Matrix< DDRMat > tFieldSensitivities = mInterfaceGeometry.get_dfield_dadvs_at_point( this->get_global_coordinates() );
         Matrix< DDRMat > tSensitivitiesToAdd = ( -0.5 / tDrDxi ) * aSensitivityFactor * tParentVector * tFieldSensitivities;
 
@@ -121,17 +134,20 @@ namespace moris::gen
             }
         }
 
-        // parent coordinate sensitivities (chain factor A * J, as in Intersection_Node_Level_Set, MB-022)
+        // parent coordinate sensitivities, chain factor A * J as in Intersection_Node_Level_Set (MB-022), with
+        // d xi* / d x_1 = - 0.5 ( 1 - xi* ) grad phi( x* ) / ( d r / d xi ),  d xi* / d x_2 = - 0.5 ( 1 + xi* ) grad phi( x* ) / ( d r / d xi )
         if ( tFirstParentNode.depends_on_advs() )
         {
-            Matrix< DDRMat > tLocCoord          = ( 1.0 - this->get_local_coordinate() ) * eye( tParentVector.n_rows(), tParentVector.n_rows() );
-            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_first_parent() );
+            Matrix< DDRMat > tDxiDx             = ( -0.5 * ( 1.0 - tXi ) / tDrDxi ) * tGradient;
+            Matrix< DDRMat > tLocCoord          = ( 1.0 - tXi ) * eye( tParentVector.n_rows(), tParentVector.n_rows() );
+            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * tDxiDx );
             tFirstParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
         }
         if ( tSecondParentNode.depends_on_advs() )
         {
-            Matrix< DDRMat > tLocCoord          = ( 1.0 + this->get_local_coordinate() ) * eye( tParentVector.n_rows(), tParentVector.n_rows() );
-            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * this->get_dxi_dcoordinate_second_parent() );
+            Matrix< DDRMat > tDxiDx             = ( -0.5 * ( 1.0 + tXi ) / tDrDxi ) * tGradient;
+            Matrix< DDRMat > tLocCoord          = ( 1.0 + tXi ) * eye( tParentVector.n_rows(), tParentVector.n_rows() );
+            Matrix< DDRMat > tSensitivityFactor = 0.5 * aSensitivityFactor * ( tLocCoord + tParentVector * tDxiDx );
             tSecondParentNode.append_dcoordinate_dadv( aCoordinateSensitivities, tSensitivityFactor );
         }
     }

@@ -40,6 +40,8 @@ namespace moris::gen
     {
       private:
         Level_Set_Parameters mParameters;
+        uint                 mNumAnalyticIntersections         = 0;    // edges cut by the analytic root (use_analytic_intersection)
+        uint                 mNumAnalyticIntersectionFallbacks = 0;    // of those, edges that fell back to the linear crossing
 
       public:
         /**
@@ -85,6 +87,13 @@ namespace moris::gen
         Matrix< DDRMat > get_dfield_dadvs_at_point( const Matrix< DDRMat >& aCoordinates ) const;
         Vector< sint >   get_determining_adv_ids_at_point( const Matrix< DDRMat >& aCoordinates ) const;
         Matrix< DDRMat > get_dfield_dcoordinates_at_point( const Matrix< DDRMat >& aCoordinates, real aStep ) const;
+
+        /**
+         * Number of edges this geometry cut with the analytic root (use_analytic_intersection), and how many of them
+         * fell back to the linear crossing (field not finite inside the edge, or no convergence). Cumulative.
+         */
+        uint get_number_of_analytic_intersections() const;
+        uint get_number_of_analytic_intersection_fallbacks() const;
 
         /**
          * Gets if this geometry depends on ADVs.
@@ -326,14 +335,49 @@ namespace moris::gen
          * @param aSecondParentNode Node marking the ending point of the intersection edge
          * @return Parent edge local coordinate, between -1 and 1 (MORIS_REAL_MAX if the edge is not intersected)
          */
-        real compute_intersection_local_coordinate_analytic(
-                const Parent_Node& aFirstParentNode,
-                const Parent_Node& aSecondParentNode );
-
         real compute_intersection_local_coordinate_cell_order(
                 const Vector< Background_Node* >& aBackgroundNodes,
                 const Parent_Node&                aFirstParentNode,
                 const Parent_Node&                aSecondParentNode );
+
+        /**
+         * Linear intersection: the zero of the linear interpolant of the two parent values (the default path).
+         *
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @return Parent edge local coordinate (outside [-1, 1] if the parent values have the same sign)
+         */
+        real compute_intersection_local_coordinate_linear(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode );
+
+        /**
+         * Analytic intersection (use_analytic_intersection): root of r( xi ) = phi( x( xi ) ) - c on the analytic field
+         * itself along the parent edge, x( xi ) = 0.5 ( 1 - xi ) x_1 + 0.5 ( 1 + xi ) x_2, by Illinois (modified regula
+         * falsi) on the sign-change bracket [-1, 1] (|r| < 1e-14 or bracket width < 1e-13 in xi). Edges without a strict
+         * sign change take the linear path unchanged. A non-finite field value inside the edge, or no convergence within
+         * the iteration limit, falls back to the linear crossing and is counted (and warned about, the first 10 times).
+         *
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @return Parent edge local coordinate
+         */
+        real compute_intersection_local_coordinate_analytic(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode );
+
+        /**
+         * Counts and warns about an analytic intersection that could not be bracketed, and returns the linear crossing.
+         *
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @param aReason Why the root was not found
+         * @return Linear-crossing local coordinate
+         */
+        real fall_back_to_linear_intersection(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode,
+                const char*        aReason );
 
         /**
          * Determines the geometric region of a point based on a level set value

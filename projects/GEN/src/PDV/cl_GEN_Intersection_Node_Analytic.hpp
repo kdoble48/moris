@@ -52,7 +52,8 @@ namespace moris::gen
         Matrix< DDRMat > get_dxi_dcoordinate_second_parent() const override;
 
         /**
-         * d r / d xi at the intersection point; fills the spatial gradient of the field there (1 x dim).
+         * d r / d xi at the intersection point; fills the spatial gradient of the field there (1 x dim). Where it vanishes
+         * (a tangential touch inside a sign-change bracket) the chord slope 0.5 ( r_2 - r_1 ) is returned instead.
          */
         real get_dresidual_dxi( Matrix< DDRMat >& aGradient ) const;
     };
