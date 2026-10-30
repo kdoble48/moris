@@ -25,6 +25,7 @@
 #include "cl_GEN_Level_Set_Geometry.hpp"
 #include "cl_GEN_Line.hpp"
 #include "cl_GEN_Circle.hpp"
+#include "cl_GEN_Intersection_Node_Analytic.hpp"
 #include "fn_GEN_create_simple_mesh.hpp"
 #include "cl_MTK_Interpolation_Mesh.hpp"
 #include "cl_HMR.hpp"
@@ -95,7 +96,7 @@ namespace moris::gen
      * @param aWithADVs Center and radius are ADVs (lower = value = upper)
      */
     static Submodule_Parameter_Lists
-    create_round_parameters( uint aNumDims, sint aAnalytic, bool aWithADVs )
+    create_round_parameters( uint aNumDims, sint aAnalytic, bool aWithADVs, uint aMaxIterations = 0 )
     {
         Submodule_Parameter_Lists tFieldParameterLists( "FIELDS" );
         tFieldParameterLists.add_parameter_list( prm::create_level_set_geometry_parameter_list( aNumDims == 2 ? gen::Field_Type::CIRCLE : gen::Field_Type::SPHERE ) );
@@ -120,6 +121,10 @@ namespace moris::gen
             tFieldParameterLists.set( "radius", tRadius );
         }
         tFieldParameterLists.set( "discretization_mesh_index", -2 );
+        if ( aMaxIterations > 0 )
+        {
+            tFieldParameterLists.set( "analytic_intersection_max_iterations", aMaxIterations );
+        }
         if ( aAnalytic >= 0 )
         {
             tFieldParameterLists.set( "use_analytic_intersection", aAnalytic == 1 );
@@ -334,11 +339,11 @@ namespace moris::gen
     //--------------------------------------------------------------------------------------------------------------
 
     static Cut_Statistics
-    cut_round( uint aNumDims, uint aNumElements, sint aAnalytic )
+    cut_round( uint aNumDims, uint aNumElements, sint aAnalytic, uint aMaxIterations = 0 )
     {
         mtk::Interpolation_Mesh* tMesh = aNumDims == 2 ? create_simple_mesh( aNumElements, aNumElements ) : create_cube_mesh( aNumElements );
 
-        Submodule_Parameter_Lists  tFieldParameterLists = create_round_parameters( aNumDims, aAnalytic, false );
+        Submodule_Parameter_Lists  tFieldParameterLists = create_round_parameters( aNumDims, aAnalytic, false, aMaxIterations );
         Geometry_Engine_Parameters tGeometryEngineParameters;
         ADV_Manager                tADVManager;
         Design_Factory             tDesignFactory( tFieldParameterLists, tADVManager );
@@ -475,7 +480,7 @@ namespace moris::gen
      * 0: (-1, -1), 1: (1, -1), 2: (1, 1), 3: (-1, 1). The ADVs are { c_x, c_y, r } per circle.
      *
      * @param aCircleADVs ADVs, 3 per circle
-     * @param aAnalytic Per circle: use_analytic_intersection
+     * @param aAnalytic Per circle: 1 use_analytic_intersection, 2 the same with analytic_intersection_max_iterations = 1 (every root falls back to the linear crossing)
      * @param aCoordinates Global coordinates of nodes 4-7
      * @param aSensitivities Dense dX/dADV ( 2 x 9 ) of nodes 4-7 (only filled if aWithSensitivities)
      */
@@ -498,7 +503,12 @@ namespace moris::gen
             tFieldParameterLists.set( "center_x", tX, tX, tX );
             tFieldParameterLists.set( "center_y", tY, tY, tY );
             tFieldParameterLists.set( "radius", tR, tR, tR );
-            tFieldParameterLists.set( "use_analytic_intersection", aAnalytic( iCircle ) == 1 );
+            tFieldParameterLists.set( "use_analytic_intersection", aAnalytic( iCircle ) >= 1 );
+            if ( aAnalytic( iCircle ) == 2 )
+            {
+                // one root iteration: the edge falls back to the linear crossing
+                tFieldParameterLists.set( "analytic_intersection_max_iterations", 1u );
+            }
         }
 
         Geometry_Engine_Parameters tGeometryEngineParameters;
@@ -594,10 +604,10 @@ namespace moris::gen
 
             Vector< real > tADVs = { -1.2, -1.1, 1.0, -1.5, 0.5, 1.35, 1.2, 1.3, 1.0 };
 
-            // every circle analytic. A linear node on these parents (key off on circle 1, or on all) does not pass: the linear
+            // every circle analytic (1), and every circle analytic with every root falling back (2). A linear node on these parents (key off on circle 1, or on all) does not pass: the linear
             // path takes d phi / d x at a derived parent as the chord slope of its locators, not the exact field gradient
             // (MB-083, a separate defect of the linear path)
-            for ( const Vector< uint >& tAnalytic : { Vector< uint >{ 1, 1, 1 } } )
+            for ( const Vector< uint >& tAnalytic : { Vector< uint >{ 1, 1, 1 }, Vector< uint >{ 2, 2, 2 } } )
             {
                 Vector< Matrix< DDRMat > > tCoordinates;
                 Vector< Matrix< DDRMat > > tAnalyticSensitivities;
@@ -608,7 +618,7 @@ namespace moris::gen
                 for ( uint iNode = 0; iNode < 4; iNode++ )
                 {
                     uint tCircle = tNodeCircle( iNode );
-                    if ( tAnalytic( tCircle ) == 1 )
+                    if ( tAnalytic( tCircle ) == 1 )    // 2: linear fallback, not on the circle
                     {
                         real tDistance = std::abs( std::hypot( tCoordinates( iNode )( 0 ) - tADVs( 3 * tCircle ), tCoordinates( iNode )( 1 ) - tADVs( 3 * tCircle + 1 ) ) - tADVs( 3 * tCircle + 2 ) );
                         CHECK( tDistance < 1e-12 );
@@ -674,7 +684,7 @@ namespace moris::gen
     class NaN_Band_Line : public Line
     {
       public:
-        NaN_Band_Line( real aXCenter, real aYCenter, real aXNormal, real aYNormal, real aHalfWidth )
+        NaN_Band_Line( const ADV& aXCenter, const ADV& aYCenter, const ADV& aXNormal, const ADV& aYNormal, real aHalfWidth )
                 : Line( aXCenter, aYCenter, aXNormal, aYNormal )
                 , mHalfWidth( aHalfWidth )
         {
@@ -833,6 +843,233 @@ namespace moris::gen
                 auto           tGeometry   = std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometryEngineParameters.mGeometries( 0 ) );
                 REQUIRE( tGeometry != nullptr );
                 CHECK( tGeometry->get_number_of_analytic_intersections() >= tStatistics.mNumIntersections );
+                CHECK( tGeometry->get_number_of_analytic_intersection_fallbacks() == 0 );
+
+                delete tMesh;
+            }
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Line field with a flat zero plateau around its zero: phi = v - w sign( v ) for |v| > w, else 0 (v the line field).
+     * A root inside the plateau has d phi / d xi = 0.
+     */
+    class Plateau_Line : public Line
+    {
+      public:
+        Plateau_Line( real aXCenter, real aYCenter, real aXNormal, real aYNormal, real aHalfWidth )
+                : Line( aXCenter, aYCenter, aXNormal, aYNormal )
+                , mHalfWidth( aHalfWidth )
+        {
+        }
+
+        real get_field_value( const Matrix< DDRMat >& aCoordinates ) override
+        {
+            real tValue = Line::get_field_value( aCoordinates );
+            return std::abs( tValue ) <= mHalfWidth ? 0.0 : tValue - std::copysign( mHalfWidth, tValue );
+        }
+
+      private:
+        real mHalfWidth;
+    };
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "Analytic Intersection Fallback Sensitivities", "[gen], [pdv], [intersection], [analytic_intersection]" )
+    {
+        if ( par_size() == 1 )
+        {
+            Derived_Node::clear_override_linear_interpolation();
+
+            SECTION( "Iteration limit reached: linear crossing, and the sensitivities of the linear crossing (central FD)" )
+            {
+                for ( uint iNumDims = 2; iNumDims <= 3; iNumDims++ )
+                {
+                    // one iteration: no edge of the circle / sphere converges
+                    Cut_Statistics tLinear   = cut_round( iNumDims, 4, 0 );
+                    Cut_Statistics tFallback = cut_round( iNumDims, 4, 1, 1 );
+                    REQUIRE( tFallback.mNumIntersections == tLinear.mNumIntersections );
+                    REQUIRE( tFallback.mLocalCoordinates.size() == tLinear.mLocalCoordinates.size() );
+                    for ( uint iCut = 0; iCut < tLinear.mLocalCoordinates.size(); iCut++ )
+                    {
+                        CHECK( tFallback.mLocalCoordinates( iCut ) == tLinear.mLocalCoordinates( iCut ) );
+                    }
+
+                    // ADVs, admit every intersection, FD of the re-queued (again falling back) coordinates
+                    mtk::Interpolation_Mesh*   tMesh                = iNumDims == 2 ? create_simple_mesh( 4, 4 ) : create_cube_mesh( 3 );
+                    Submodule_Parameter_Lists  tFieldParameterLists = create_round_parameters( iNumDims, 1, true, 1 );
+                    Geometry_Engine_Parameters tGeometryEngineParameters;
+                    ADV_Manager                tADVManager;
+                    Design_Factory             tDesignFactory( tFieldParameterLists, tADVManager );
+                    tGeometryEngineParameters.mADVManager = tADVManager;
+                    tGeometryEngineParameters.mGeometries = tDesignFactory.get_geometries();
+                    Geometry_Engine_Test tGeometryEngine( tMesh, tGeometryEngineParameters );
+                    auto                 tGeometry = std::dynamic_pointer_cast< Level_Set_Geometry >( tGeometryEngineParameters.mGeometries( 0 ) );
+                    REQUIRE( tGeometry != nullptr );
+
+                    real tMaxError   = 0.0;
+                    uint tNumChecked = 0;
+                    cut_all_cells( tMesh, tGeometryEngine, true, &tMaxError, &tNumChecked );
+
+                    std::printf( "analytic intersection, %uD iteration-limit fallback: %u intersection nodes, %u of %u analytic roots fell back, "
+                                 "max |sensitivity - FD| / max( 1, |FD| ) = %.2e\n",
+                            iNumDims,
+                            tNumChecked,
+                            tGeometry->get_number_of_analytic_intersection_fallbacks(),
+                            tGeometry->get_number_of_analytic_intersections(),
+                            tMaxError );
+                    CHECK( tNumChecked > 8 );
+                    CHECK( tGeometry->get_number_of_analytic_intersections() > 0 );
+                    CHECK( tGeometry->get_number_of_analytic_intersection_fallbacks() == tGeometry->get_number_of_analytic_intersections() );
+                    CHECK( tMaxError < 1e-6 );
+
+                    delete tMesh;
+                }
+            }
+
+            SECTION( "Field not finite inside the edge: linear crossing, and the sensitivities of the linear crossing (central FD)" )
+            {
+                // line x = 0.3 with all four parameters as ADVs, NaN for |phi| < 0.05
+                mtk::Interpolation_Mesh* tMesh = create_simple_mesh( 1, 1 );
+                ADV_Manager              tADVManager( 4 );
+                Vector< ADV >            tLineADVs = {
+                    tADVManager.create_adv( { 0.3, 0.3, 0.3 } ),
+                    tADVManager.create_adv( { 0.1, 0.1, 0.1 } ),
+                    tADVManager.create_adv( { 1.0, 1.0, 1.0 } ),
+                    tADVManager.create_adv( { 0.2, 0.2, 0.2 } )
+                };
+                Level_Set_Parameters tParameters;
+                tParameters.mUseAnalyticIntersection = true;
+                std::shared_ptr< Level_Set_Geometry > tGeometry = std::make_shared< Level_Set_Geometry >(
+                        std::make_shared< NaN_Band_Line >( tLineADVs( 0 ), tLineADVs( 1 ), tLineADVs( 2 ), tLineADVs( 3 ), 0.05 ), tParameters );
+                Geometry_Engine_Parameters tGeometryEngineParameters;
+                tGeometryEngineParameters.mADVManager = tADVManager;
+                tGeometryEngineParameters.mGeometries = { std::shared_ptr< Geometry >( tGeometry ) };
+                Geometry_Engine_Test tGeometryEngine( tMesh, tGeometryEngineParameters );
+                Node_Manager&        tNodeManager = tGeometryEngine.get_node_manager();
+                REQUIRE( tGeometryEngine.get_advs().size() == 4 );
+
+                Cell_Data tCell      = get_cell_data( tMesh, 0 );
+                uint      tNumEdges  = 0;
+                real      tMaxError  = 0.0;
+                real      tEpsilon   = 1e-6;
+                Matrix< DDRMat > tI;
+                eye( 2, 2, tI );
+                for ( uint iFirst = 0; iFirst < 4; iFirst++ )
+                {
+                    for ( uint iSecond = iFirst + 1; iSecond < 4; iSecond++ )
+                    {
+                        // horizontal edges cross the line
+                        if ( tCell.mCornerXi( iFirst )( 1 ) != tCell.mCornerXi( iSecond )( 1 ) or tCell.mCornerXi( iFirst )( 0 ) == tCell.mCornerXi( iSecond )( 0 ) )
+                        {
+                            continue;
+                        }
+                        uint             tFirstNode  = tCell.mNodeIndices( iFirst );
+                        uint             tSecondNode = tCell.mNodeIndices( iSecond );
+                        Matrix< DDRMat > tFirstXi    = tCell.mCornerXi( iFirst );
+                        Matrix< DDRMat > tSecondXi   = tCell.mCornerXi( iSecond );
+                        uint             tFallbacks  = tGeometry->get_number_of_analytic_intersection_fallbacks();
+                        REQUIRE( tGeometryEngine.queue_intersection( tFirstNode, tSecondNode, tFirstXi, tSecondXi, tCell.mNodeIndices, mtk::Geometry_Type::QUAD, mtk::Interpolation_Order::LINEAR ) );
+                        CHECK( tGeometry->get_number_of_analytic_intersection_fallbacks() == tFallbacks + 1 );
+
+                        uint tIntersectionIndex = tNodeManager.get_total_number_of_nodes();
+                        tGeometryEngine.admit_queued_intersection();
+                        const Intersection_Node_Analytic* tNode = dynamic_cast< const Intersection_Node_Analytic* >( &static_cast< const Node_Manager& >( tNodeManager ).get_derived_node( tIntersectionIndex ) );
+                        REQUIRE( tNode != nullptr );
+                        CHECK( tNode->is_linear_fallback() );
+
+                        Matrix< DDRMat > tAnalytic( 0, 0 );
+                        tNodeManager.append_dcoordinate_dadv_from_derived_node( tIntersectionIndex, tAnalytic, tI );
+                        Vector< sint > tADVIDs = tNodeManager.get_coordinate_determining_adv_ids_from_derived_node( tIntersectionIndex );
+                        REQUIRE( tAnalytic.n_cols() == tADVIDs.size() );
+                        Matrix< DDRMat > tPerADV( 2, 4, 0.0 );
+                        for ( uint iColumn = 0; iColumn < tADVIDs.size(); iColumn++ )
+                        {
+                            REQUIRE( tADVIDs( iColumn ) >= 0 );
+                            REQUIRE( tADVIDs( iColumn ) < 4 );
+                            tPerADV( 0, tADVIDs( iColumn ) ) += tAnalytic( 0, iColumn );
+                            tPerADV( 1, tADVIDs( iColumn ) ) += tAnalytic( 1, iColumn );
+                        }
+
+                        Vector< real > tNominal = tGeometryEngine.get_advs();
+                        real           tSum     = 0.0;
+                        for ( uint iADV = 0; iADV < 4; iADV++ )
+                        {
+                            Vector< real > tPerturbed = tNominal;
+                            tPerturbed( iADV ) += tEpsilon;
+                            tGeometryEngine.set_advs( tPerturbed );
+                            tGeometryEngine.queue_intersection( tFirstNode, tSecondNode, tFirstXi, tSecondXi, tCell.mNodeIndices, mtk::Geometry_Type::QUAD, mtk::Interpolation_Order::LINEAR );
+                            Matrix< DDRMat > tPositive = tGeometryEngine.get_queued_intersection_global_coordinates();
+                            tPerturbed( iADV ) -= 2.0 * tEpsilon;
+                            tGeometryEngine.set_advs( tPerturbed );
+                            tGeometryEngine.queue_intersection( tFirstNode, tSecondNode, tFirstXi, tSecondXi, tCell.mNodeIndices, mtk::Geometry_Type::QUAD, mtk::Interpolation_Order::LINEAR );
+                            Matrix< DDRMat > tNegative = tGeometryEngine.get_queued_intersection_global_coordinates();
+                            tGeometryEngine.set_advs( tNominal );
+                            for ( uint iDim = 0; iDim < 2; iDim++ )
+                            {
+                                real tFD    = ( tPositive( iDim ) - tNegative( iDim ) ) / ( 2.0 * tEpsilon );
+                                real tError = std::abs( tPerADV( iDim, iADV ) - tFD ) / std::max( 1.0, std::abs( tFD ) );
+                                tMaxError   = std::max( tMaxError, tError );
+                                tSum += std::abs( tFD );
+                                INFO( "edge " << tNumEdges << ", dimension " << iDim << ", ADV " << iADV << ": sensitivity " << tPerADV( iDim, iADV ) << ", finite difference " << tFD );
+                                CHECK( tError < 1e-6 );
+                            }
+                        }
+                        CHECK( tSum > 1e-3 );
+                        tNumEdges++;
+                    }
+                }
+                std::printf( "analytic intersection, NaN-band fallback: %u edges, max |sensitivity - FD| / max( 1, |FD| ) = %.2e\n", tNumEdges, tMaxError );
+                CHECK( tNumEdges == 2 );
+
+                delete tMesh;
+            }
+
+            SECTION( "d phi / d xi = 0 at the root (flat plateau): the coordinate exists, the sensitivity request errors" )
+            {
+                // line x = 0.3, flat (phi = 0) for |x - 0.3| <= 0.1
+                mtk::Interpolation_Mesh* tMesh = create_simple_mesh( 1, 1 );
+                Level_Set_Parameters     tParameters;
+                tParameters.mUseAnalyticIntersection = true;
+                std::shared_ptr< Level_Set_Geometry > tGeometry =
+                        std::make_shared< Level_Set_Geometry >( std::make_shared< Plateau_Line >( 0.3, 0.0, 1.0, 0.0, 0.1 ), tParameters );
+                Geometry_Engine_Parameters tGeometryEngineParameters;
+                tGeometryEngineParameters.mGeometries = { std::shared_ptr< Geometry >( tGeometry ) };
+                Geometry_Engine_Test tGeometryEngine( tMesh, tGeometryEngineParameters );
+                Node_Manager&        tNodeManager = tGeometryEngine.get_node_manager();
+
+                Cell_Data tCell     = get_cell_data( tMesh, 0 );
+                uint      tNumEdges = 0;
+                Matrix< DDRMat > tI;
+                eye( 2, 2, tI );
+                for ( uint iFirst = 0; iFirst < 4; iFirst++ )
+                {
+                    for ( uint iSecond = iFirst + 1; iSecond < 4; iSecond++ )
+                    {
+                        if ( tCell.mCornerXi( iFirst )( 1 ) != tCell.mCornerXi( iSecond )( 1 ) or tCell.mCornerXi( iFirst )( 0 ) == tCell.mCornerXi( iSecond )( 0 ) )
+                        {
+                            continue;
+                        }
+                        REQUIRE( tGeometryEngine.queue_intersection( tCell.mNodeIndices( iFirst ), tCell.mNodeIndices( iSecond ),
+                                tCell.mCornerXi( iFirst ), tCell.mCornerXi( iSecond ), tCell.mNodeIndices, mtk::Geometry_Type::QUAD, mtk::Interpolation_Order::LINEAR ) );
+                        Matrix< DDRMat > tX = tGeometryEngine.get_queued_intersection_global_coordinates();
+                        CHECK( std::abs( tX( 0 ) - 0.3 ) <= 0.1 );
+
+                        uint tIntersectionIndex = tNodeManager.get_total_number_of_nodes();
+                        tGeometryEngine.admit_queued_intersection();
+                        const Intersection_Node_Analytic* tNode = dynamic_cast< const Intersection_Node_Analytic* >( &static_cast< const Node_Manager& >( tNodeManager ).get_derived_node( tIntersectionIndex ) );
+                        REQUIRE( tNode != nullptr );
+                        CHECK( not tNode->is_linear_fallback() );
+                        Matrix< DDRMat > tSensitivities( 0, 0 );
+                        CHECK_THROWS( tNode->append_dcoordinate_dadv( tSensitivities, tI ) );
+                        tNumEdges++;
+                    }
+                }
+                CHECK( tNumEdges == 2 );
                 CHECK( tGeometry->get_number_of_analytic_intersection_fallbacks() == 0 );
 
                 delete tMesh;

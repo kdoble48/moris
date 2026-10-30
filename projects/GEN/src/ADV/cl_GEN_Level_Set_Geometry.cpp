@@ -36,6 +36,7 @@ namespace moris::gen
             , mIsocontourTolerance( aParameterList.get< real >( "isocontour_tolerance" ) )
             , mIntersectionTolerance( aParameterList.get< real >( "intersection_tolerance" ) )
             , mUseAnalyticIntersection( aParameterList.exists( "use_analytic_intersection" ) and aParameterList.get< bool >( "use_analytic_intersection" ) )
+            , mAnalyticIntersectionMaxIterations( aParameterList.exists( "analytic_intersection_max_iterations" ) ? aParameterList.get< uint >( "analytic_intersection_max_iterations" ) : 200 )
     {
     }
 
@@ -590,6 +591,9 @@ namespace moris::gen
         real tFirstResidual  = this->get_field_value( aFirstParentNode.get_index(), tFirstX ) - tThreshold;
         real tSecondResidual = this->get_field_value( aSecondParentNode.get_index(), tSecondX ) - tThreshold;
 
+        // reset the fallback flag; Intersection_Node_Analytic reads it right after its local coordinate is computed
+        mLastAnalyticIntersectionFellBack = false;
+
         // no strict sign change (an end on the isocontour, or no crossing): the linear path decides, so the result is
         // the one without the key (-1 / +1 for an end on the isocontour, outside [-1, 1] for no crossing)
         if ( not( tFirstResidual * tSecondResidual < 0.0 ) )
@@ -612,7 +616,7 @@ namespace moris::gen
             tXi = 0.0;
         }
 
-        const uint tMaxIterations     = 200;      // bisection alone reaches the bracket tolerance in 45 steps
+        const uint tMaxIterations     = mParameters.mAnalyticIntersectionMaxIterations;    // default 200; bisection alone reaches the bracket tolerance in 45 steps
         const real tResidualTolerance = 1e-14;    // on the field value
         const real tBracketTolerance  = 1e-13;    // on the edge coordinate
 
@@ -674,6 +678,7 @@ namespace moris::gen
             const char*        aReason )
     {
         mNumAnalyticIntersectionFallbacks++;
+        mLastAnalyticIntersectionFellBack = true;
 
         // warn for the first few, then count only (the count is returned by get_number_of_analytic_intersection_fallbacks)
         const uint tMaxWarnings = 10;
@@ -690,6 +695,13 @@ namespace moris::gen
         }
 
         return this->compute_intersection_local_coordinate_linear( aFirstParentNode, aSecondParentNode );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Level_Set_Geometry::last_analytic_intersection_fell_back() const
+    {
+        return mLastAnalyticIntersectionFellBack;
     }
 
     //--------------------------------------------------------------------------------------------------------------

@@ -15,6 +15,7 @@
 #include "fn_norm.hpp"
 #include "fn_trans.hpp"
 #include "fn_dot.hpp"
+#include "fn_stringify_matrix.hpp"
 
 namespace moris::gen
 {
@@ -36,6 +37,7 @@ namespace moris::gen
                     aBackgroundGeometryType,
                     aBackgroundInterpolationOrder,
                     aInterfaceGeometry )
+            , mLinearFallback( aInterfaceGeometry.last_analytic_intersection_fell_back() )
     {
     }
 
@@ -61,23 +63,42 @@ namespace moris::gen
 
         real tDrDxi = 0.5 * dot( aGradient, tEdge );
 
-        // A root inside a strict sign-change bracket has dr/dxi = 0 only where the field touches the isocontour
-        // tangentially at an inflection: take the chord slope 0.5 ( r_2 - r_1 ) (nonzero by the sign change), as the
-        // linear path does, instead of dividing by zero
-        if ( std::abs( tDrDxi ) <= MORIS_REAL_MIN )
-        {
-            tDrDxi = 0.5 * ( mInterfaceGeometry.get_field_value( tSecondParentNode.get_index(), tSecondX )
-                             - mInterfaceGeometry.get_field_value( tFirstParentNode.get_index(), tFirstX ) );
-        }
+        // dr/dxi = 0 (the field touches the isocontour tangentially along the edge, or is flat there): the root has no
+        // derivative with respect to the ADVs or the parent coordinates, so no sensitivity is returned
+        MORIS_ERROR( std::isfinite( tDrDxi ) and std::abs( tDrDxi ) > MORIS_REAL_MIN,
+                "Intersection_Node_Analytic: d phi / d xi = %e at the analytic intersection %s on the edge %s - %s; the field is "
+                "flat or tangent to the edge there and the intersection has no coordinate sensitivity.",
+                tDrDxi,
+                ios::stringify_log( this->get_global_coordinates() ).c_str(),
+                ios::stringify_log( tFirstX ).c_str(),
+                ios::stringify_log( tSecondX ).c_str() );
         return tDrDxi;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Matrix< DDRMat > Intersection_Node_Analytic::get_parent_field_gradient( const Basis_Node& aParentNode ) const
+    {
+        // exact spatial gradient of the field at the parent (central difference, step 1e-6 of the edge length); the
+        // parent value enters the linear crossing exactly, so the chord slope of the parent's own locators would not do
+        // (MB-083)
+        Matrix< DDRMat > tEdge     = this->get_second_parent_node().get_global_coordinates() - this->get_first_parent_node().get_global_coordinates();
+        Matrix< DDRMat > tGradient = mInterfaceGeometry.get_dfield_dcoordinates_at_point( aParentNode.get_global_coordinates(), 1e-6 * norm( tEdge ) );
+        for ( uint iDim = 0; iDim < tGradient.numel(); iDim++ )
+        {
+            MORIS_ERROR( std::isfinite( tGradient( iDim ) ),
+                    "Intersection_Node_Analytic: the field gradient at the parent %s of a linear-fallback intersection is not finite.",
+                    ios::stringify_log( aParentNode.get_global_coordinates() ).c_str() );
+        }
+        return tGradient;
     }
 
     //--------------------------------------------------------------------------------------------------------------
 
     real Intersection_Node_Analytic::get_dxi_dfield_from_ancestor( uint aAncestorIndex ) const
     {
-        // Not used: append_dcoordinate_dadv() is overridden and takes the field sensitivities at the intersection point,
-        // not at the parents. Linear-interpolation value kept to satisfy the interface.
+        // d xi / d phi_i of the linear crossing xi = ( 2 c - phi_1 - phi_2 ) / ( phi_2 - phi_1 ), as Intersection_Node_Linear;
+        // used for the linear-fallback sensitivities (the analytic ones take the field sensitivities at x*)
         real tThreshold = mInterfaceGeometry.get_isocontour_threshold();
         real tPhi0      = mInterfaceGeometry.get_field_value( this->get_first_parent_node().get_index(), this->get_first_parent_node().get_global_coordinates() );
         real tPhi1      = mInterfaceGeometry.get_field_value( this->get_second_parent_node().get_index(), this->get_second_parent_node().get_global_coordinates() );
@@ -88,6 +109,10 @@ namespace moris::gen
 
     Matrix< DDRMat > Intersection_Node_Analytic::get_dxi_dcoordinate_first_parent() const
     {
+        if ( mLinearFallback )
+        {
+            return this->get_dxi_dfield_from_ancestor( 0 ) * this->get_parent_field_gradient( this->get_first_parent_node() );
+        }
         Matrix< DDRMat > tGradient;
         real             tDrDxi = this->get_dresidual_dxi( tGradient );
         return ( -0.5 * ( 1.0 - this->get_local_coordinate() ) / tDrDxi ) * tGradient;
@@ -97,6 +122,10 @@ namespace moris::gen
 
     Matrix< DDRMat > Intersection_Node_Analytic::get_dxi_dcoordinate_second_parent() const
     {
+        if ( mLinearFallback )
+        {
+            return this->get_dxi_dfield_from_ancestor( 1 ) * this->get_parent_field_gradient( this->get_second_parent_node() );
+        }
         Matrix< DDRMat > tGradient;
         real             tDrDxi = this->get_dresidual_dxi( tGradient );
         return ( -0.5 * ( 1.0 + this->get_local_coordinate() ) / tDrDxi ) * tGradient;
@@ -108,6 +137,14 @@ namespace moris::gen
             Matrix< DDRMat >&       aCoordinateSensitivities,
             const Matrix< DDRMat >& aSensitivityFactor ) const
     {
+        // linear fallback: the coordinate is the linear crossing of the exact end values; its sensitivities are the
+        // linear node's, through the field sensitivities at the parents and the exact field gradient at the parents
+        if ( mLinearFallback )
+        {
+            Intersection_Node_Level_Set::append_dcoordinate_dadv( aCoordinateSensitivities, aSensitivityFactor );
+            return;
+        }
+
         const Basis_Node& tFirstParentNode  = this->get_first_parent_node();
         const Basis_Node& tSecondParentNode = this->get_second_parent_node();
         real              tXi               = this->get_local_coordinate();
@@ -156,6 +193,11 @@ namespace moris::gen
 
     Vector< sint > Intersection_Node_Analytic::get_coordinate_determining_adv_ids() const
     {
+        if ( mLinearFallback )
+        {
+            return Intersection_Node_Level_Set::get_coordinate_determining_adv_ids();
+        }
+
         // same order as append_dcoordinate_dadv: the field ADVs at the intersection point, then the parents
         Vector< sint > tIDs = mInterfaceGeometry.get_determining_adv_ids_at_point( this->get_global_coordinates() );
 

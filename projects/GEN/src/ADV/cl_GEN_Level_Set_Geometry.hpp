@@ -26,6 +26,7 @@ namespace moris::gen
         real mIsocontourTolerance;      // Interface tolerance based on geometry value
         real mIntersectionTolerance;    // Interface tolerance based on intersecction distance
         bool mUseAnalyticIntersection;  // Analytic fields: intersections on the field itself (bracketed root along the parent edge)
+        uint mAnalyticIntersectionMaxIterations;    // Iteration limit of that root; beyond it the edge takes the linear crossing
 
         /**
          * Constructor with a given parameter list
@@ -42,6 +43,7 @@ namespace moris::gen
         Level_Set_Parameters mParameters;
         uint                 mNumAnalyticIntersections         = 0;    // edges cut by the analytic root (use_analytic_intersection)
         uint                 mNumAnalyticIntersectionFallbacks = 0;    // of those, edges that fell back to the linear crossing
+        bool                 mLastAnalyticIntersectionFellBack = false;    // whether the last analytic intersection fell back
 
       public:
         /**
@@ -93,6 +95,13 @@ namespace moris::gen
          * fell back to the linear crossing (field not finite inside the edge, or no convergence). Cumulative.
          */
         uint get_number_of_analytic_intersections() const;
+
+        /**
+         * Whether the last call of the analytic root (compute_intersection_local_coordinate with
+         * use_analytic_intersection) fell back to the linear crossing. Intersection_Node_Analytic reads it in its
+         * constructor, right after its local coordinate was computed, and then uses the linear-crossing sensitivities.
+         */
+        bool last_analytic_intersection_fell_back() const;
         uint get_number_of_analytic_intersection_fallbacks() const;
 
         /**

@@ -259,6 +259,7 @@ namespace moris::prm
         tLevelSetParameterList.set( "geometry_type", "level_set" );                // Sets the geometry type to level set
         tLevelSetParameterList.insert( "isocontour_threshold", 0.0 );              // Level set isocontour level
         tLevelSetParameterList.insert( "use_analytic_intersection", false );       // Analytic fields only: edge intersections by a bracketed root of the analytic field itself (not the linear interpolant of the end values)
+        tLevelSetParameterList.insert( "analytic_intersection_max_iterations", 200u );    // Iteration limit of that root (Illinois); an edge that does not converge takes the linear crossing
         tLevelSetParameterList.insert( "isocontour_tolerance", 1e-12 );            // Interface tolerance based on geometry value
         tLevelSetParameterList.insert( "intersection_tolerance", 1e-12 );          // Interface tolerance based on intersection distance
         tLevelSetParameterList.insert( "adv_filter_radius", 0.0 );                 // Kreissl-Maute linear filter (SMO 46:311-326, Eq. 12) of the B-spline coefficients (ADVs): radius in physical units, 0 = off (serial only)
