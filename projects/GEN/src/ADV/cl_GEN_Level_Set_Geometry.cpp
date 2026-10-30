@@ -13,6 +13,7 @@
 #include <utility>
 #include "cl_GEN_Intersection_Node_Linear.hpp"
 #include "cl_GEN_Intersection_Node_Bilinear.hpp"
+#include "cl_GEN_Intersection_Node_Analytic.hpp"
 #include "cl_GEN_Derived_Node.hpp"
 #include "cl_GEN_Parent_Node.hpp"
 #include "cl_GEN_Basis_Node.hpp"
@@ -32,6 +33,7 @@ namespace moris::gen
             , mIsocontourThreshold( aParameterList.get< real >( "isocontour_threshold" ) )
             , mIsocontourTolerance( aParameterList.get< real >( "isocontour_tolerance" ) )
             , mIntersectionTolerance( aParameterList.get< real >( "intersection_tolerance" ) )
+            , mUseAnalyticIntersection( aParameterList.exists( "use_analytic_intersection" ) and aParameterList.get< bool >( "use_analytic_intersection" ) )
     {
     }
 
@@ -45,6 +47,56 @@ namespace moris::gen
             , Design_Field( std::move( aField ), aParameters, aNodeManager )
             , mParameters( aParameters )
     {
+        MORIS_ERROR( not mParameters.mUseAnalyticIntersection or ( mField->has_exact_derived_node_values() and not this->use_multilinear_interpolation() ),
+                "Level_Set_Geometry: use_analytic_intersection needs an analytic field (exact derived-node values) and "
+                "excludes use_multilinear_interpolation / use_cell_order_intersection." );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Level_Set_Geometry::use_analytic_intersection() const
+    {
+        return mParameters.mUseAnalyticIntersection;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Level_Set_Geometry::get_field_value_at_point_exact( const Matrix< DDRMat >& aCoordinates ) const
+    {
+        return mField->get_field_value_at_point( aCoordinates );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Matrix< DDRMat > Level_Set_Geometry::get_dfield_dadvs_at_point( const Matrix< DDRMat >& aCoordinates ) const
+    {
+        // analytic fields ignore the node index and evaluate at the coordinates; copy (the field reuses its storage)
+        Matrix< DDRMat > tSensitivities = mField->get_dfield_dadvs( 0, aCoordinates );
+        return tSensitivities;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< sint > Level_Set_Geometry::get_determining_adv_ids_at_point( const Matrix< DDRMat >& aCoordinates ) const
+    {
+        return mField->get_determining_adv_ids( 0, aCoordinates );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Matrix< DDRMat > Level_Set_Geometry::get_dfield_dcoordinates_at_point( const Matrix< DDRMat >& aCoordinates, real aStep ) const
+    {
+        uint             tNumDims = aCoordinates.numel();
+        Matrix< DDRMat > tGradient( 1, tNumDims, 0.0 );
+        for ( uint iDim = 0; iDim < tNumDims; ++iDim )
+        {
+            Matrix< DDRMat > tPlus  = aCoordinates;
+            Matrix< DDRMat > tMinus = aCoordinates;
+            tPlus( iDim ) += aStep;
+            tMinus( iDim ) -= aStep;
+            tGradient( iDim ) = ( mField->get_field_value_at_point( tPlus ) - mField->get_field_value_at_point( tMinus ) ) / ( 2.0 * aStep );
+        }
+        return tGradient;
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -173,7 +225,19 @@ namespace moris::gen
             mtk::Geometry_Type                aBackgroundGeometryType,
             mtk::Interpolation_Order          aBackgroundInterpolationOrder )
     {
-        if ( this->use_multilinear_interpolation() )
+        if ( mParameters.mUseAnalyticIntersection )
+        {
+            // Create intersection node on the analytic field itself
+            return new Intersection_Node_Analytic(
+                    aNodeIndex,
+                    aBackgroundNodes,
+                    aFirstParentNode,
+                    aSecondParentNode,
+                    aBackgroundGeometryType,
+                    aBackgroundInterpolationOrder,
+                    *this );
+        }
+        else if ( this->use_multilinear_interpolation() )
         {
             // Create multilinear intersection node
             return new Intersection_Node_Bilinear(
@@ -206,7 +270,11 @@ namespace moris::gen
             const Parent_Node&                aFirstParentNode,
             const Parent_Node&                aSecondParentNode )
     {
-        if ( this->use_cell_order_intersection() )
+        if ( mParameters.mUseAnalyticIntersection )
+        {
+            return this->compute_intersection_local_coordinate_analytic( aFirstParentNode, aSecondParentNode );
+        }
+        else if ( this->use_cell_order_intersection() )
         {
             return this->compute_intersection_local_coordinate_cell_order( aBackgroundNodes, aFirstParentNode, aSecondParentNode );
         }
@@ -495,6 +563,89 @@ namespace moris::gen
 
             return tLocalCoordinates( 0 );
         }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Level_Set_Geometry::compute_intersection_local_coordinate_analytic(
+            const Parent_Node& aFirstParentNode,
+            const Parent_Node& aSecondParentNode )
+    {
+        const Matrix< DDRMat >& tFirstX  = aFirstParentNode.get_global_coordinates();
+        const Matrix< DDRMat >& tSecondX = aSecondParentNode.get_global_coordinates();
+        real tThreshold                  = this->get_isocontour_threshold();
+
+        // residuals at the parents (exact analytic values, as used for the geometric regions)
+        real tFirstResidual  = this->get_field_value( aFirstParentNode.get_index(), tFirstX ) - tThreshold;
+        real tSecondResidual = this->get_field_value( aSecondParentNode.get_index(), tSecondX ) - tThreshold;
+
+        if ( tFirstResidual == 0.0 )
+        {
+            return -1.0;
+        }
+        if ( tSecondResidual == 0.0 )
+        {
+            return 1.0;
+        }
+
+        // no sign change (or equal values): same result as the linear path
+        if ( tFirstResidual * tSecondResidual > 0.0 or std::abs( tFirstResidual - tSecondResidual ) < MORIS_REAL_EPS )
+        {
+            return ( tFirstResidual + tSecondResidual ) / ( tFirstResidual - tSecondResidual );
+        }
+
+        // Illinois (modified regula falsi) on the bracket [-1, 1] in the edge coordinate xi,
+        // x( xi ) = 0.5 ( 1 - xi ) x_1 + 0.5 ( 1 + xi ) x_2
+        real tLower         = -1.0;
+        real tUpper         = 1.0;
+        real tLowerResidual = tFirstResidual;
+        real tUpperResidual = tSecondResidual;
+        int  tLastSide      = 0;
+        real tXi            = ( tFirstResidual + tSecondResidual ) / ( tFirstResidual - tSecondResidual );
+
+        const uint tMaxIterations     = 200;
+        const real tResidualTolerance = 1e-14;
+        const real tBracketTolerance  = 1e-13;
+
+        for ( uint iIteration = 0; iIteration < tMaxIterations; ++iIteration )
+        {
+            Matrix< DDRMat > tX = 0.5 * ( 1.0 - tXi ) * tFirstX + 0.5 * ( 1.0 + tXi ) * tSecondX;
+            real tResidual      = mField->get_field_value_at_point( tX ) - tThreshold;
+
+            if ( std::abs( tResidual ) < tResidualTolerance or tUpper - tLower < tBracketTolerance )
+            {
+                return tXi;
+            }
+
+            if ( ( tResidual > 0.0 ) == ( tUpperResidual > 0.0 ) )
+            {
+                tUpper         = tXi;
+                tUpperResidual = tResidual;
+                if ( tLastSide == -1 )
+                {
+                    tLowerResidual *= 0.5;
+                }
+                tLastSide = -1;
+            }
+            else
+            {
+                tLower         = tXi;
+                tLowerResidual = tResidual;
+                if ( tLastSide == 1 )
+                {
+                    tUpperResidual *= 0.5;
+                }
+                tLastSide = 1;
+            }
+
+            tXi = ( tLower * tUpperResidual - tUpper * tLowerResidual ) / ( tUpperResidual - tLowerResidual );
+            if ( not( tXi > tLower and tXi < tUpper ) )
+            {
+                tXi = 0.5 * ( tLower + tUpper );
+            }
+        }
+
+        return tXi;
     }
 
     //--------------------------------------------------------------------------------------------------------------

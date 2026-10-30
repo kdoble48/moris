@@ -25,6 +25,7 @@ namespace moris::gen
         real mIsocontourThreshold;      // Level set isocontour level
         real mIsocontourTolerance;      // Interface tolerance based on geometry value
         real mIntersectionTolerance;    // Interface tolerance based on intersecction distance
+        bool mUseAnalyticIntersection;  // Analytic fields: intersections on the field itself (bracketed root along the parent edge)
 
         /**
          * Constructor with a given parameter list
@@ -66,6 +67,24 @@ namespace moris::gen
          * @return the isocontour level that determines the geometry interface
          */
         real get_isocontour_threshold() const;
+
+        /**
+         * Whether edge intersections are found on the analytic field itself (use_analytic_intersection): a bracketed
+         * root of phi( x( xi ) ) - threshold along the parent edge, instead of the linear interpolant of the end values.
+         * Only for fields with exact derived-node values (analytic / user-defined fields).
+         *
+         * @return Analytic intersection flag
+         */
+        bool use_analytic_intersection() const;
+
+        /**
+         * Field value, ADV sensitivities, determining ADV IDs and spatial gradient (central difference) of the
+         * analytic field at an arbitrary point (used by Intersection_Node_Analytic).
+         */
+        real             get_field_value_at_point_exact( const Matrix< DDRMat >& aCoordinates ) const;
+        Matrix< DDRMat > get_dfield_dadvs_at_point( const Matrix< DDRMat >& aCoordinates ) const;
+        Vector< sint >   get_determining_adv_ids_at_point( const Matrix< DDRMat >& aCoordinates ) const;
+        Matrix< DDRMat > get_dfield_dcoordinates_at_point( const Matrix< DDRMat >& aCoordinates, real aStep ) const;
 
         /**
          * Gets if this geometry depends on ADVs.
@@ -307,6 +326,10 @@ namespace moris::gen
          * @param aSecondParentNode Node marking the ending point of the intersection edge
          * @return Parent edge local coordinate, between -1 and 1 (MORIS_REAL_MAX if the edge is not intersected)
          */
+        real compute_intersection_local_coordinate_analytic(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode );
+
         real compute_intersection_local_coordinate_cell_order(
                 const Vector< Background_Node* >& aBackgroundNodes,
                 const Parent_Node&                aFirstParentNode,
