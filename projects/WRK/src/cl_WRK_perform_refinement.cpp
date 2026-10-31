@@ -1009,6 +1009,8 @@ namespace moris::wrk
             uint tNumBelow = sum_all( uint( tBelow.size() ) );
             if ( tNumBelow == 0 )
             {
+                MORIS_LOG_INFO( "GEN refinement: %u cells that XTK will see as cut, all on level %d (%u geometries tested).",
+                        sum_all( uint( tCutCells.size() ) ), tMaxLevel, uint( tFields.size() ) );
                 return;
             }
 

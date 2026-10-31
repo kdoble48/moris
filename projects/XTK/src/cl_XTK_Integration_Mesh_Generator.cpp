@@ -551,6 +551,25 @@ namespace moris::xtk
 
         // without intersected cells on any processor the minimum stays above the maximum and the check passes
         aCutIntegrationMesh->mSameLevelChildMeshes = tGlobalMaxLevel <= tGlobalMinLevel;
+
+        if ( not aCutIntegrationMesh->mSameLevelChildMeshes )
+        {
+            // name the coarsest cut cell, so that the mismatch can be traced
+            uint tNumBelow = 0;
+            moris_index tExample = -1;
+            for ( moris_index iBgCellIndex : aMeshGenerationData.mAllIntersectedBgCellInds )
+            {
+                if ( moris_index( aBackgroundMesh->get_mtk_cell( iBgCellIndex ).get_level() ) < tGlobalMaxLevel )
+                {
+                    tNumBelow++;
+                    tExample = iBgCellIndex;
+                }
+            }
+            Matrix< DDRMat > tCoords = tExample >= 0 ? aBackgroundMesh->get_mtk_cell( tExample ).get_vertex_coords() : Matrix< DDRMat >( 1, 3, 0.0 );
+            MORIS_LOG_INFO( "XTK - cut cells on refinement levels %d to %d; %u cells below level %d, e.g. cell %d at (%g, %g, %g)",
+                    tGlobalMinLevel, tGlobalMaxLevel, tNumBelow, tGlobalMaxLevel, tExample, tCoords( 0, 0 ), tCoords( 0, 1 ),
+                    tCoords.n_cols() > 2 ? tCoords( 0, 2 ) : 0.0 );
+        }
     }
 
     // ----------------------------------------------------------------------------------
