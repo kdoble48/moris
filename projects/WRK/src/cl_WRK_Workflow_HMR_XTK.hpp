@@ -90,6 +90,28 @@ namespace moris
              */
             void check_additive_discretization_compatibility();
 
+            /**
+             * Whether GEN refines the decomposition mesh (any geometry with number_of_refinements > 0). Then a design
+             * whose interface leaves the refined band can be meshed again by redoing the GEN refinement on the current
+             * ADVs (refine_hmr_on_current_design()), without a remeshing performer.
+             */
+            bool gen_refines_mesh();
+
+            /**
+             * Builds a new HMR mesh from the HMR parameter list (uniform initial refinement, then the GEN-driven
+             * refinement, incl. the MB-084 sub-cell feature refinement, on GEN's CURRENT ADVs) and replaces the HMR
+             * performer and the HMR mesh manager with it. Used when the design moved its interface out of the band
+             * refined for an earlier design, and no remeshing performer is set up.
+             */
+            void refine_hmr_on_current_design();
+
+            /**
+             * MB-086: with an OPT restart file, gives GEN the file's primitive ADVs before the initial GEN-driven
+             * refinement, so the initial mesh is refined around the restart design and not the deck's seed.
+             * No-op without a restart file, without GEN refinement, or when the ADVs are distributed already.
+             */
+            void apply_restart_advs_before_refinement();
+
           public:
             //------------------------------------------------------------------------------
             /**

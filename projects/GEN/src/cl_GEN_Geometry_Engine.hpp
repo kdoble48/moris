@@ -149,6 +149,26 @@ namespace moris::gen
         Vector< real >& get_advs();
 
         /**
+         * Replaces the initial values of the primitive ADVs (the deck's design variables) before the ADVs are
+         * distributed, e.g. with the ADVs of an OPT restart file, so that a GEN-driven refinement of the initial mesh
+         * sees the restart design (MB-086). Only valid before distribute_advs(); afterwards use set_advs().
+         *
+         * @param aADVs new values, one per primitive ADV
+         * @return largest absolute change of a primitive ADV
+         */
+        real set_initial_primitive_advs( const Vector< real >& aADVs );
+
+        /**
+         * Number of primitive ADVs (the deck's design variables, not tied to a mesh)
+         */
+        uint get_num_primitive_advs() const;
+
+        /**
+         * Whether the ADVs have been distributed (distribute_advs() ran at least once)
+         */
+        bool advs_distributed() const;
+
+        /**
          * Whether any design filters its B-spline coefficients (adv_filter_radius > 0). With a filter, set_advs() and
          * get_advs() exchange the optimizer's variables psi, the fields use F * psi, and get_dcriteria_dadv() returns
          * F^T times the coefficient sensitivities.

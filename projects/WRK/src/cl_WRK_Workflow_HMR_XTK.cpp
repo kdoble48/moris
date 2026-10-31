@@ -32,6 +32,7 @@
 #include "cl_MIG.hpp"
 
 #include "cl_WRK_Reinitialize_Performer.hpp"
+#include "HDF5_Tools.hpp"
 
 namespace moris::wrk
 {
@@ -102,6 +103,104 @@ namespace moris::wrk
 
         // Additive discretization (field + B-spline correction) cannot be remapped by remeshing or reinitialization
         this->check_additive_discretization_compatibility();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    Workflow_HMR_XTK::gen_refines_mesh()
+    {
+        std::shared_ptr< gen::Geometry_Engine > tGEN = mPerformerManager->mGENPerformer( 0 );
+        for ( uint iField = 0; iField < tGEN->get_num_refinement_fields(); iField++ )
+        {
+            for ( uint iNum : tGEN->get_num_refinements( iField ) )
+            {
+                if ( iNum > 0 )
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Workflow_HMR_XTK::refine_hmr_on_current_design()
+    {
+        Tracer tTracer( "WRK", "HMR-XTK Workflow", "Rebuild HMR with GEN refinement on current ADVs" );
+
+        // a new background mesh from the parameter list, so that cells refined for the earlier design are coarse again
+        Module_Parameter_Lists tHMRParameterList = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::HMR );
+        mPerformerManager->mHMRPerformer( 0 ) = std::make_shared< hmr::HMR >( tHMRParameterList, mPerformerManager->mLibrary );
+        mPerformerManager->mMTKPerformer( 0 ) = std::make_shared< mtk::Mesh_Manager >();
+        mPerformerManager->mHMRPerformer( 0 )->set_performer( mPerformerManager->mMTKPerformer( 0 ) );
+
+        // uniform initial refinement, then the GEN-driven refinement with GEN's current ADVs
+        mPerformerManager->mHMRPerformer( 0 )->perform_initial_refinement();
+
+        Refinement_Mini_Performer tRefinementPerformer;
+        std::shared_ptr< Performer > tGenInterfacePerformer = std::make_shared< wrk::Gen_Performer >( mPerformerManager->mGENPerformer( 0 ) );
+        tRefinementPerformer.perform_refinement_old( mPerformerManager->mHMRPerformer( 0 ), { tGenInterfacePerformer } );
+
+        mPerformerManager->mHMRPerformer( 0 )->perform();
+
+        // the MDL fields belong to the replaced mesh
+        mMDLFieldsOnCurrentMesh = false;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Workflow_HMR_XTK::apply_restart_advs_before_refinement()
+    {
+        std::shared_ptr< gen::Geometry_Engine > tGEN = mPerformerManager->mGENPerformer( 0 );
+        if ( tGEN->advs_distributed() or tGEN->get_num_primitive_advs() == 0 or not this->gen_refines_mesh() )
+        {
+            return;
+        }
+
+        Module_Parameter_Lists tOPTParameterList = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::OPT );
+        if ( tOPTParameterList.size() == 0 or tOPTParameterList( 0 ).size() == 0
+                or not tOPTParameterList( 0 )( 0 ).get< bool >( "is_optimization_problem" ) )
+        {
+            return;
+        }
+        std::string tRestartFile = tOPTParameterList( 0 )( 0 ).get< std::string >( "restart_file" );
+        if ( tRestartFile.empty() )
+        {
+            return;
+        }
+
+        // every rank reads the file (read only, no parallel extension), as GEN refines on every rank
+        hid_t          tFileID = open_hdf5_file( tRestartFile, false, true );
+        Vector< real > tRestartADVs;
+        herr_t         tStatus = 0;
+        load_vector_from_hdf5_file( tFileID, "ADVs", tRestartADVs.data(), tStatus );
+        close_hdf5_file( tFileID );
+
+        // the restart file holds the full ADV vector; the primitive ADVs come first. ADVs on a B-spline mesh do not
+        // exist before the refinement (their designs are refined on the initial field, unchanged here)
+        uint tNumPrimitive = tGEN->get_num_primitive_advs();
+        MORIS_ERROR( tRestartADVs.size() >= tNumPrimitive,
+                "Workflow_HMR_XTK - restart file %s holds %zu ADVs, the deck %u primitive ADVs.",
+                tRestartFile.c_str(),
+                tRestartADVs.size(),
+                tNumPrimitive );
+
+        Vector< real > tPrimitive( tNumPrimitive );
+        for ( uint iADV = 0; iADV < tNumPrimitive; iADV++ )
+        {
+            tPrimitive( iADV ) = tRestartADVs( iADV );
+        }
+        real tMaxChange = tGEN->set_initial_primitive_advs( tPrimitive );
+
+        MORIS_LOG_INFO( "Workflow_HMR_XTK - GEN refinement of the initial mesh uses the %u primitive ADVs of the restart file "
+                        "%s (max change from the deck's initial values %g; MB-086)",
+                tNumPrimitive,
+                tRestartFile.c_str(),
+                tMaxChange );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -218,6 +317,9 @@ namespace moris::wrk
                 // uniform initial refinement
                 mPerformerManager->mHMRPerformer( 0 )->perform_initial_refinement();
 
+                // MB-086: refine around the restart design, not the deck's initial ADVs
+                this->apply_restart_advs_before_refinement();
+
                 // HMR refined by GE
                 Refinement_Mini_Performer tRefinementPerformer;
 
@@ -235,6 +337,12 @@ namespace moris::wrk
 
             // switch flag for first solve in optimization process
             tIsFirstOptSolve = false;
+        }
+        // after first solve in optimization process, no remeshing performer, GEN-driven refinement: rebuild the mesh with
+        // the GEN refinement of the current ADVs (e.g. after an XTK failure because the design left the refined band)
+        else if ( not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh() )
+        {
+            this->refine_hmr_on_current_design();
         }
         // after first solve in optimization process
         else
@@ -446,6 +554,45 @@ namespace moris::wrk
         bool tDeleteXTK = tXTKPerformer->delete_xtk_after_generation();
         // XTK perform - decompose - enrich - ghost - multigrid
         bool tFlag = tXTKPerformer->perform_decomposition();
+
+        // The design left the band GEN refined for an earlier design: cut cells on several levels, decomposition fails.
+        // Without a remeshing performer, redo the GEN refinement (incl. the MB-084 sub-cell feature refinement) on the
+        // current ADVs and cut again, in this evaluation. The number of ADVs does not change for designs that are not
+        // discretized on the remeshed B-spline mesh, so the optimizer is not restarted.
+        if ( not tFlag and not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
+                and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == aNewADVs.size() )
+        {
+            Tracer tRefineTracer( "WRK", "HMR-XTK Workflow", "Refine on current design" );
+
+            MORIS_LOG_INFO( "Workflow_HMR_XTK::perform() - decomposition failed on the mesh refined for an earlier design; "
+                            "redoing the GEN refinement on the current ADVs and cutting again" );
+
+            delete tXTKPerformer;
+
+            Vector< real >  tADVs;
+            Vector< real >  tLowerBounds;
+            Vector< real >  tUpperBounds;
+            Matrix< IdMat > tIjklIDs;
+            this->initialize( tADVs, tLowerBounds, tUpperBounds, tIjklIDs );
+
+            mPerformerManager->mGENPerformer( 0 )->set_advs( aNewADVs );
+
+            tXTKPerformer = new xtk::Model( tXTKParameterList( 0 )( 0 ) );
+            tMTKPerformer = std::make_shared< mtk::Mesh_Manager >();
+
+            tXTKPerformer->set_geometry_engine( mPerformerManager->mGENPerformer( 0 ).get() );
+            tXTKPerformer->set_input_performer( mPerformerManager->mMTKPerformer( 0 ) );
+            tXTKPerformer->set_output_performer( tMTKPerformer );
+
+            mPerformerManager->mGENPerformer( 0 )->reset_mesh_information(
+                    mPerformerManager->mMTKPerformer( 0 )->get_interpolation_mesh( 0 ) );
+
+            mPerformerManager->mGENPerformer( 0 )->output_fields(
+                    mPerformerManager->mMTKPerformer( 0 )->get_interpolation_mesh( 0 ) );
+
+            tDeleteXTK = tXTKPerformer->delete_xtk_after_generation();
+            tFlag      = tXTKPerformer->perform_decomposition();
+        }
 
         if ( not tFlag )
         {
