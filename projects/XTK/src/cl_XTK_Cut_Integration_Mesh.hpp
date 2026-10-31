@@ -758,6 +758,19 @@ namespace moris::xtk
 
         bool mSameLevelChildMeshes = true;
 
+      public:
+        // geometry resolution check of analytic geometries (MB-084), per geometry: background edges the interface crosses
+        // more often than the cut, cells with crossings the cut does not see, cells where the cut changes the topology,
+        // and the sampled / template positive-region measures of the checked cells (filled by the integration mesh
+        // generator; empty when the check is off)
+        Vector< uint > mResolutionHiddenEdges;
+        Vector< uint > mResolutionUnseenCells;
+        Vector< uint > mResolutionTopologyCells;
+        Vector< real > mResolutionSampledMeasure;
+        Vector< real > mResolutionTemplateMeasure;
+
+      protected:
+
         // integration cells
         moris_index                                      mFirstControlledCellIndex;
         Vector< moris::mtk::Cell* >                      mIntegrationCells;

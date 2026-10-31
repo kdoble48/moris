@@ -12,6 +12,7 @@
 
 #include "cl_GEN_Design_Field.hpp"
 #include "cl_GEN_Geometry.hpp"
+#include "cl_GEN_Cell_Feature_Detector.hpp"
 #include "GEN_Data_Types.hpp"
 
 namespace moris::gen
@@ -27,6 +28,9 @@ namespace moris::gen
         real mIntersectionTolerance;    // Interface tolerance based on intersecction distance
         bool mUseAnalyticIntersection;  // Analytic fields: intersections on the field itself (bracketed root along the parent edge)
         uint mAnalyticIntersectionMaxIterations;    // Iteration limit of that root; beyond it the edge takes the linear crossing
+        uint mFeatureRefinementSamples;             // > 0: sub-cell feature refinement, lattice sub-intervals per direction (MB-084)
+        real mFeatureRefinementLipschitz;           // bound on |grad phi| for certified gaps; 0 = off
+        real mFeatureRefinementDepthTolerance;      // significance of a hidden feature, relative to the cell size
 
         /**
          * Constructor with a given parameter list
@@ -80,6 +84,25 @@ namespace moris::gen
          * @return Analytic intersection flag
          */
         bool use_analytic_intersection() const;
+
+        /**
+         * Sub-cell feature refinement (MB-084): lattice sub-intervals per cell direction, 0 = off.
+         */
+        uint get_feature_refinement_samples() const;
+
+        /**
+         * Detect sub-cell features of this geometry in one QUAD4 / HEX8 cell (see cl_GEN_Cell_Feature_Detector.hpp),
+         * with this geometry's Lipschitz bound, depth tolerance and isocontour tolerance. Only for geometries that can
+         * change region inside a cell (exact field values at any point).
+         *
+         * @param aCorners Corner coordinates, exodus order (2^d x d)
+         * @param aLagrangeOrder Order of the Lagrange cell (which nodes XTK samples)
+         * @param aSamples Lattice sub-intervals per direction
+         */
+        Cell_Feature_Report detect_cell_features(
+                const Matrix< DDRMat >& aCorners,
+                uint                    aLagrangeOrder,
+                uint                    aSamples ) const;
 
         /**
          * Field value, ADV sensitivities, determining ADV IDs and spatial gradient (central difference) of the

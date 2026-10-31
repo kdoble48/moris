@@ -10,6 +10,9 @@
 
 #pragma once
 
+#include <set>
+#include <utility>
+
 #include "cl_Matrix.hpp"
 
 namespace moris
@@ -69,6 +72,9 @@ namespace moris
 
           private:
             Refinement_Parameters mParameters;
+
+            // fields with sub-cell feature refinement whose features are all represented (MB-084): no more passes
+            std::set< std::pair< const Performer*, uint > > mResolvedFeatureFields;
 
             std::shared_ptr< Library_IO > mLibrary = nullptr;
 
@@ -173,6 +179,38 @@ namespace moris
             //--------------------------------------------------------------------------------------------------------------
 
             uint get_max_refinement_level( const Vector< std::shared_ptr< Performer > > &aPerformers );
+
+            //--------------------------------------------------------------------------------------------------------------
+
+            /**
+             * Sub-cell feature refinement pass of one field (MB-084): detects features on every active cell of the
+             * Lagrange mesh, and, unless no cell hides a feature, queues every cell that contains a zero crossing
+             * (all cut cells have to stay on one level for XTK). Marks the field resolved otherwise.
+             *
+             * @param aFinalCheck Only detect and report (after the last pass); queue nothing
+             * @return Number of cells that hide a feature (all processors)
+             */
+            uint queue_feature_refinement(
+                    const std::shared_ptr< hmr::HMR >  &aHMR,
+                    const std::shared_ptr< Performer > &aPerformer,
+                    uint                                aFieldIndex,
+                    uint                                aPass,
+                    uint                                aMeshIndex,
+                    bool                                aFinalCheck );
+
+            //--------------------------------------------------------------------------------------------------------------
+
+            /**
+             * Refines, level by level, the cells that XTK will see as cut (corners and regular-subdivision vertices)
+             * and that lie below the highest level of such cells, so that XTK finds all cut cells on one level. Applies
+             * to fields refined with sub-cell feature refinement, and to analytic fields refined by the default
+             * criterion, which flags cells by their nodes only (D-205); when the cut cells already share one level
+             * nothing is refined.
+             */
+            void equalize_cut_cell_levels(
+                    const std::shared_ptr< hmr::HMR >            &aHMR,
+                    const Vector< std::shared_ptr< Performer > > &aPerformers,
+                    uint                                          aMeshIndex );
 
             //--------------------------------------------------------------------------------------------------------------
 
