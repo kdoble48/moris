@@ -40,6 +40,7 @@ namespace moris::gen
             , mFeatureRefinementSamples( aParameterList.exists( "feature_refinement_samples" ) ? aParameterList.get< uint >( "feature_refinement_samples" ) : 0 )
             , mFeatureRefinementLipschitz( aParameterList.exists( "feature_refinement_lipschitz" ) ? aParameterList.get< real >( "feature_refinement_lipschitz" ) : 0.0 )
             , mFeatureRefinementDepthTolerance( aParameterList.exists( "feature_refinement_depth_tolerance" ) ? aParameterList.get< real >( "feature_refinement_depth_tolerance" ) : 0.02 )
+            , mFeatureRefinementRedetectEdges( aParameterList.exists( "feature_refinement_redetect_edges" ) ? aParameterList.get< sint >( "feature_refinement_redetect_edges" ) : -1 )
     {
     }
 
@@ -73,6 +74,13 @@ namespace moris::gen
     uint Level_Set_Geometry::get_feature_refinement_samples() const
     {
         return mParameters.mFeatureRefinementSamples;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint Level_Set_Geometry::get_feature_refinement_redetect_edges() const
+    {
+        return mParameters.mFeatureRefinementSamples > 0 ? mParameters.mFeatureRefinementRedetectEdges : -1;
     }
 
     //--------------------------------------------------------------------------------------------------------------

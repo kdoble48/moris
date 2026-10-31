@@ -64,4 +64,37 @@ namespace moris::gen
             CHECK( tGeometryEngine.get_geometric_region( 0, 0, tPoint ) == Geometric_Region::NEGATIVE );
         }
     }
+
+    TEST_CASE( "MB-089 feature re-detection parameter", "[gen], [MB-089]" )
+    {
+        if ( par_size() == 1 )
+        {
+            // three circles: the first two with sub-cell feature refinement, the last two with the re-detection key
+            Module_Parameter_Lists tParameterLists( Module_Type::GEN );
+            for ( uint iGeom = 0; iGeom < 3; iGeom++ )
+            {
+                tParameterLists( GEN::GEOMETRIES ).add_parameter_list( prm::create_level_set_geometry_parameter_list( gen::Field_Type::CIRCLE ) );
+                tParameterLists.set( "center_x", 0.0 );
+                tParameterLists.set( "center_y", 0.0 );
+                tParameterLists.set( "radius", 0.25 + 0.1 * iGeom );
+                tParameterLists.set( "number_of_refinements", 1 );
+                tParameterLists.set( "refinement_mesh_index", 0 );
+                if ( iGeom < 2 )
+                {
+                    tParameterLists.set( "feature_refinement_samples", 4u );
+                }
+                if ( iGeom > 0 )
+                {
+                    tParameterLists.set( "feature_refinement_redetect_edges", 30 );
+                }
+            }
+
+            Geometry_Engine tGeometryEngine( tParameterLists );
+
+            // default off; on with feature refinement; ignored without it (nothing to redo)
+            CHECK( tGeometryEngine.get_feature_refinement_redetect_edges( 0 ) == -1 );
+            CHECK( tGeometryEngine.get_feature_refinement_redetect_edges( 1 ) == 30 );
+            CHECK( tGeometryEngine.get_feature_refinement_redetect_edges( 2 ) == -1 );
+        }
+    }
 }    // namespace moris::gen

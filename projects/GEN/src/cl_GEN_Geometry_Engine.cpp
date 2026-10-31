@@ -717,6 +717,15 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    sint
+    Geometry_Engine::get_feature_refinement_redetect_edges( uint aGeometryIndex )
+    {
+        auto tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        return tLevelSet ? tLevelSet->get_feature_refinement_redetect_edges() : -1;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     Cell_Feature_Report
     Geometry_Engine::detect_cell_features(
             uint                    aGeometryIndex,

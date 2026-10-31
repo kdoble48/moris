@@ -321,6 +321,13 @@ namespace moris::gen
         uint get_feature_refinement_samples( uint aGeometryIndex );
 
         /**
+         * Re-detection of sub-cell features during an optimization (MB-089): the hidden-edge count of the XTK geometry
+         * resolution check above which the workflow redoes the GEN refinement on the current design; -1 = off (also for
+         * geometries without feature refinement and for geometries that are not level sets).
+         */
+        sint get_feature_refinement_redetect_edges( uint aGeometryIndex );
+
+        /**
          * Detects sub-cell features of a geometry in one QUAD4 / HEX8 cell (cl_GEN_Cell_Feature_Detector.hpp). Only
          * for geometries that can change region inside a cell; others return an empty report.
          *

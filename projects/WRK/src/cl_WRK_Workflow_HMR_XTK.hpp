@@ -84,6 +84,13 @@ namespace moris
             /// in-place taper over accepted iterates (created from the reinit performer's parameters on first use)
             std::unique_ptr< SDF_Wean_Monitor > mWeanMonitor;
 
+            /// MB-089: the ADVs the current background mesh was refined for (GEN refinement), set by initialize()
+            Vector< real > mRefinedForADVs;
+
+            /// MB-089: per geometry, the hidden-edge count of the XTK geometry resolution check on the first cut after the
+            /// last (re)refinement (on the mesh refined for the design it was cut with); empty until that cut
+            Vector< uint > mRedetectBaselineEdges;
+
             /**
              * Errors if any GEN design uses discretization_mode = "additive" while HMR remeshing or level-set
              * reinitialization is active (the additive field split cannot be remapped).
@@ -111,6 +118,19 @@ namespace moris
              * No-op without a restart file, without GEN refinement, or when the ADVs are distributed already.
              */
             void apply_restart_advs_before_refinement();
+
+            /**
+             * MB-089: per geometry, feature_refinement_redetect_edges (-1 = off). All -1 when no geometry asks for the
+             * re-detection, when GEN does not refine the mesh, or when the ADVs are not all primitive (a redo of the
+             * refinement needs a remeshing performer then).
+             */
+            Vector< sint > get_feature_redetect_thresholds( uint aNumADVs );
+
+            /**
+             * Background cells of the decomposition mesh on refinement level > 0, and all background cells (owned, summed
+             * over processors): the size of the GEN refinement, for the MB-087 / MB-089 logs.
+             */
+            std::pair< uint, uint > count_refined_background_cells();
 
           public:
             //------------------------------------------------------------------------------
