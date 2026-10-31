@@ -57,7 +57,7 @@ namespace moris::prm
         tParameterList.insert( "verbose", false );
         tParameterList.insert( "verbose_level", moris::uint( 0 ) );    // 0 - basic outputs // 1- lots of outputs
         tParameterList.insert( "diagnostics", false );
-        tParameterList.insert( "geometry_resolution_samples", moris::uint( 4 ) );    // MB-084 check of analytic geometries: lattice sub-intervals per cell edge; counts edges the interface crosses more often than the cut, crossings the cut does not see, and cells where the cut changes the local topology; logs a warning; 0 = off
+        tParameterList.insert( "geometry_resolution_samples", moris::uint( 2 ) );    // MB-084 check of analytic geometries: lattice sub-intervals per cell edge (2: edge midpoints, face and cell centres; 4 finds features down to h/4 at about 5x the field evaluations); counts edges the interface crosses more often than the cut, crossings the cut does not see, and cells where the cut changes the local topology; logs a warning; 0 = off
         tParameterList.insert( "geometry_resolution_error", false );                 // turn that warning into an error
         tParameterList.insert( "diagnostics_id", "" );
         tParameterList.insert( "diagnostics_path", "" );
