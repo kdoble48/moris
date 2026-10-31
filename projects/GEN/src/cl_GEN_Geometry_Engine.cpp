@@ -318,6 +318,20 @@ namespace moris::gen
             mADVManager.mADVs( iADV ) = aADVs( iADV );
         }
         mInitialPrimitiveADVs = aADVs;
+
+        // fields that copy their variables (user-defined fields) refresh them from the ADV vector; before the
+        // distribution there is no distributed vector to import from
+        for ( const std::shared_ptr< Geometry >& iGeometry : mGeometries )
+        {
+            if ( std::dynamic_pointer_cast< Level_Set_Geometry >( iGeometry ) )
+            {
+                iGeometry->import_advs( nullptr );
+            }
+        }
+        for ( const std::shared_ptr< Property >& iProperty : mProperties )
+        {
+            iProperty->import_advs( nullptr );
+        }
         return tMaxChange;
     }
 
