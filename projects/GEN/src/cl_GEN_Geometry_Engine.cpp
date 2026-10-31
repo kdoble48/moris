@@ -299,6 +299,46 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    real
+    Geometry_Engine::set_initial_primitive_advs( const Vector< real >& aADVs )
+    {
+        MORIS_ERROR( not mPrimitiveADVs,
+                "Geometry_Engine::set_initial_primitive_advs() - the ADVs have been distributed already; use set_advs()." );
+        MORIS_ERROR( aADVs.size() == mInitialPrimitiveADVs.size(),
+                "Geometry_Engine::set_initial_primitive_advs() - %zu values for %zu primitive ADVs.",
+                aADVs.size(),
+                mInitialPrimitiveADVs.size() );
+
+        // the designs look their ADVs up in mADVManager.mADVs until distribute_advs() points them to mPrimitiveADVs,
+        // so the values are replaced in place; distribute_advs() starts from mInitialPrimitiveADVs
+        real tMaxChange = 0.0;
+        for ( uint iADV = 0; iADV < aADVs.size(); iADV++ )
+        {
+            tMaxChange                = std::max( tMaxChange, std::abs( aADVs( iADV ) - mADVManager.mADVs( iADV ) ) );
+            mADVManager.mADVs( iADV ) = aADVs( iADV );
+        }
+        mInitialPrimitiveADVs = aADVs;
+        return tMaxChange;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint
+    Geometry_Engine::get_num_primitive_advs() const
+    {
+        return mInitialPrimitiveADVs.size();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    Geometry_Engine::advs_distributed() const
+    {
+        return mPrimitiveADVs != nullptr;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     // whether any design filters its B-spline coefficients
     bool
     Geometry_Engine::has_adv_filter() const
