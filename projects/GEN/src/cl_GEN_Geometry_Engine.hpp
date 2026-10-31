@@ -15,6 +15,7 @@
 #include "cl_GEN_Phase_Table.hpp"
 #include "cl_GEN_ADV_Manager.hpp"
 #include "cl_GEN_Node_Manager.hpp"
+#include "cl_GEN_Cell_Feature_Detector.hpp"
 #include "cl_GEN_PDV_Host_Manager.hpp"
 
 // MTK
@@ -292,6 +293,28 @@ namespace moris::gen
          * @return If interior points need to be tested
          */
         bool can_change_region_inside_cell( uint aGeometryIndex );
+
+        /**
+         * Sub-cell feature refinement of a geometry (MB-084): lattice sub-intervals per cell direction, 0 = off (also
+         * for geometries that are not analytic level sets).
+         */
+        uint get_feature_refinement_samples( uint aGeometryIndex );
+
+        /**
+         * Detects sub-cell features of a geometry in one QUAD4 / HEX8 cell (cl_GEN_Cell_Feature_Detector.hpp). Only
+         * for geometries that can change region inside a cell; others return an empty report.
+         *
+         * @param aGeometryIndex Geometry index
+         * @param aCorners Corner coordinates, exodus order (2^d x d)
+         * @param aLagrangeOrder Order of the Lagrange cell
+         * @param aSamples Lattice sub-intervals per direction
+         * @return Detection report
+         */
+        Cell_Feature_Report detect_cell_features(
+                uint                    aGeometryIndex,
+                const Matrix< DDRMat >& aCorners,
+                uint                    aLagrangeOrder,
+                uint                    aSamples );
 
         /**
          * Returns if the element is intersected by the given geometry, testing its nodes and additionally the given

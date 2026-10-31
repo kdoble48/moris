@@ -67,5 +67,41 @@ namespace moris::wrk
             virtual sint get_refinement_function_index(
                     uint aFieldIndex,
                     uint aRefinementIndex) = 0;
+
+            /**
+             * Sub-cell feature refinement (MB-084): lattice sub-intervals per cell direction for this field, 0 = off.
+             * With it, number_of_refinements is the most refinement passes; passes stop once no cell hides a feature.
+             */
+            virtual uint get_feature_refinement_samples( uint aFieldIndex )
+            {
+                return 0;
+            }
+
+            /**
+             * Whether the field can change region inside a cell whose nodes share one region (exact analytic fields).
+             * Such cells can be cut for XTK although HMR's node-based criterion does not flag them (D-205).
+             */
+            virtual bool can_change_region_inside_cell( uint aFieldIndex )
+            {
+                return false;
+            }
+
+            /**
+             * Sub-cell feature detection in one Lagrange cell (gen::Cell_Feature_Flag bits: crossing, hidden feature,
+             * cut as seen by XTK's samples, feature below the depth tolerance).
+             *
+             * @param aFieldIndex Field index
+             * @param aCorners Corner coordinates in exodus order (2^d x d)
+             * @param aLagrangeOrder Order of the Lagrange cell
+             * @param aSamples Lattice sub-intervals per direction (2: XTK's own samples only)
+             */
+            virtual uint detect_cell_features(
+                    uint                  aFieldIndex,
+                    const Matrix<DDRMat>& aCorners,
+                    uint                  aLagrangeOrder,
+                    uint                  aSamples )
+            {
+                return 0;
+            }
     };
 }

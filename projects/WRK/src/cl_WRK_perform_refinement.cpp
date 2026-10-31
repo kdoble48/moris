@@ -25,9 +25,69 @@
 #include "cl_MTK_Field.hpp"
 
 #include "cl_Parameter_List.hpp"
+#include "cl_Communication_Tools.hpp"
+#include "cl_HMR_Element.hpp"
+#include "cl_MTK_Vertex.hpp"
+#include "cl_GEN_Cell_Feature_Detector.hpp"
+
+#include <algorithm>
+#include <limits>
 
 namespace moris::wrk
 {
+    namespace
+    {
+        /**
+         * Corner coordinates (exodus order) of the axis-aligned box spanned by an HMR Lagrange element, and the
+         * element's Lagrange order (4 / 8 nodes: 1, more: 2).
+         */
+        Matrix< DDRMat >
+        element_corners( const hmr::Element* aElement, uint& aLagrangeOrder )
+        {
+            Vector< mtk::Vertex* > tVertices = aElement->get_vertex_pointers();
+            Matrix< DDRMat >       tFirst    = tVertices( 0 )->get_coords();
+            uint                   tNumDims  = tFirst.numel();
+
+            Matrix< DDRMat > tLower( 1, tNumDims, std::numeric_limits< real >::max() );
+            Matrix< DDRMat > tUpper( 1, tNumDims, -std::numeric_limits< real >::max() );
+            for ( const mtk::Vertex* iVertex : tVertices )
+            {
+                Matrix< DDRMat > tCoords = iVertex->get_coords();
+                for ( uint iDim = 0; iDim < tNumDims; iDim++ )
+                {
+                    tLower( iDim ) = std::min( tLower( iDim ), tCoords( iDim ) );
+                    tUpper( iDim ) = std::max( tUpper( iDim ), tCoords( iDim ) );
+                }
+            }
+            aLagrangeOrder = tVertices.size() == ( 1u << tNumDims ) ? 1 : 2;
+
+            uint             tNumCorners = 1u << tNumDims;
+            Matrix< DDRMat > tCorners( tNumCorners, tNumDims );
+            for ( uint iCorner = 0; iCorner < tNumCorners; iCorner++ )
+            {
+                // exodus order: (0,0), (1,0), (1,1), (0,1) in x-y, bottom face before top face
+                uint tInFace = iCorner % 4;
+                bool tHigh[ 3 ] = { tInFace == 1 or tInFace == 2, tInFace == 2 or tInFace == 3, iCorner >= 4 };
+                for ( uint iDim = 0; iDim < tNumDims; iDim++ )
+                {
+                    tCorners( iCorner, iDim ) = tHigh[ iDim ] ? tUpper( iDim ) : tLower( iDim );
+                }
+            }
+            return tCorners;
+        }
+
+        uint
+        max_entry( const Vector< uint >& aVector )
+        {
+            uint tMax = 0;
+            for ( uint iEntry : aVector )
+            {
+                tMax = std::max( tMax, iEntry );
+            }
+            return tMax;
+        }
+    }    // namespace
+
 
     Refinement_Mini_Performer::Refinement_Mini_Performer(
             Parameter_List&               aParameterlist,
@@ -510,6 +570,9 @@ namespace moris::wrk
     {
         Tracer tTracer( "WRK", "Refinement Mini Performer", "Perform GEN refinement" );
 
+        // sub-cell feature refinement (MB-084) starts unresolved for every field
+        mResolvedFeatureFields.clear();
+
         // get the maximum number of refinements that need to be performed and therefore refinement iterations
         moris::sint tMaxNumRefinements = this->get_max_refinement_level( aPerformers );
 
@@ -627,6 +690,32 @@ namespace moris::wrk
 
         }    // end for: each mesh // TODO: what kind of meshes?
 
+        // put every cell that XTK sees as cut on one level (sub-cell feature refinement; D-205), then report whether
+        // the sub-cell features are represented on the final mesh (MB-084)
+        for ( uint iMesh = 0; iMesh < tNumMeshes; iMesh++ )
+        {
+            moris_index tMeshIndex = tMeshIndices( iMesh );
+
+            this->equalize_cut_cell_levels( aHMR, aPerformers, tMeshIndex );
+
+            for ( moris_index iPerformer = 0; iPerformer < tNumPerformers; iPerformer++ )
+            {
+                for ( uint iField = 0; iField < aPerformers( iPerformer )->get_num_refinement_fields(); iField++ )
+                {
+                    if ( aPerformers( iPerformer )->get_feature_refinement_samples( iField ) == 0 )
+                    {
+                        continue;
+                    }
+                    const Vector< uint >& tLagrangeMeshIndices = aPerformers( iPerformer )->get_refinement_mesh_indices( iField );
+                    if ( std::find( tLagrangeMeshIndices.begin(), tLagrangeMeshIndices.end(), uint( tMeshIndex ) ) == tLagrangeMeshIndices.end() )
+                    {
+                        continue;
+                    }
+                    this->queue_feature_refinement( aHMR, aPerformers( iPerformer ), iField, tMaxNumRefinements, tMeshIndex, true );
+                }
+            }
+        }
+
         // TODO: ?
         tDataBase->update_bspline_meshes();
         tDataBase->update_lagrange_meshes();
@@ -656,6 +745,17 @@ namespace moris::wrk
             {
                 if ( tLagrangeMeshIndices( iLagMesh ) == aMeshIndex )
                 {
+                    // sub-cell feature refinement (MB-084): number_of_refinements is the most passes
+                    if ( aPerformer->get_feature_refinement_samples( iField ) > 0 )
+                    {
+                        if ( tNumRefinements( iLagMesh ) > aRefinementNumber
+                                and mResolvedFeatureFields.count( { aPerformer.get(), iField } ) == 0 )
+                        {
+                            this->queue_feature_refinement( aHMR, aPerformer, iField, aRefinementNumber, aMeshIndex, false );
+                        }
+                        continue;
+                    }
+
                     if ( tNumRefinements( iLagMesh ) > aRefinementNumber )
                     {
                         // Loop over all nodes in the Lagrange mesh and get field values
@@ -726,6 +826,189 @@ namespace moris::wrk
         }
 
         return tNumElements;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint
+    Refinement_Mini_Performer::queue_feature_refinement(
+            const std::shared_ptr< hmr::HMR >&  aHMR,
+            const std::shared_ptr< Performer >& aPerformer,
+            uint                                aFieldIndex,
+            uint                                aPass,
+            uint                                aMeshIndex,
+            bool                                aFinalCheck )
+    {
+        uint tSamples = aPerformer->get_feature_refinement_samples( aFieldIndex );
+
+        // the active (leaf) cells of the Lagrange mesh
+        Vector< hmr::Element* > tCandidates;
+        aHMR->get_active_candidates_for_refinement( tCandidates, aMeshIndex );
+
+        Vector< hmr::Element* > tQueue;
+        tQueue.reserve( tCandidates.size() );
+        uint tNumCrossing      = 0;
+        uint tNumHidden        = 0;
+        uint tNumInsignificant = 0;
+        uint tMinLevel         = std::numeric_limits< uint >::max();
+        uint tMaxLevel         = 0;
+
+        for ( hmr::Element* iElement : tCandidates )
+        {
+            uint             tOrder   = 1;
+            Matrix< DDRMat > tCorners = element_corners( iElement, tOrder );
+            uint             tFlags   = aPerformer->detect_cell_features( aFieldIndex, tCorners, tOrder, tSamples );
+
+            // every cell with a crossing is refined, also those XTK already cuts: XTK needs all cut cells on one level
+            if ( tFlags & ( gen::CELL_FEATURE_CROSSING | gen::CELL_FEATURE_XTK_CUT ) )
+            {
+                tQueue.push_back( iElement );
+                tNumCrossing++;
+                tMinLevel = std::min( tMinLevel, uint( iElement->get_level() ) );
+                tMaxLevel = std::max( tMaxLevel, uint( iElement->get_level() ) );
+            }
+            tNumHidden += ( tFlags & gen::CELL_FEATURE_HIDDEN ) ? 1 : 0;
+            tNumInsignificant += ( tFlags & gen::CELL_FEATURE_INSIGNIFICANT ) ? 1 : 0;
+        }
+
+        tNumCrossing      = sum_all( tNumCrossing );
+        tNumHidden        = sum_all( tNumHidden );
+        tNumInsignificant = sum_all( tNumInsignificant );
+        tMinLevel         = min_all( tMinLevel );
+        tMaxLevel         = max_all( tMaxLevel );
+
+        if ( aFinalCheck )
+        {
+            if ( mResolvedFeatureFields.count( { aPerformer.get(), aFieldIndex } ) > 0 or tNumHidden == 0 )
+            {
+                MORIS_LOG_INFO( "GEN feature refinement - geometry %u: all sub-cell features represented on the final mesh "
+                                "(%u cut cells on levels %u to %u).",
+                        aFieldIndex, tNumCrossing, tNumCrossing ? tMinLevel : 0, tMaxLevel );
+                if ( tNumInsignificant > 0 )
+                {
+                    MORIS_LOG_WARNING( "GEN feature refinement - geometry %u: %u cells hold features shallower than the depth "
+                                       "tolerance (feature_refinement_depth_tolerance x cell size). They are UNRESOLVED: not "
+                                       "refined and not represented by the cut (below the stated resolution, not certified).",
+                            aFieldIndex, tNumInsignificant );
+                }
+            }
+            else
+            {
+                MORIS_LOG_WARNING( "GEN feature refinement - geometry %u: UNRESOLVED. %u cells still hide sub-cell features after "
+                                   "%u refinement passes (number_of_refinements reached; MB-084). The cut does not represent "
+                                   "the geometry in these cells.",
+                        aFieldIndex, tNumHidden, aPass );
+            }
+            return tNumHidden;
+        }
+
+        MORIS_LOG_INFO( "GEN feature refinement - geometry %u, pass %u: %u cells with a crossing (levels %u to %u), %u hide a "
+                        "feature the cut misses, %u hold only features below the depth tolerance.",
+                aFieldIndex, aPass, tNumCrossing, tNumCrossing ? tMinLevel : 0, tMaxLevel, tNumHidden, tNumInsignificant );
+
+        if ( tNumHidden == 0 )
+        {
+            mResolvedFeatureFields.insert( { aPerformer.get(), aFieldIndex } );
+            MORIS_LOG_INFO( "GEN feature refinement - geometry %u: resolved after %u passes.", aFieldIndex, aPass );
+            return 0;
+        }
+
+        aHMR->put_elements_on_refinement_queue( tQueue );
+        return tNumHidden;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void
+    Refinement_Mini_Performer::equalize_cut_cell_levels(
+            const std::shared_ptr< hmr::HMR >&            aHMR,
+            const Vector< std::shared_ptr< Performer > >& aPerformers,
+            uint                                          aMeshIndex )
+    {
+        // fields refined on this mesh that XTK can see cut inside cells whose nodes share one region
+        Vector< std::pair< uint, uint > > tFields;    // (performer, field)
+        bool                              tAnyFeature = false;
+        for ( uint iPerformer = 0; iPerformer < aPerformers.size(); iPerformer++ )
+        {
+            for ( uint iField = 0; iField < aPerformers( iPerformer )->get_num_refinement_fields(); iField++ )
+            {
+                const Vector< uint >& tMeshIndices    = aPerformers( iPerformer )->get_refinement_mesh_indices( iField );
+                const Vector< uint >& tNumRefinements = aPerformers( iPerformer )->get_num_refinements( iField );
+                bool                  tOnThisMesh     = std::find( tMeshIndices.begin(), tMeshIndices.end(), aMeshIndex ) != tMeshIndices.end();
+                bool                  tFeature        = aPerformers( iPerformer )->get_feature_refinement_samples( iField ) > 0;
+                // default criterion: only analytic fields on the decomposition mesh (index 0), which can be cut inside a
+                // cell whose nodes HMR saw uniform
+                bool tDefault = aMeshIndex == 0 and max_entry( tNumRefinements ) > 0
+                            and aPerformers( iPerformer )->can_change_region_inside_cell( iField );
+                if ( tOnThisMesh and ( tFeature or tDefault ) )
+                {
+                    tFields.push_back( { iPerformer, iField } );
+                    tAnyFeature = tAnyFeature or tFeature;
+                }
+            }
+        }
+        if ( tFields.size() == 0 )
+        {
+            return;
+        }
+
+        const uint tMaxSteps = 20;
+        for ( uint iStep = 0; iStep < tMaxSteps; iStep++ )
+        {
+            std::shared_ptr< hmr::Mesh > tMesh                = aHMR->create_mesh( aMeshIndex );
+            uint                         tLagrangeMeshPattern = tMesh->get_lagrange_mesh_pattern();
+
+            Vector< hmr::Element* > tCandidates;
+            aHMR->get_active_candidates_for_refinement( tCandidates, aMeshIndex );
+
+            // cells XTK will see as cut (its own samples: lattice with 2 sub-intervals)
+            Vector< hmr::Element* > tCutCells;
+            sint                    tMaxLevel = -1;
+            for ( hmr::Element* iElement : tCandidates )
+            {
+                uint             tOrder   = 1;
+                Matrix< DDRMat > tCorners = element_corners( iElement, tOrder );
+                for ( const auto& iField : tFields )
+                {
+                    if ( aPerformers( iField.first )->detect_cell_features( iField.second, tCorners, tOrder, 2 ) & gen::CELL_FEATURE_XTK_CUT )
+                    {
+                        tCutCells.push_back( iElement );
+                        tMaxLevel = std::max( tMaxLevel, sint( iElement->get_level() ) );
+                        break;
+                    }
+                }
+            }
+            tMaxLevel = max_all( tMaxLevel );
+
+            Vector< hmr::Element* > tBelow;
+            for ( hmr::Element* iElement : tCutCells )
+            {
+                if ( sint( iElement->get_level() ) < tMaxLevel )
+                {
+                    tBelow.push_back( iElement );
+                }
+            }
+            uint tNumBelow = sum_all( uint( tBelow.size() ) );
+            if ( tNumBelow == 0 )
+            {
+                return;
+            }
+
+            MORIS_LOG_INFO( "GEN refinement: %u cells that XTK sees as cut lie below level %d; refining them so that all cut "
+                            "cells share one level (%s).",
+                    tNumBelow, tMaxLevel, tAnyFeature ? "sub-cell feature refinement" : "D-205, analytic field cut inside cells" );
+
+            aHMR->put_elements_on_refinement_queue( tBelow );
+            aHMR->perform_refinement( tLagrangeMeshPattern );
+            aHMR->update_refinement_pattern( tLagrangeMeshPattern );
+            aHMR->get_database()->get_background_mesh()->update_database();
+            aHMR->get_database()->update_bspline_meshes();
+            aHMR->get_database()->update_lagrange_meshes();
+        }
+
+        MORIS_LOG_WARNING( "GEN refinement: cut cells still lie on different levels after %u equalisation steps; XTK will "
+                           "refuse the decomposition.",
+                tMaxSteps );
     }
 
     //--------------------------------------------------------------------------------------------------------------

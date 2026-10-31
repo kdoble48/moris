@@ -37,6 +37,9 @@ namespace moris::gen
             , mIntersectionTolerance( aParameterList.get< real >( "intersection_tolerance" ) )
             , mUseAnalyticIntersection( aParameterList.exists( "use_analytic_intersection" ) and aParameterList.get< bool >( "use_analytic_intersection" ) )
             , mAnalyticIntersectionMaxIterations( aParameterList.exists( "analytic_intersection_max_iterations" ) ? aParameterList.get< uint >( "analytic_intersection_max_iterations" ) : 200 )
+            , mFeatureRefinementSamples( aParameterList.exists( "feature_refinement_samples" ) ? aParameterList.get< uint >( "feature_refinement_samples" ) : 0 )
+            , mFeatureRefinementLipschitz( aParameterList.exists( "feature_refinement_lipschitz" ) ? aParameterList.get< real >( "feature_refinement_lipschitz" ) : 0.0 )
+            , mFeatureRefinementDepthTolerance( aParameterList.exists( "feature_refinement_depth_tolerance" ) ? aParameterList.get< real >( "feature_refinement_depth_tolerance" ) : 0.02 )
     {
     }
 
@@ -53,6 +56,9 @@ namespace moris::gen
         MORIS_ERROR( not mParameters.mUseAnalyticIntersection or ( mField->has_exact_derived_node_values() and not this->use_multilinear_interpolation() ),
                 "Level_Set_Geometry: use_analytic_intersection needs an analytic field (exact derived-node values) and "
                 "excludes use_multilinear_interpolation / use_cell_order_intersection." );
+        MORIS_ERROR( mParameters.mFeatureRefinementSamples == 0 or this->can_change_region_inside_cell(),
+                "Level_Set_Geometry: feature_refinement_samples needs an analytic field (exact values at any point) without "
+                "use_multilinear_interpolation; interpolated fields cannot hide features inside a Lagrange cell." );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -60,6 +66,37 @@ namespace moris::gen
     bool Level_Set_Geometry::use_analytic_intersection() const
     {
         return mParameters.mUseAnalyticIntersection;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint Level_Set_Geometry::get_feature_refinement_samples() const
+    {
+        return mParameters.mFeatureRefinementSamples;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Cell_Feature_Report Level_Set_Geometry::detect_cell_features(
+            const Matrix< DDRMat >& aCorners,
+            uint                    aLagrangeOrder,
+            uint                    aSamples ) const
+    {
+        MORIS_ASSERT( this->can_change_region_inside_cell(),
+                "Level_Set_Geometry::detect_cell_features() - only for fields evaluated exactly at any point." );
+
+        Cell_Feature_Settings tSettings;
+        tSettings.mSamples        = aSamples;
+        tSettings.mLagrangeOrder  = aLagrangeOrder;
+        tSettings.mLipschitz      = mParameters.mFeatureRefinementLipschitz;
+        tSettings.mDepthTolerance = mParameters.mFeatureRefinementDepthTolerance;
+
+        real tThreshold = mParameters.mIsocontourThreshold;
+        Point_Field_Function tPhi = [ this, tThreshold ]( const Matrix< DDRMat >& aPoint ) -> real {
+            return mField->get_field_value_at_point( aPoint ) - tThreshold;
+        };
+
+        return gen::detect_cell_features( tPhi, aCorners, mParameters.mIsocontourTolerance, tSettings );
     }
 
     //--------------------------------------------------------------------------------------------------------------

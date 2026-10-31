@@ -46,6 +46,7 @@ set(HEADERS
 	ADV/cl_GEN_Design.hpp
 	ADV/cl_GEN_Geometry.hpp
 	ADV/cl_GEN_Level_Set_Geometry.hpp
+	ADV/cl_GEN_Cell_Feature_Detector.hpp
 	ADV/cl_GEN_Voxel_Input.hpp
 	ADV/cl_GEN_Voxel_Geometry.hpp
 	ADV/cl_GEN_Surface_Mesh_Geometry.hpp
@@ -111,6 +112,7 @@ set(LIB_SOURCES
 	ADV/cl_GEN_Design.cpp
 	ADV/cl_GEN_Geometry.cpp
 	ADV/cl_GEN_Level_Set_Geometry.cpp
+	ADV/cl_GEN_Cell_Feature_Detector.cpp
 	ADV/cl_GEN_Voxel_Input.cpp
 	ADV/cl_GEN_Voxel_Geometry.cpp
 	ADV/cl_GEN_Surface_Mesh_Geometry.cpp

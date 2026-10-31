@@ -260,6 +260,9 @@ namespace moris::prm
         tLevelSetParameterList.insert( "isocontour_threshold", 0.0 );              // Level set isocontour level
         tLevelSetParameterList.insert( "use_analytic_intersection", false );       // Analytic fields only: edge intersections by a bracketed root of the analytic field itself (not the linear interpolant of the end values)
         tLevelSetParameterList.insert( "analytic_intersection_max_iterations", 200u );    // Iteration limit of that root (Illinois); an edge that does not converge takes the linear crossing
+        tLevelSetParameterList.insert( "feature_refinement_samples", 0u );         // Analytic fields only (MB-084): > 0 refines the Lagrange mesh (refinement_mesh_index) until no cell hides a sub-cell feature, at most number_of_refinements times; sub-intervals per cell direction of the detection lattice (even, e.g. 8 in 2D, 4 in 3D); 0 = off
+        tLevelSetParameterList.insert( "feature_refinement_lipschitz", 0.0 );      // Bound L >= |grad phi| of the field (1 for signed distances and their min/max compositions): certified gaps between samples, bisected otherwise; 0 = lattice samples only
+        tLevelSetParameterList.insert( "feature_refinement_depth_tolerance", 0.02 );    // Hidden features shallower than this times the cell size (|phi| / |grad phi|) are counted but not refined (near-tangent chords, sub-resolution slivers)
         tLevelSetParameterList.insert( "isocontour_tolerance", 1e-12 );            // Interface tolerance based on geometry value
         tLevelSetParameterList.insert( "intersection_tolerance", 1e-12 );          // Interface tolerance based on intersection distance
         tLevelSetParameterList.insert( "adv_filter_radius", 0.0 );                 // Kreissl-Maute linear filter (SMO 46:311-326, Eq. 12) of the B-spline coefficients (ADVs): radius in physical units, 0 = off (serial only)
