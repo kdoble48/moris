@@ -15,6 +15,7 @@
 #include "cl_NLA_Convergence.hpp"
 
 #include "cl_DLA_Linear_Problem.hpp"
+#include "cl_DLA_Solver_Interface.hpp"
 
 #include "cl_Communication_Tools.hpp"
 
@@ -94,9 +95,13 @@ namespace moris::NLA
         MORIS_ERROR( !( std::isnan( tResNorm ) || std::isinf( tResNorm ) ),
                 "Convergence::check_for_convergence(): Residual contains NAN or INF, exiting!" );
 
-        // check that residual does not exceed upper limit (should defined in MORIS global definitions)
-        MORIS_ERROR( !( tResNorm > 1e20 ),
-                "Convergence::check_for_convergence(): Residual Norm has exceeded 1e20" );
+        // check that residual does not exceed upper limit (should defined in MORIS global definitions);
+        // forward analysis only: the residual of the linear sensitivity system scales with the criteria
+        if ( tNonLinSolver->mMyNonLinSolverManager->get_solver_interface()->is_forward_analysis() )
+        {
+            MORIS_ERROR( !( tResNorm > 1e20 ),
+                    "Convergence::check_for_convergence(): Residual Norm has exceeded 1e20" );
+        }
 
         // Check for convergence
         if ( ( aIt > mRefIterationID ) && ( tResNorm < tRefNorm * tNonLinSolver->mParameterListNonlinearSolver.get< moris::real >( "NLA_rel_res_norm_drop" ) ) )
@@ -188,9 +193,13 @@ namespace moris::NLA
         MORIS_ERROR( !( std::isnan( tResNorm ) || std::isinf( tResNorm ) ),
                 "Convergence::check_for_convergence(): Residual contains NAN or INF, exiting!" );
 
-        // check that residual does not exceed upper limit (should defined in MORIS global definitions)
-        MORIS_ERROR( !( tResNorm > 1e20 ),
-                "Convergence::check_for_convergence(): Residual Norm has exceeded 1e20" );
+        // check that residual does not exceed upper limit (should defined in MORIS global definitions);
+        // forward analysis only: the residual of the linear sensitivity system scales with the criteria
+        if ( tNonLinSolver->mMyNonLinSolverManager->get_solver_interface()->is_forward_analysis() )
+        {
+            MORIS_ERROR( !( tResNorm > 1e20 ),
+                    "Convergence::check_for_convergence(): Residual Norm has exceeded 1e20" );
+        }
 
         // log static residual norm and relative drop in static residual
         if ( tNonLinSolver->mMyNonLinSolverManager->get_compute_static_residual_flag() )
