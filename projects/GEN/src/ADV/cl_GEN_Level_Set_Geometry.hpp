@@ -31,6 +31,7 @@ namespace moris::gen
         uint mFeatureRefinementSamples;             // > 0: sub-cell feature refinement, lattice sub-intervals per direction (MB-084)
         real mFeatureRefinementLipschitz;           // bound on |grad phi| for certified gaps; 0 = off
         real mFeatureRefinementDepthTolerance;      // significance of a hidden feature, relative to the cell size
+        sint mFeatureRefinementRedetectEdges;       // >= 0: redo the refinement during an optimization above this hidden-edge count (MB-089); -1 = off
 
         /**
          * Constructor with a given parameter list
@@ -89,6 +90,12 @@ namespace moris::gen
          * Sub-cell feature refinement (MB-084): lattice sub-intervals per cell direction, 0 = off.
          */
         uint get_feature_refinement_samples() const;
+
+        /**
+         * Re-detection of sub-cell features during an optimization (MB-089): the hidden-edge count of the XTK geometry
+         * resolution check above which the workflow redoes the GEN refinement on the current design; -1 = off.
+         */
+        sint get_feature_refinement_redetect_edges() const;
 
         /**
          * Detect sub-cell features of this geometry in one QUAD4 / HEX8 cell (see cl_GEN_Cell_Feature_Detector.hpp),

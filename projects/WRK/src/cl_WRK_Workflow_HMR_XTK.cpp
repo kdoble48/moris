@@ -16,6 +16,9 @@
 #include "cl_MTK_Mesh_Checker.hpp"
 #include "cl_GEN_Geometry_Engine.hpp"
 #include "cl_XTK_Model.hpp"
+#include "cl_XTK_Cut_Integration_Mesh.hpp"
+#include "cl_MTK_Cell.hpp"
+#include "fn_WRK_Feature_Redetect.hpp"
 #include "cl_MDL_Model.hpp"
 #include "cl_WRK_GEN_Performer.hpp"
 
@@ -36,6 +39,26 @@
 
 namespace moris::wrk
 {
+    namespace
+    {
+        // MB-089: whether two ADV vectors hold the same design (bit for bit)
+        bool
+        same_advs( const Vector< real >& aFirst, const Vector< real >& aSecond )
+        {
+            if ( aFirst.size() != aSecond.size() )
+            {
+                return false;
+            }
+            for ( uint iADV = 0; iADV < aFirst.size(); iADV++ )
+            {
+                if ( aFirst( iADV ) != aSecond( iADV ) )
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }    // namespace
 
     //--------------------------------------------------------------------------------------------------------------
 
@@ -215,6 +238,48 @@ namespace moris::wrk
                 tNumPrimitive,
                 tRestartFile.c_str(),
                 tMaxChange );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< sint >
+    Workflow_HMR_XTK::get_feature_redetect_thresholds( uint aNumADVs )
+    {
+        std::shared_ptr< gen::Geometry_Engine > tGEN = mPerformerManager->mGENPerformer( 0 );
+
+        Vector< sint > tThresholds( tGEN->get_number_of_geometries(), -1 );
+        if ( mPerformerManager->mRemeshingMiniPerformer( 0 ) or not this->gen_refines_mesh()
+                or tGEN->get_num_primitive_advs() != aNumADVs )
+        {
+            return tThresholds;
+        }
+        for ( uint iGeom = 0; iGeom < tThresholds.size(); iGeom++ )
+        {
+            tThresholds( iGeom ) = tGEN->get_feature_refinement_redetect_edges( iGeom );
+        }
+        return tThresholds;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    std::pair< uint, uint >
+    Workflow_HMR_XTK::count_refined_background_cells()
+    {
+        mtk::Interpolation_Mesh* tMesh = mPerformerManager->mMTKPerformer( 0 )->get_interpolation_mesh( 0 );
+
+        uint tRefined = 0;
+        uint tTotal   = 0;
+        for ( uint iCell = 0; iCell < tMesh->get_num_elems(); iCell++ )
+        {
+            const mtk::Cell& tCell = tMesh->get_mtk_cell( (moris_index)iCell );
+            if ( tCell.get_owner() != (moris_id)par_rank() )
+            {
+                continue;
+            }
+            tTotal++;
+            tRefined += tCell.get_level() > 0 ? 1 : 0;
+        }
+        return { sum_all( tRefined ), sum_all( tTotal ) };
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -420,6 +485,10 @@ namespace moris::wrk
             aIjklIDs     = tGeometryEngine->get_IjklIDs();
         }
 
+        // MB-089: the mesh is refined for these ADVs; the first cut of this design gives the resolution baseline
+        mRefinedForADVs = aADVs;
+        mRedetectBaselineEdges.clear();
+
     }    // end function: Workflow_HMR_XTK::initialize()
 
     //--------------------------------------------------------------------------------------------------------------
@@ -570,17 +639,53 @@ namespace moris::wrk
         // XTK perform - decompose - enrich - ghost - multigrid
         bool tFlag = tXTKPerformer->perform_decomposition();
 
+        // MB-089: re-detection of sub-cell features. The GEN refinement (MB-084) was computed for an earlier design; when
+        // the XTK geometry resolution check of this cut counts more hidden edges than the deck threshold
+        // (feature_refinement_redetect_edges) and than the first cut after the last refinement, redo the refinement on
+        // the current ADVs through the MB-087 path below, as if the decomposition had failed. The counts are those of
+        // the check that already ran in this decomposition (no extra field evaluations).
+        Vector< sint >            tRedetectThresholds = this->get_feature_redetect_thresholds( aNewADVs.size() );
+        Vector< uint >            tHiddenEdges;
+        bool                      tMeshRefinedForThisDesign = same_advs( aNewADVs, mRefinedForADVs );
+        Feature_Redetect_Decision tRedetect;
+        if ( tFlag and tXTKPerformer->get_cut_integration_mesh() )
+        {
+            tHiddenEdges = tXTKPerformer->get_cut_integration_mesh()->mResolutionHiddenEdges;
+            tRedetect    = decide_feature_redetect( tRedetectThresholds, tHiddenEdges, mRedetectBaselineEdges, tMeshRefinedForThisDesign );
+        }
+
         // The design left the band GEN refined for an earlier design: cut cells on several levels, decomposition fails.
         // Without a remeshing performer, redo the GEN refinement (incl. the MB-084 sub-cell feature refinement) on the
         // current ADVs and cut again, in this evaluation. The number of ADVs does not change for designs that are not
         // discretized on the remeshed B-spline mesh, so the optimizer is not restarted.
-        if ( not tFlag and not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
+        if ( ( not tFlag or tRedetect.mRedo ) and not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
                 and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == aNewADVs.size() )
         {
             Tracer tRefineTracer( "WRK", "HMR-XTK Workflow", "Refine on current design" );
 
-            MORIS_LOG_INFO( "Workflow_HMR_XTK::perform() - decomposition failed on the mesh refined for an earlier design; "
-                            "redoing the GEN refinement on the current ADVs and cutting again" );
+            std::pair< uint, uint > tCellsBefore = this->count_refined_background_cells();
+
+            if ( not tFlag )
+            {
+                MORIS_LOG_INFO( "Workflow_HMR_XTK::perform() - decomposition failed on the mesh refined for an earlier design; "
+                                "redoing the GEN refinement on the current ADVs and cutting again" );
+            }
+            else
+            {
+                std::string tBaseline = tRedetect.mGeometry < mRedetectBaselineEdges.size()
+                                              ? std::to_string( mRedetectBaselineEdges( tRedetect.mGeometry ) )
+                                              : std::string( "none yet" );
+                MORIS_LOG_INFO( "Workflow_HMR_XTK::perform() - optimization iteration %d: geometry %u under-resolved on the mesh "
+                                "refined for an earlier design (MB-089): %u background edges cross the interface more often "
+                                "than the cut, threshold %u (feature_refinement_redetect_edges %d; first cut after the last "
+                                "refinement: %s); redoing the GEN refinement on the current ADVs and cutting again",
+                        (int)tOptIter,
+                        tRedetect.mGeometry,
+                        tRedetect.mHiddenEdges,
+                        tRedetect.mThreshold,
+                        (int)tRedetectThresholds( tRedetect.mGeometry ),
+                        tBaseline.c_str() );
+            }
 
             delete tXTKPerformer;
 
@@ -588,7 +693,25 @@ namespace moris::wrk
             Vector< real >  tLowerBounds;
             Vector< real >  tUpperBounds;
             Matrix< IdMat > tIjklIDs;
+
+            // initialize() restarts the count of evaluations since the last re-initialization (mIter); a re-detection is
+            // not a re-initialization of the optimization, so it keeps the count (the MB-087 failure path is unchanged)
+            uint tIterBeforeRedo = mIter;
             this->initialize( tADVs, tLowerBounds, tUpperBounds, tIjklIDs );
+            if ( tFlag )
+            {
+                mIter = tIterBeforeRedo;
+            }
+            mRefinedForADVs = aNewADVs;
+
+            std::pair< uint, uint > tCellsAfter = this->count_refined_background_cells();
+            MORIS_LOG_INFO( "Workflow_HMR_XTK::perform() - optimization iteration %d: GEN refinement redone on the current "
+                            "ADVs: %u of %u background (leaf) cells on a refined level, before %u of %u",
+                    (int)tOptIter,
+                    tCellsAfter.first,
+                    tCellsAfter.second,
+                    tCellsBefore.first,
+                    tCellsBefore.second );
 
             mPerformerManager->mGENPerformer( 0 )->set_advs( aNewADVs );
 
@@ -607,6 +730,27 @@ namespace moris::wrk
 
             tDeleteXTK = tXTKPerformer->delete_xtk_after_generation();
             tFlag      = tXTKPerformer->perform_decomposition();
+
+            if ( tFlag and tXTKPerformer->get_cut_integration_mesh() )
+            {
+                tHiddenEdges = tXTKPerformer->get_cut_integration_mesh()->mResolutionHiddenEdges;
+                if ( tRedetect.mRedo and tRedetect.mGeometry < tHiddenEdges.size() )
+                {
+                    MORIS_LOG_INFO( "Workflow_HMR_XTK::perform() - optimization iteration %d: geometry %u after the redo "
+                                    "(MB-089): %u background edges cross the interface more often than the cut (%u before)",
+                            (int)tOptIter,
+                            tRedetect.mGeometry,
+                            tHiddenEdges( tRedetect.mGeometry ),
+                            tRedetect.mHiddenEdges );
+                }
+            }
+            tMeshRefinedForThisDesign = true;
+        }
+
+        // MB-089: the first cut on a mesh refined for the design it cuts sets the resolution baseline
+        if ( tFlag and tMeshRefinedForThisDesign and mRedetectBaselineEdges.size() == 0 )
+        {
+            mRedetectBaselineEdges = tHiddenEdges;
         }
 
         if ( not tFlag )
