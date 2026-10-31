@@ -137,6 +137,20 @@ namespace moris::wrk
         mPerformerManager->mMTKPerformer( 0 ) = std::make_shared< mtk::Mesh_Manager >();
         mPerformerManager->mHMRPerformer( 0 )->set_performer( mPerformerManager->mMTKPerformer( 0 ) );
 
+        // a new GEN from its parameter list, at the current ADVs: after the first distribution, fields stored on the old
+        // mesh (discretization_mesh_index = -1, e.g. fixed pads) can no longer be evaluated on the new mesh, and the
+        // MB-085 equalisation only sees fields that are still analytic; a new GEN is in the state of the first refinement
+        Vector< real > tCurrentADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+        Module_Parameter_Lists tGENParameterList = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::GEN );
+        std::shared_ptr< gen::Geometry_Engine > tNewGEN = std::make_shared< gen::Geometry_Engine >( tGENParameterList, mPerformerManager->mLibrary );
+        MORIS_ERROR( tCurrentADVs.size() == tNewGEN->get_num_primitive_advs(),
+                "Workflow_HMR_XTK::refine_hmr_on_current_design() - %zu ADVs, %u primitive ADVs: designs discretized on the "
+                "remeshed B-spline mesh need a remeshing performer.",
+                tCurrentADVs.size(),
+                tNewGEN->get_num_primitive_advs() );
+        tNewGEN->set_initial_primitive_advs( tCurrentADVs );
+        mPerformerManager->mGENPerformer( 0 ) = tNewGEN;
+
         // uniform initial refinement, then the GEN-driven refinement with GEN's current ADVs
         mPerformerManager->mHMRPerformer( 0 )->perform_initial_refinement();
 
@@ -340,7 +354,8 @@ namespace moris::wrk
         }
         // after first solve in optimization process, no remeshing performer, GEN-driven refinement: rebuild the mesh with
         // the GEN refinement of the current ADVs (e.g. after an XTK failure because the design left the refined band)
-        else if ( not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh() )
+        else if ( not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
+                  and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == mPerformerManager->mGENPerformer( 0 )->get_advs().size() )
         {
             this->refine_hmr_on_current_design();
         }
