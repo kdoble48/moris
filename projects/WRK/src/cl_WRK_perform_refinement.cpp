@@ -952,6 +952,24 @@ namespace moris::wrk
             return;
         }
 
+        // XTK checks the levels of the cells cut by any geometry: once this mesh is refined, also test the other
+        // geometries that XTK can see cut inside a cell (exact fields; e.g. fixed pads next to a refined design)
+        for ( uint iPerformer = 0; iPerformer < aPerformers.size(); iPerformer++ )
+        {
+            for ( uint iField = 0; iField < aPerformers( iPerformer )->get_num_refinement_fields(); iField++ )
+            {
+                bool tListed = false;
+                for ( const auto& iListed : tFields )
+                {
+                    tListed = tListed or ( iListed.first == iPerformer and iListed.second == iField );
+                }
+                if ( not tListed and aMeshIndex == 0 and aPerformers( iPerformer )->can_change_region_inside_cell( iField ) )
+                {
+                    tFields.push_back( { iPerformer, iField } );
+                }
+            }
+        }
+
         const uint tMaxSteps = 20;
         for ( uint iStep = 0; iStep < tMaxSteps; iStep++ )
         {
