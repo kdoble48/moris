@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <map>
 #include <set>
 #include <utility>
 
@@ -75,6 +76,10 @@ namespace moris
 
             // fields with sub-cell feature refinement whose features are all represented (MB-084): no more passes
             std::set< std::pair< const Performer*, uint > > mResolvedFeatureFields;
+
+            // lowest level of a cell that can still hold a crossing of a feature-refined field: each pass refines every
+            // cell with a crossing, so the cells left below this level were evaluated before and cannot change
+            std::map< std::pair< const Performer*, uint >, uint > mFeatureMinLevel;
 
             std::shared_ptr< Library_IO > mLibrary = nullptr;
 

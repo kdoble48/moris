@@ -570,8 +570,9 @@ namespace moris::wrk
     {
         Tracer tTracer( "WRK", "Refinement Mini Performer", "Perform GEN refinement" );
 
-        // sub-cell feature refinement (MB-084) starts unresolved for every field
+        // sub-cell feature refinement (MB-084) starts unresolved for every field, on every cell
         mResolvedFeatureFields.clear();
+        mFeatureMinLevel.clear();
 
         // get the maximum number of refinements that need to be performed and therefore refinement iterations
         moris::sint tMaxNumRefinements = this->get_max_refinement_level( aPerformers );
@@ -853,8 +854,17 @@ namespace moris::wrk
         uint tMinLevel         = std::numeric_limits< uint >::max();
         uint tMaxLevel         = 0;
 
+        // cells below this level were evaluated in an earlier pass without a crossing and were not refined since
+        uint tMinLevel0 = mFeatureMinLevel.count( { aPerformer.get(), aFieldIndex } ) ? mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] : 0;
+        uint tNumSkipped = 0;
+
         for ( hmr::Element* iElement : tCandidates )
         {
+            if ( uint( iElement->get_level() ) < tMinLevel0 )
+            {
+                tNumSkipped++;
+                continue;
+            }
             uint             tOrder   = 1;
             Matrix< DDRMat > tCorners = element_corners( iElement, tOrder );
             uint             tFlags   = aPerformer->detect_cell_features( aFieldIndex, tCorners, tOrder, tSamples );
@@ -914,6 +924,11 @@ namespace moris::wrk
         }
 
         aHMR->put_elements_on_refinement_queue( tQueue );
+
+        // every cell with a crossing is refined: crossings can only remain on the new level
+        mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = tMaxLevel + 1;
+        MORIS_LOG_INFO( "GEN feature refinement - geometry %u, pass %u: %u cells below level %u skipped (evaluated before).",
+                aFieldIndex, aPass, sum_all( tNumSkipped ), tMinLevel0 );
         return tNumHidden;
     }
 
@@ -988,6 +1003,12 @@ namespace moris::wrk
                 Matrix< DDRMat > tCorners = element_corners( iElement, tOrder );
                 for ( const auto& iField : tFields )
                 {
+                    // a feature-refined field has no crossing below its minimum level (see queue_feature_refinement)
+                    auto tKey = std::make_pair( static_cast< const Performer* >( aPerformers( iField.first ).get() ), iField.second );
+                    if ( mFeatureMinLevel.count( tKey ) and uint( iElement->get_level() ) < mFeatureMinLevel[ tKey ] )
+                    {
+                        continue;
+                    }
                     if ( aPerformers( iField.first )->detect_cell_features( iField.second, tCorners, tOrder, 2 ) & gen::CELL_FEATURE_XTK_CUT )
                     {
                         tCutCells.push_back( iElement );
