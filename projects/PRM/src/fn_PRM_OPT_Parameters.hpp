@@ -56,10 +56,16 @@ namespace moris::prm
         tParameterList.insert( "reinitialize_interface_iter", INT_MAX );          // number of iterations until the interface will be reinitialized
         tParameterList.insert( "first_reinitialize_interface_iter", INT_MAX );    // number of iterations until the interface will be reinitialized
 
-        // SDF reinitialization mode: "field_remap" (default) or "interface"
+        // SDF reinitialization mode: "field_remap" (default), "interface" or "user_function"
         // "field_remap": Original mode - map solution field to target mesh
         // "interface": Compute exact SDF from XTK interface facets
+        // "user_function": the deck function reinit_user_function maps the ADVs of the mapping sublist's adv_field design to
+        //     new ADVs of the same size; called on the optimizer restart that reinitialize_interface_iter /
+        //     first_reinitialize_interface_iter request (the optimizer state restarts at the new design)
         tParameterList.insert( "sdf_reinit_mode", "field_remap" );
+
+        // user_function mode: name of the deck function Vector< real > f( const Vector< real >& aADVs, uint aIteration )
+        tParameterList.insert( "reinit_user_function", "" );
 
         // Material phase index for sign determination in interface mode
         // Nodes in this phase get negative SDF (inside), others get positive (outside)

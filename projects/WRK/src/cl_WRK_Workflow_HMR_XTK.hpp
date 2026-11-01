@@ -72,6 +72,16 @@ namespace moris
             /// Flag to permanently disable SDF reinit once it has weaned off (design converged)
             bool mSDFWeanedOff = false;
 
+            /// sdf_reinit_mode "user_function": the reinitialization schedule requested the current optimizer restart, so
+            /// initialize() replaces the design's ADVs by the deck function's result before the mesh and GEN are rebuilt
+            bool mUserReinitPending = false;
+
+            /// optimization iteration (criteria evaluations so far) of the evaluation that requested it
+            uint mUserReinitIteration = 0;
+
+            /// user_function reinitializations applied so far (log only)
+            uint mUserReinitCount = 0;
+
             /// Whether the MDL fields (e.g. an error indicator) were computed on the current mesh: set by a forward
             /// solve, cleared by a remesh. A remesh requested before any solve on the new mesh (XTK failed) must not
             /// refine on them (MB-033).
