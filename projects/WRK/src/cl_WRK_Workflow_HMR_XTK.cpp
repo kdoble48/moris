@@ -749,14 +749,13 @@ namespace moris::wrk
             Vector< real >  tUpperBounds;
             Matrix< IdMat > tIjklIDs;
 
-            // initialize() restarts the count of evaluations since the last re-initialization (mIter); a re-detection is
-            // not a re-initialization of the optimization, so it keeps the count (the MB-087 failure path is unchanged)
+            // initialize() restarts the count of evaluations since the last re-initialization (mIter). Neither a
+            // re-detection (MB-089) nor a redo after a failed decomposition (MB-087) re-initializes the optimization, so
+            // both keep the count: resetting it on the MB-087 path postponed the OPT reinitialization schedule
+            // (reinitialize_interface_iter) indefinitely while decompositions kept failing, e.g. as topology forms (MB-093)
             uint tIterBeforeRedo = mIter;
             this->initialize( tADVs, tLowerBounds, tUpperBounds, tIjklIDs );
-            if ( tFlag )
-            {
-                mIter = tIterBeforeRedo;
-            }
+            mIter           = tIterBeforeRedo;
             mRefinedForADVs = aNewADVs;
 
             std::pair< uint, uint > tCellsAfter = this->count_refined_background_cells();
