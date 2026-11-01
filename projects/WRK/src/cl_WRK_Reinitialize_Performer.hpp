@@ -124,8 +124,28 @@ namespace moris
 
         enum class ReinitMode
         {
-            FIELD_REMAP,     ///< Original: remap solution field to target mesh
-            INTERFACE_SDF    ///< New: compute exact SDF from XTK interface facets
+            FIELD_REMAP,      ///< Original: remap solution field to target mesh
+            INTERFACE_SDF,    ///< New: compute exact SDF from XTK interface facets
+            USER_FUNCTION     ///< Deck function maps the design's ADVs to new ADVs of the same size (sdf_reinit_mode "user_function")
+        };
+
+        /**
+         * Deck function of sdf_reinit_mode = "user_function" (OPT parameter reinit_user_function): it receives the ADVs of
+         * the design named by the mapping sublist's adv_field (in the design's coefficient order) and the optimization
+         * iteration (number of criteria evaluations so far) that requested the reinitialization, and returns the new ADVs
+         * of that design, of the same size and finite. Returning any other size (e.g. an empty vector on failure) stops the
+         * run with an error; the old ADVs are never kept silently.
+         */
+        typedef Vector< real > ( *Reinit_User_Function )( const Vector< real >& aADVs, uint aIteration );
+
+        /** what apply_user_reinitialization() changed (for the log and the tests) */
+        struct User_Reinit_Report
+        {
+            uint mNumADVs    = 0;      ///< ADVs of the targeted design
+            uint mNumClipped = 0;      ///< returned ADVs outside their bounds, clipped to them
+            real mMaxClip    = 0.0;    ///< largest bound violation that was clipped
+            real mMaxChange  = 0.0;    ///< max |new - old| over the design's ADVs (after clipping)
+            real mRelChange  = 0.0;    ///< ||new - old|| / ||old|| over the design's ADVs (after clipping)
         };
 
         class Reinitialize_Performer
@@ -169,6 +189,8 @@ namespace moris
             bool mReinitEveryStep = false;    ///< Redistance every iteration in-place (no restart); smooth every reinit_freq
             bool mDiagnostics     = false;    ///< sdf_reinit_diagnostics: log the footprint of every in-place redistance
             bool mPreserveInterface = false;  ///< sdf_preserve_interface: keep every coefficient that can reach a cut cell
+            Reinit_User_Function  mUserFunction           = nullptr;    ///< sdf_reinit_mode "user_function": the deck's reinit_user_function
+            std::string           mUserFunctionName;                    ///< its name (for the log)
 
           public:
             //------------------------------------------------------------------------------
@@ -389,6 +411,35 @@ namespace moris
                     Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
                     const Matrix< DDRMat >&                            aOldCoeffs,
                     Matrix< DDRMat >&                                  aNewCoeffs ) const;
+
+            //------------------------------------------------------------------------------
+
+            /**
+             * sdf_reinit_mode = "user_function", pure core (unit-tested alone): gather the slice aPositions of aADVs, call
+             * aFunction( slice, aIteration ), check that it returns aPositions.size() finite values, clip each to its own
+             * bounds aLowerBounds / aUpperBounds, and write it back into the slice of aADVs. Every other ADV is unchanged.
+             * Errors (MORIS_ERROR) on an empty or unresolved slice, a wrong-size or non-finite result.
+             */
+            static User_Reinit_Report
+            apply_user_reinitialization(
+                    Vector< real >&       aADVs,
+                    const Vector< sint >& aPositions,
+                    const Vector< real >& aLowerBounds,
+                    const Vector< real >& aUpperBounds,
+                    Reinit_User_Function  aFunction,
+                    uint                  aIteration,
+                    const std::string&    aFunctionName );
+
+            /**
+             * sdf_reinit_mode = "user_function": replace the ADVs of the adv_field design in GEN by the deck function's
+             * result (apply_user_reinitialization on GEN's current ADVs, i.e. those of the last evaluated design) and log
+             * the change. Called by Workflow_HMR_XTK::initialize() on the optimizer restart that the reinitialization
+             * schedule (OPT reinitialize_interface_iter / first_reinitialize_interface_iter) requested. Serial only.
+             */
+            void
+            apply_user_function(
+                    Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+                    uint                                               aIteration ) const;
 
             //------------------------------------------------------------------------------
 

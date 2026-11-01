@@ -378,6 +378,30 @@ namespace moris::wrk
         // Clear SDF reinit pending flag (coefficients now applied above)
         mSDFReinitPending = false;
 
+        // sdf_reinit_mode "user_function": this restart was requested by the reinitialization schedule (perform()). GEN still
+        // holds the ADVs of the last evaluated design (the trial point that triggered the restart was never set); replace the
+        // targeted design's ADVs by the deck function's result BEFORE the mesh and GEN are rebuilt below, so that the GEN
+        // refinement, distribute_advs() and the ADVs handed to the optimizer all belong to the new design. The optimizer then
+        // re-initializes its state at it (asymptotes at the bounds, move limits at their initial value, objective scale
+        // re-derived) and evaluates it as its first iterate, so criteria and sensitivities are those of the new design.
+        if ( mUserReinitPending )
+        {
+            mUserReinitPending = false;
+
+            MORIS_ERROR( mPerformerManager->mReinitializePerformer.size() > 0
+                                 and mPerformerManager->mReinitializePerformer( 0 )->get_reinit_mode() == ReinitMode::USER_FUNCTION,
+                    "Workflow_HMR_XTK::initialize() - user_function reinitialization pending without a user_function performer." );
+
+            mPerformerManager->mReinitializePerformer( 0 )->apply_user_function( mPerformerManager->mGENPerformer, mUserReinitIteration );
+
+            mUserReinitCount++;
+            MORIS_LOG_INFO(
+                    "Workflow_HMR_XTK::initialize() - user_function reinitialization %u applied (optimization iteration %u); "
+                    "the optimizer restarts at the new design",
+                    mUserReinitCount,
+                    mUserReinitIteration );
+        }
+
         mIter = 0;
 
         Vector< std::shared_ptr< mtk::Field > > tFieldsIn;
@@ -423,6 +447,23 @@ namespace moris::wrk
                   and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == mPerformerManager->mGENPerformer( 0 )->get_advs().size() )
         {
             this->refine_hmr_on_current_design();
+        }
+        // after the first solve, no remeshing performer and no GEN refinement, primitive ADVs only: the background mesh does
+        // not depend on the design, so it is kept; GEN is rebuilt at the current ADVs as in refine_hmr_on_current_design()
+        // (without the HMR rebuild). Any optimizer restart of such a deck (reinitialize_interface_iter, a user_function
+        // reinitialization, an XTK failure, a non-finite MMA step) used to stop here: "remeshing performer has not been built".
+        else if ( not mPerformerManager->mRemeshingMiniPerformer( 0 )
+                  and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == mPerformerManager->mGENPerformer( 0 )->get_advs().size() )
+        {
+            Tracer tRebuildTracer( "WRK", "HMR-XTK Workflow", "Rebuild GEN on current ADVs" );
+
+            Vector< real >         tCurrentADVs      = mPerformerManager->mGENPerformer( 0 )->get_advs();
+            Module_Parameter_Lists tGENParameterList = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::GEN );
+
+            std::shared_ptr< gen::Geometry_Engine > tNewGEN =
+                    std::make_shared< gen::Geometry_Engine >( tGENParameterList, mPerformerManager->mLibrary );
+            tNewGEN->set_initial_primitive_advs( tCurrentADVs );
+            mPerformerManager->mGENPerformer( 0 ) = tNewGEN;
         }
         // after first solve in optimization process
         else
@@ -511,6 +552,20 @@ namespace moris::wrk
         if ( !tIsInterfaceSDFMode && ( mIter >= mReinitializeIterInterval or ( uint ) tOptIter == mReinitializeIterFirst ) )
         {
             mInitializeOptimizationRestart = true;
+
+            // user_function mode: initialize() applies the deck function on this restart (to the last evaluated design)
+            if ( mPerformerManager->mReinitializePerformer.size() > 0
+                    and mPerformerManager->mReinitializePerformer( 0 )->get_reinit_mode() == ReinitMode::USER_FUNCTION )
+            {
+                mUserReinitPending   = true;
+                mUserReinitIteration = gLogger.get_opt_iteration();
+                MORIS_LOG_INFO(
+                        "Workflow_HMR_XTK::perform() - user_function reinitialization requested after %u evaluations "
+                        "since the last (re)initialization (optimization iteration %u); returning NaN criteria to "
+                        "restart the optimizer",
+                        mIter,
+                        mUserReinitIteration );
+            }
 
             Vector< real > tVector( mNumCriteria, std::numeric_limits< real >::quiet_NaN() );
 

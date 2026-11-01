@@ -10,6 +10,8 @@
 
 #include "cl_WRK_Reinitialize_Performer.hpp"
 
+#include <cmath>
+#include <climits>
 #include <memory>
 #include <sstream>
 #include <set>
@@ -72,6 +74,10 @@ namespace moris::wrk
         {
             mReinitMode = ReinitMode::INTERFACE_SDF;
         }
+        else if ( tReinitModeStr == "user_function" )
+        {
+            mReinitMode = ReinitMode::USER_FUNCTION;
+        }
         else
         {
             mReinitMode = ReinitMode::FIELD_REMAP;  // Default
@@ -125,7 +131,41 @@ namespace moris::wrk
         mPreserveInterface = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_preserve_interface" );
 
         mADVFiledName = tMORISParameterList( 2 )( 0 ).get< std::string >( "adv_field" );
-        
+
+        // user_function mode: the deck function that maps the design's ADVs to its new ADVs, applied on the optimizer restart
+        // requested by the OPT reinitialization schedule (reinitialize_interface_iter / first_reinitialize_interface_iter)
+        if ( mReinitMode == ReinitMode::USER_FUNCTION )
+        {
+            mUserFunctionName = tOPTParameterList( 0 )( 0 ).get< std::string >( "reinit_user_function" );
+            MORIS_ERROR( !mUserFunctionName.empty(),
+                    "Reinitialize_Performer: sdf_reinit_mode = \"user_function\" needs the OPT parameter reinit_user_function "
+                    "(the name of the deck function Vector< real > f( const Vector< real >& aADVs, uint aIteration ))." );
+            MORIS_ERROR( !mADVFiledName.empty(),
+                    "Reinitialize_Performer: sdf_reinit_mode = \"user_function\" needs the mapping sublist's adv_field (the name "
+                    "of the design whose ADVs the function replaces)." );
+            mUserFunction = mLibrary->load_function< Reinit_User_Function >( mUserFunctionName, true );
+            MORIS_ERROR( mUserFunction != nullptr,
+                    "Reinitialize_Performer: reinit_user_function '%s' not found in the deck.",
+                    mUserFunctionName.c_str() );
+
+            sint tEvery = tOPTParameterList( 0 )( 0 ).get< sint >( "reinitialize_interface_iter" );
+            sint tFirst = tOPTParameterList( 0 )( 0 ).get< sint >( "first_reinitialize_interface_iter" );
+            if ( tEvery == INT_MAX && tFirst == INT_MAX )
+            {
+                MORIS_LOG_WARNING(
+                        "Reinitialize_Performer: sdf_reinit_mode = \"user_function\" with neither "
+                        "reinitialize_interface_iter nor first_reinitialize_interface_iter set: '%s' is never called.",
+                        mUserFunctionName.c_str() );
+            }
+            MORIS_LOG_INFO(
+                    "Reinitialize_Performer: user_function reinitialization of design '%s' by '%s' (every %d, first %d "
+                    "evaluations; applied on the optimizer restart, which restarts the optimizer state)",
+                    mADVFiledName.c_str(),
+                    mUserFunctionName.c_str(),
+                    (int)tEvery,
+                    (int)tFirst );
+        }
+
         // Reinitialization frequency from mapping params
         mReinitializationFrequency = tMORISParameterList( 2 )( 0 ).get< sint >( "reinitialization_frequency" );
 
@@ -240,6 +280,131 @@ namespace moris::wrk
         {
             this->output_fields( tFieldTarget.get(), tFieldSource.get(), mOutputMeshFile );
         }
+    }
+
+    //------------------------------------------------------------------------------
+
+    User_Reinit_Report
+    Reinitialize_Performer::apply_user_reinitialization(
+            Vector< real >&       aADVs,
+            const Vector< sint >& aPositions,
+            const Vector< real >& aLowerBounds,
+            const Vector< real >& aUpperBounds,
+            Reinit_User_Function  aFunction,
+            uint                  aIteration,
+            const std::string&    aFunctionName )
+    {
+        MORIS_ERROR( aFunction != nullptr, "user_function reinitialization: no function ('%s').", aFunctionName.c_str() );
+        MORIS_ERROR( aPositions.size() > 0, "user_function reinitialization: the targeted design has no ADVs." );
+        MORIS_ERROR( aLowerBounds.size() == aADVs.size() && aUpperBounds.size() == aADVs.size(),
+                "user_function reinitialization: %zu ADVs, %zu lower and %zu upper bounds.",
+                aADVs.size(),
+                aLowerBounds.size(),
+                aUpperBounds.size() );
+
+        // the design's ADVs, in its coefficient order
+        Vector< real > tOld( aPositions.size() );
+        for ( uint iADV = 0; iADV < aPositions.size(); iADV++ )
+        {
+            MORIS_ERROR( aPositions( iADV ) >= 0 && aPositions( iADV ) < (sint)aADVs.size(),
+                    "user_function reinitialization: coefficient %u of the design has no position in the %zu-ADV vector.",
+                    iADV,
+                    aADVs.size() );
+            tOld( iADV ) = aADVs( aPositions( iADV ) );
+        }
+
+        Vector< real > tNew = aFunction( tOld, aIteration );
+
+        // never continue with the old ADVs: a failed function must stop the run
+        MORIS_ERROR( tNew.size() == tOld.size(),
+                "user_function reinitialization: '%s' returned %zu ADVs for a design of %zu ADVs at optimization iteration %u "
+                "(an empty result signals a failure inside the function; see its own output).",
+                aFunctionName.c_str(),
+                tNew.size(),
+                tOld.size(),
+                aIteration );
+
+        User_Reinit_Report tReport;
+        tReport.mNumADVs = tOld.size();
+        real tNormOld    = 0.0;
+        real tNormDelta  = 0.0;
+        for ( uint iADV = 0; iADV < tNew.size(); iADV++ )
+        {
+            MORIS_ERROR( std::isfinite( tNew( iADV ) ),
+                    "user_function reinitialization: '%s' returned a non-finite value for ADV %u of the design (iteration %u).",
+                    aFunctionName.c_str(),
+                    iADV,
+                    aIteration );
+
+            sint tPosition = aPositions( iADV );
+            real tLower    = aLowerBounds( tPosition );
+            real tUpper    = aUpperBounds( tPosition );
+            real tValue    = std::max( tLower, std::min( tNew( iADV ), tUpper ) );
+            if ( tValue != tNew( iADV ) )
+            {
+                tReport.mNumClipped++;
+                tReport.mMaxClip = std::max( tReport.mMaxClip, std::abs( tValue - tNew( iADV ) ) );
+            }
+
+            real tDelta        = tValue - tOld( iADV );
+            tReport.mMaxChange = std::max( tReport.mMaxChange, std::abs( tDelta ) );
+            tNormDelta += tDelta * tDelta;
+            tNormOld += tOld( iADV ) * tOld( iADV );
+
+            aADVs( tPosition ) = tValue;
+        }
+        tReport.mRelChange = tNormOld > 0.0 ? std::sqrt( tNormDelta / tNormOld ) : std::sqrt( tNormDelta );
+
+        return tReport;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Reinitialize_Performer::apply_user_function(
+            Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
+            uint                                               aIteration ) const
+    {
+        Tracer tTracer( "WRK", "Reinitialize ADVs", "User Function" );
+
+        MORIS_ERROR( mReinitMode == ReinitMode::USER_FUNCTION, "Reinitialize_Performer::apply_user_function() - not in user_function mode." );
+
+        // the ADV vector and bounds of GEN are complete on a single processor only
+        MORIS_ERROR( par_size() == 1, "Reinitialize_Performer: sdf_reinit_mode = \"user_function\" runs on one processor only." );
+
+        Vector< real > tADVs      = aGENPerformer( 0 )->get_advs();
+        Vector< real > tLower     = aGENPerformer( 0 )->get_lower_bounds();
+        Vector< real > tUpper     = aGENPerformer( 0 )->get_upper_bounds();
+        Vector< sint > tPositions = aGENPerformer( 0 )->get_design_adv_positions( mADVFiledName );
+
+        MORIS_ERROR( tPositions.size() > 0,
+                "Reinitialize_Performer: GEN has no design named '%s' with ADVs (the mapping sublist's adv_field).",
+                mADVFiledName.c_str() );
+
+        MORIS_LOG_INFO(
+                "Reinitialization (user_function '%s') at optimization iteration %u: calling it on the %zu ADVs of design "
+                "'%s' (the last evaluated design)",
+                mUserFunctionName.c_str(),
+                aIteration,
+                tPositions.size(),
+                mADVFiledName.c_str() );
+
+        User_Reinit_Report tReport = apply_user_reinitialization(
+                tADVs, tPositions, tLower, tUpper, mUserFunction, aIteration, mUserFunctionName );
+
+        aGENPerformer( 0 )->set_advs( tADVs );
+
+        MORIS_LOG_INFO(
+                "Reinitialization (user_function '%s') at optimization iteration %u: replaced %u of %zu ADVs; "
+                "max |dADV| = %.6e, ||dADV|| / ||ADV|| = %.6e; %u clipped to their bounds (max violation %.3e)",
+                mUserFunctionName.c_str(),
+                aIteration,
+                tReport.mNumADVs,
+                tADVs.size(),
+                tReport.mMaxChange,
+                tReport.mRelChange,
+                tReport.mNumClipped,
+                tReport.mMaxClip );
     }
 
     //------------------------------------------------------------------------------
