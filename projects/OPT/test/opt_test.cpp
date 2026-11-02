@@ -1849,4 +1849,518 @@ namespace moris::opt
         Matrix< IdMat > tOtherIds = { { 10 }, { 20 }, { gNoID }, { 40 } };
         CHECK_THROWS( Problem::map_restart_values_to_layout( tFileIds, tOtherIds, tFileValues ) );
     }
+
+    //--------------------------------------------------------------------------------------------------------------
+    // Warm MMA restart (restart_keep_state): min sum_i w_i (x_i - t_i)^2 s.t. sum_i x_i <= 0.4 N, 0 <= x <= 1, for any
+    // number of ADVs N. Criteria = the ADVs. The interface can request an optimizer restart at a given evaluation (with
+    // NaN criteria, as the workflow's reinitialization schedule does) and re-initializes at the last evaluated design
+    // plus a shift (a "re-fit" that moves some ADVs).
+
+    namespace warm_restart
+    {
+        real
+        weight( uint aI )
+        {
+            return 1.0 + 0.7 * aI;
+        }
+
+        real
+        target( uint aI )
+        {
+            return ( aI % 2 == 0 ) ? 0.9 : 0.1 + 0.05 * aI;
+        }
+
+        void
+        unused_initialize( Vector< real >&, Vector< real >&, Vector< real >& )
+        {
+        }
+
+        Vector< real >
+        get_criteria( const Vector< real >& aADVs )
+        {
+            return aADVs;
+        }
+
+        Matrix< DDRMat >
+        get_dcriteria_dadv( const Vector< real >& aADVs )
+        {
+            Matrix< DDRMat > tIdentity( aADVs.size(), aADVs.size(), 0.0 );
+            for ( uint iADV = 0; iADV < aADVs.size(); iADV++ )
+            {
+                tIdentity( iADV, iADV ) = 1.0;
+            }
+            return tIdentity;
+        }
+
+        Matrix< DDSMat >
+        get_constraint_types()
+        {
+            return Matrix< DDSMat >( 1, 1, 1 );
+        }
+
+        Matrix< DDRMat >
+        compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            real tObjective = 0.0;
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                tObjective += weight( iADV ) * std::pow( aCriteria( iADV ) - target( iADV ), 2 );
+            }
+            return { { tObjective } };
+        }
+
+        Matrix< DDRMat >
+        compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            real tSum = 0.0;
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                tSum += aCriteria( iADV );
+            }
+            return { { tSum - 0.4 * aCriteria.size() } };
+        }
+
+        Matrix< DDRMat >
+        zero_dadv( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, aADVs.size(), 0.0 );
+        }
+
+        Matrix< DDRMat >
+        compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            Matrix< DDRMat > tGradient( 1, aCriteria.size(), 0.0 );
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                tGradient( 0, iADV ) = 2.0 * weight( iADV ) * ( aCriteria( iADV ) - target( iADV ) );
+            }
+            return tGradient;
+        }
+
+        Matrix< DDRMat >
+        compute_dconstraint_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            return Matrix< DDRMat >( 1, aCriteria.size(), 1.0 );
+        }
+
+        /** restart at evaluation mRestartAtCall (0: never); the restart design is the last evaluated one plus mShift */
+        class Interface_Forced_Restart : public Interface_User_Defined
+        {
+          public:
+            uint                               mNumADVs         = 4;
+            uint                               mRestartAtCall   = 0;
+            uint                               mCalls           = 0;
+            uint                               mInitializations = 0;
+            std::vector< real >                mShift;
+            std::vector< real >                mLast;
+            std::vector< std::vector< real > > mEvaluated;    ///< every finite evaluation's design
+
+            Interface_Forced_Restart()
+                    : Interface_User_Defined( &warm_restart::unused_initialize, &warm_restart::get_criteria, &warm_restart::get_dcriteria_dadv )
+            {
+            }
+
+            void
+            initialize( Vector< real >& aADVs, Vector< real >& aLowerBounds, Vector< real >& aUpperBounds, Matrix< IdMat >& ) override
+            {
+                mInitializations++;
+                aADVs.resize( mNumADVs );
+                aLowerBounds.resize( mNumADVs );
+                aUpperBounds.resize( mNumADVs );
+                for ( uint iADV = 0; iADV < mNumADVs; iADV++ )
+                {
+                    real tValue = 0.5;
+                    if ( mInitializations > 1 )
+                    {
+                        tValue = mLast[ iADV ] + ( iADV < mShift.size() ? mShift[ iADV ] : 0.0 );
+                    }
+                    aADVs( iADV )        = std::min( std::max( tValue, 0.0 ), 1.0 );
+                    aLowerBounds( iADV ) = 0.0;
+                    aUpperBounds( iADV ) = 1.0;
+                }
+                mInitializeOptimizationRestart = false;
+            }
+
+            Vector< real >
+            perform( Vector< real >& aNewADVs ) override
+            {
+                mCalls++;
+                if ( mCalls == mRestartAtCall )
+                {
+                    mInitializeOptimizationRestart = true;
+                    return Vector< real >( aNewADVs.size(), std::numeric_limits< real >::quiet_NaN() );
+                }
+                mLast.assign( aNewADVs.size(), 0.0 );
+                for ( uint iADV = 0; iADV < aNewADVs.size(); iADV++ )
+                {
+                    mLast[ iADV ] = aNewADVs( iADV );
+                }
+                mEvaluated.push_back( mLast );
+                return Interface_User_Defined::perform( aNewADVs );
+            }
+        };
+
+        std::shared_ptr< Problem >
+        make_problem( const std::shared_ptr< Interface_Forced_Restart >& aInterface )
+        {
+            Parameter_List tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    aInterface,
+                    &get_constraint_types,
+                    &compute_objectives,
+                    &compute_constraints,
+                    &zero_dadv,
+                    &compute_dobjective_dcriteria,
+                    &zero_dadv,
+                    &compute_dconstraint_dcriteria );
+            tProblem->initialize();
+            return tProblem;
+        }
+
+        Parameter_List
+        algorithm_parameters( bool aKeepState, sint aMaxIts )
+        {
+            Parameter_List tParameterList = moris::prm::create_mma_parameter_list();
+            tParameterList.set( "max_its", aMaxIts );
+            tParameterList.set( "norm_drop", 1.0e-14 );
+            tParameterList.set( "step_size", 0.1 );
+            tParameterList.set( "move_adapt", true );
+            tParameterList.set( "move_adapt_init", 0.05 );
+            tParameterList.set( "move_adapt_min", 1.0e-3 );
+            tParameterList.set( "restart_keep_state", aKeepState );
+            return tParameterList;
+        }
+
+        /** the Manager's restart loop (Manager::reinitialize), keeping access to the algorithm */
+        void
+        solve_with_restarts( Algorithm_MMA& aAlgorithm, const std::shared_ptr< Problem >& aProblem )
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            aAlgorithm.solve( 0, aProblem );
+            while ( aProblem->restart_optimization() )
+            {
+                aProblem->initialize();
+                aAlgorithm.solve( 0, aProblem );
+            }
+        }
+
+        void
+        remove_state_files()
+        {
+            for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
+            {
+                const std::string tName = tEntry.path().filename().string();
+                if ( tName.rfind( "MMA_State_Alg_0_Iter_", 0 ) == 0 || tName.rfind( "ADV_Alg_0_Iter_", 0 ) == 0 )
+                {
+                    std::filesystem::remove( tEntry.path() );
+                }
+            }
+        }
+    }    // namespace warm_restart
+
+    TEST_CASE( "Native MMA restart state is re-centred, row-mapped and reset for moved ADVs", "[optimization][restart_keep_state]" )
+    {
+        Algorithm_MMA::Restart_State tState;
+        tState.mValid    = true;
+        tState.mCentre   = { 0.5, 0.5, 0.5, 0.5 };
+        tState.mLowWidth = { 0.10, 0.20, 0.001, 0.30 };
+        tState.mUppWidth = { 0.20, 0.30, 0.40, 0.30 };
+        tState.mMoveStep = { 0.01, 0.02, 0.03, 0.04 };
+
+        // identity map; ADV 1 has range 2 (move step 0.02 -> fraction 0.01); ADV 2's low width is clamped to 0.01 range;
+        // ADV 3 moved by 0.45 > 0.25 of its range: fresh
+        std::vector< double > tX    = { 0.55, 0.5, 0.5, 0.95 };
+        std::vector< double > tXMin = { 0.0, -1.0, 0.0, 0.0 };
+        std::vector< double > tXMax = { 1.0, 1.0, 1.0, 1.0 };
+        std::vector< double > tLow, tUpp, tMove;
+
+        Algorithm_MMA::Restart_Counts tCounts = Algorithm_MMA::apply_restart_state(
+                tState, {}, tX, tXMin, tXMax, 0.25, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove );
+
+        CHECK( tCounts.mKept == 3 );
+        CHECK( tCounts.mMoved == 1 );
+        CHECK( tCounts.mFresh == 0 );
+        CHECK( tLow[ 0 ] == Approx( 0.45 ) );
+        CHECK( tUpp[ 0 ] == Approx( 0.75 ) );
+        CHECK( tMove[ 0 ] == Approx( 0.01 ) );
+        CHECK( tLow[ 1 ] == Approx( 0.30 ) );
+        CHECK( tUpp[ 1 ] == Approx( 0.80 ) );
+        CHECK( tMove[ 1 ] == Approx( 0.01 ) );
+        CHECK( tLow[ 2 ] == Approx( 0.49 ) );
+        CHECK( tUpp[ 2 ] == Approx( 0.90 ) );
+        CHECK( tMove[ 2 ] == Approx( 0.03 ) );
+        CHECK( tLow[ 3 ] == Approx( 0.45 ) );
+        CHECK( tUpp[ 3 ] == Approx( 1.45 ) );
+        CHECK( tMove[ 3 ] == Approx( 0.07 ) );
+
+        // a fixed move box (no move_adapt) is left untouched
+        std::vector< double > tFixed( 4, 0.1 );
+        Algorithm_MMA::apply_restart_state( tState, {}, tX, tXMin, tXMax, 0.25, 0.5, false, 0.07, 1.0e-4, 0.1, tLow, tUpp, tFixed );
+        CHECK( tFixed == std::vector< double >( 4, 0.1 ) );
+
+        // row map (3 new ADVs): new 0 <- old 3, new 1 fresh, new 2 <- old 0; with the moved test off, any distance keeps
+        std::vector< double > tX3    = { 0.1, 0.5, 0.9 };
+        std::vector< double > tXMin3 = { 0.0, 0.0, 0.0 };
+        std::vector< double > tXMax3 = { 1.0, 1.0, 1.0 };
+        tCounts                      = Algorithm_MMA::apply_restart_state(
+                tState, { 3, -1, 0 }, tX3, tXMin3, tXMax3, 0.0, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove );
+        REQUIRE( tLow.size() == 3 );
+        CHECK( tCounts.mKept == 2 );
+        CHECK( tCounts.mFresh == 1 );
+        CHECK( tLow[ 0 ] == Approx( 0.1 - 0.30 ) );
+        CHECK( tUpp[ 0 ] == Approx( 0.1 + 0.30 ) );
+        CHECK( tMove[ 0 ] == Approx( 0.04 ) );
+        CHECK( tLow[ 1 ] == Approx( 0.0 ) );
+        CHECK( tUpp[ 1 ] == Approx( 1.0 ) );
+        CHECK( tMove[ 1 ] == Approx( 0.07 ) );
+        CHECK( tLow[ 2 ] == Approx( 0.8 ) );
+        CHECK( tUpp[ 2 ] == Approx( 1.1 ) );
+        CHECK( tMove[ 2 ] == Approx( 0.01 ) );
+
+        // a map entry outside [-1, number of kept ADVs) is an error
+        CHECK_THROWS( Algorithm_MMA::apply_restart_state(
+                tState, { 4, 0, 1 }, tX3, tXMin3, tXMax3, 0.0, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove ) );
+    }
+
+    TEST_CASE( "Native MMA keeps its state across an in-process restart", "[optimization][restart_keep_state]" )
+    {
+        if ( par_rank() != 0 )
+        {
+            return;
+        }
+        using namespace warm_restart;
+
+        // the restart is requested at evaluation 6 (the trial of iteration 5: 4 completed iterations); the re-fit moves
+        // ADV 1 by 0.003 (kept) and ADV 3 by 0.4 (> 0.25 of its range: fresh)
+        std::shared_ptr< Interface_Forced_Restart > tInterface = std::make_shared< Interface_Forced_Restart >();
+        tInterface->mRestartAtCall                             = 6;
+        tInterface->mShift                                     = { 0.0, 0.003, 0.0, 0.4 };
+        std::shared_ptr< Problem > tProblem                    = make_problem( tInterface );
+
+        Algorithm_MMA                tAlgorithm( algorithm_parameters( true, 40 ) );
+        Algorithm_MMA::Restart_State tBefore;
+        std::vector< real >          tRestartX;
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+            REQUIRE( tProblem->restart_optimization() );
+            REQUIRE( tAlgorithm.get_num_warm_solves() == 0 );
+            tBefore = tAlgorithm.get_kept_state();
+            REQUIRE( tBefore.mValid );
+
+            tProblem->initialize();
+            for ( uint iADV = 0; iADV < 4; iADV++ )
+            {
+                tRestartX.push_back( tProblem->get_advs()( iADV ) );
+            }
+
+            // one iteration after the restart (Manager::reinitialize sets the restart index the same way)
+            tAlgorithm.set_restart_index( 39 );
+            tAlgorithm.solve( 0, tProblem );
+        }
+
+        REQUIRE( tAlgorithm.get_num_warm_solves() == 1 );
+        const Algorithm_MMA::Restart_State&  tStart  = tAlgorithm.get_warm_start_state();
+        const Algorithm_MMA::Restart_Counts& tCounts = tAlgorithm.get_warm_start_counts();
+        CHECK( tCounts.mKept == 3 );
+        CHECK( tCounts.mMoved == 1 );
+        CHECK( tCounts.mFresh == 0 );
+
+        // the kept quantities equal the pre-restart ones, the widths re-centred on the restart design
+        CHECK( tStart.mRaa0 == tBefore.mRaa0 );
+        CHECK( tStart.mRaa == tBefore.mRaa );
+        CHECK( tStart.mPenalty == tBefore.mPenalty );
+        CHECK( tStart.mObjScale == tBefore.mObjScale );
+        CHECK( tStart.mKKTRef == tBefore.mKKTRef );
+        bool tMovesDiffer = false;
+        for ( uint iADV = 0; iADV < 4; iADV++ )
+        {
+            CHECK( tStart.mCentre[ iADV ] == tRestartX[ iADV ] );
+            if ( iADV == 3 )
+            {
+                // fresh: asymptotes at x -+ 0.5 range, the initial move limit
+                CHECK( tStart.mLowWidth[ iADV ] == Approx( 0.5 ) );
+                CHECK( tStart.mUppWidth[ iADV ] == Approx( 0.5 ) );
+                CHECK( tStart.mMoveStep[ iADV ] == Approx( 0.05 ) );
+                continue;
+            }
+            CHECK( tStart.mLowWidth[ iADV ] == Approx( tBefore.mLowWidth[ iADV ] ).epsilon( 1e-12 ) );
+            CHECK( tStart.mUppWidth[ iADV ] == Approx( tBefore.mUppWidth[ iADV ] ).epsilon( 1e-12 ) );
+            CHECK( tStart.mMoveStep[ iADV ] == tBefore.mMoveStep[ iADV ] );
+            tMovesDiffer = tMovesDiffer || tBefore.mMoveStep[ iADV ] != 0.05;
+            // not the reset of a fresh solve
+            CHECK( std::abs( tStart.mLowWidth[ iADV ] - 0.5 ) > 1e-3 );
+        }
+        CHECK( tMovesDiffer );    // the move limits had adapted before the restart
+
+        // the first iteration after the restart used the kept widths (history branch, factor 1): its own next widths
+        // (x1 - x' and x' - x' give factor 1 again) are the kept ones, and its step stays inside the kept move limits
+        const Algorithm_MMA::Restart_State& tAfter = tAlgorithm.get_kept_state();
+        const std::vector< real >&          tX1    = tInterface->mEvaluated.back();
+        for ( uint iADV = 0; iADV < 3; iADV++ )
+        {
+            CHECK( tAfter.mLowWidth[ iADV ] == Approx( tStart.mLowWidth[ iADV ] ).epsilon( 1e-12 ) );
+            CHECK( tAfter.mUppWidth[ iADV ] == Approx( tStart.mUppWidth[ iADV ] ).epsilon( 1e-12 ) );
+            CHECK( std::abs( tX1[ iADV ] - tRestartX[ iADV ] ) <= tStart.mMoveStep[ iADV ] * ( 1.0 + 1e-12 ) );
+        }
+        warm_restart::remove_state_files();
+    }
+
+    TEST_CASE( "Native MMA warm restart: key off is unchanged, and the restarted run converges", "[optimization][restart_keep_state]" )
+    {
+        if ( par_rank() != 0 )
+        {
+            return;
+        }
+        using namespace warm_restart;
+
+        // no restart: restart_keep_state changes nothing (same designs, bitwise)
+        std::vector< std::vector< std::vector< real > > > tTrajectories;
+        for ( bool tKeep : { false, true } )
+        {
+            std::shared_ptr< Interface_Forced_Restart > tInterface = std::make_shared< Interface_Forced_Restart >();
+            std::shared_ptr< Problem >                  tProblem   = make_problem( tInterface );
+            Algorithm_MMA                               tAlgorithm( algorithm_parameters( tKeep, 80 ) );
+            solve_with_restarts( tAlgorithm, tProblem );
+            tTrajectories.push_back( tInterface->mEvaluated );
+        }
+        CHECK( tTrajectories[ 0 ] == tTrajectories[ 1 ] );
+
+        // with a restart (and a re-fit shift) the run converges to the same optimum, reset or kept
+        std::vector< std::vector< real > > tFinal;
+        for ( bool tKeep : { false, true } )
+        {
+            std::shared_ptr< Interface_Forced_Restart > tInterface = std::make_shared< Interface_Forced_Restart >();
+            tInterface->mRestartAtCall                             = 6;
+            tInterface->mShift                                     = { 0.0, 0.003, 0.0, 0.4 };
+            std::shared_ptr< Problem > tProblem                    = make_problem( tInterface );
+            Algorithm_MMA              tAlgorithm( algorithm_parameters( tKeep, 80 ) );
+            solve_with_restarts( tAlgorithm, tProblem );
+            CHECK( tAlgorithm.get_num_warm_solves() == ( tKeep ? 1 : 0 ) );
+            tFinal.push_back( tInterface->mEvaluated.back() );
+        }
+        // KKT optimum: x_i = clip( t_i - lambda / ( 2 w_i ), 0, 1 ), sum x_i = 0.4 N (bisection on lambda)
+        real tLambdaLow  = 0.0;
+        real tLambdaHigh = 100.0;
+        for ( uint iBisect = 0; iBisect < 200; iBisect++ )
+        {
+            const real tLambda = 0.5 * ( tLambdaLow + tLambdaHigh );
+            real       tSum    = 0.0;
+            for ( uint iADV = 0; iADV < 4; iADV++ )
+            {
+                tSum += std::min( std::max( target( iADV ) - tLambda / ( 2.0 * weight( iADV ) ), 0.0 ), 1.0 );
+            }
+            ( tSum > 1.6 ? tLambdaLow : tLambdaHigh ) = tLambda;
+        }
+        for ( uint iADV = 0; iADV < 4; iADV++ )
+        {
+            const real tOptimum = std::min( std::max( target( iADV ) - tLambdaLow / ( 2.0 * weight( iADV ) ), 0.0 ), 1.0 );
+            CHECK( tTrajectories[ 0 ].back()[ iADV ] == Approx( tOptimum ).margin( 1e-4 ) );
+            CHECK( tFinal[ 0 ][ iADV ] == Approx( tOptimum ).margin( 1e-4 ) );
+            CHECK( tFinal[ 1 ][ iADV ] == Approx( tOptimum ).margin( 1e-4 ) );
+        }
+        warm_restart::remove_state_files();
+    }
+
+    TEST_CASE( "Native MMA restarts a new run from a state file with a row map", "[optimization][restart_keep_state]" )
+    {
+        if ( par_rank() != 0 )
+        {
+            return;
+        }
+        using namespace warm_restart;
+        warm_restart::remove_state_files();
+
+        // run 1 (4 ADVs) writes the state next to every committed design
+        std::shared_ptr< Interface_Forced_Restart > tInterface = std::make_shared< Interface_Forced_Restart >();
+        std::shared_ptr< Problem >                  tProblem   = make_problem( tInterface );
+        Algorithm_MMA                               tAlgorithm( algorithm_parameters( true, 6 ) );
+        solve_with_restarts( tAlgorithm, tProblem );
+
+        std::string tLatest;
+        uint        tLatestIter = 0;
+        uint        tNumFiles   = 0;
+        for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
+        {
+            const std::string tName = tEntry.path().filename().string();
+            if ( tName.rfind( "MMA_State_Alg_0_Iter_", 0 ) == 0 )
+            {
+                tNumFiles++;
+                uint tIter = (uint)std::stoul( tName.substr( 21 ) );
+                if ( tLatest.empty() || tIter > tLatestIter )
+                {
+                    tLatest     = tName;
+                    tLatestIter = tIter;
+                }
+            }
+        }
+        REQUIRE( tNumFiles == 6 );    // one per completed iteration
+        CHECK( std::filesystem::exists( "ADV_Alg_0_Iter_" + std::to_string( tLatestIter ) + ".hdf5" ) );
+
+        // the file holds the kept state of the last iteration, and its design is the committed one
+        Algorithm_MMA::Restart_State        tFile = Algorithm_MMA::read_restart_state( tLatest );
+        const Algorithm_MMA::Restart_State& tKept = tAlgorithm.get_kept_state();
+        CHECK( tFile.mCentre == tKept.mCentre );
+        CHECK( tFile.mLowWidth == tKept.mLowWidth );
+        CHECK( tFile.mUppWidth == tKept.mUppWidth );
+        CHECK( tFile.mMoveStep == tKept.mMoveStep );
+        CHECK( tFile.mRaa0 == tKept.mRaa0 );
+        CHECK( tFile.mRaa == tKept.mRaa );
+        CHECK( tFile.mObjScale == tKept.mObjScale );
+        CHECK( tFile.mCentre == tInterface->mEvaluated.back() );
+
+        // run 2: 5 ADVs (a "prune and grow"), new ADV i <- old ADV { 3, -1, 0, 1, 2 }[ i ]
+        std::shared_ptr< Interface_Forced_Restart > tInterface2 = std::make_shared< Interface_Forced_Restart >();
+        tInterface2->mNumADVs                                   = 5;
+        std::shared_ptr< Problem > tProblem2                    = make_problem( tInterface2 );
+        Parameter_List             tParameters                  = algorithm_parameters( true, 1 );
+        tParameters.set( "restart_state_file", tLatest );
+        tParameters.set( "restart_state_row_map", "3, -1, 0, 1, 2" );
+        tParameters.set( "restart_keep_state_moved_fraction", 0.0 );
+        Algorithm_MMA tAlgorithm2( tParameters );
+        solve_with_restarts( tAlgorithm2, tProblem2 );
+
+        REQUIRE( tAlgorithm2.get_num_warm_solves() == 1 );
+        const Algorithm_MMA::Restart_State&  tStart  = tAlgorithm2.get_warm_start_state();
+        const Algorithm_MMA::Restart_Counts& tCounts = tAlgorithm2.get_warm_start_counts();
+        CHECK( tCounts.mKept == 4 );
+        CHECK( tCounts.mFresh == 1 );
+        CHECK( tStart.mRaa0 == tFile.mRaa0 );
+        CHECK( tStart.mObjScale == tFile.mObjScale );
+        const std::vector< sint > tMap = { 3, -1, 0, 1, 2 };
+        for ( uint iADV = 0; iADV < 5; iADV++ )
+        {
+            CHECK( tStart.mCentre[ iADV ] == 0.5 );
+            if ( tMap[ iADV ] < 0 )
+            {
+                CHECK( tStart.mLowWidth[ iADV ] == Approx( 0.5 ) );
+                CHECK( tStart.mMoveStep[ iADV ] == Approx( 0.05 ) );
+                continue;
+            }
+            CHECK( tStart.mLowWidth[ iADV ] == Approx( tFile.mLowWidth[ tMap[ iADV ] ] ).epsilon( 1e-12 ) );
+            CHECK( tStart.mUppWidth[ iADV ] == Approx( tFile.mUppWidth[ tMap[ iADV ] ] ).epsilon( 1e-12 ) );
+            CHECK( tStart.mMoveStep[ iADV ] == tFile.mMoveStep[ tMap[ iADV ] ] );
+        }
+
+        // without a row map, a state file of another size is an error
+        Parameter_List tWrongSize = algorithm_parameters( true, 1 );
+        tWrongSize.set( "restart_state_file", tLatest );
+        std::shared_ptr< Interface_Forced_Restart > tInterface3 = std::make_shared< Interface_Forced_Restart >();
+        tInterface3->mNumADVs                                   = 5;
+        std::shared_ptr< Problem > tProblem3                    = make_problem( tInterface3 );
+        Algorithm_MMA              tAlgorithm3( tWrongSize );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            CHECK_THROWS( tAlgorithm3.solve( 0, tProblem3 ) );
+        }
+
+        // a state file needs restart_keep_state
+        Parameter_List tNoKeep = algorithm_parameters( false, 1 );
+        tNoKeep.set( "restart_state_file", tLatest );
+        CHECK_THROWS( Algorithm_MMA( tNoKeep ) );
+
+        warm_restart::remove_state_files();
+    }
 }    // namespace moris::opt
