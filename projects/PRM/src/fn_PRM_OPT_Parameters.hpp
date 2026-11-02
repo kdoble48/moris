@@ -228,6 +228,25 @@ namespace moris::prm
         tParameterList.insert( "move_guard_shrink", 0.5 );     // move-box factor per rejected trial
         tParameterList.insert( "move_guard_max_backtracks", 4 );
 
+        // Warm restart (off by default => every restart re-initializes the optimizer state, as before). With
+        // restart_keep_state, a restart keeps: the per-ADV move limits, the asymptote widths (x - low, upp - x),
+        // re-centred on the restart design, the conservatism weights raa0/raa, the constraint penalties, the
+        // objective scale and the KKT reference residual; the first iterations after it continue the asymptote
+        // history (factor 1) instead of resetting the asymptotes to x +- asymp_adapt0 * range. Widths and move steps
+        // are kept in ADV units and re-expressed as fractions of the range the restarted problem provides (bounds
+        // are always taken from the problem). An ADV whose restart design is further than
+        // restart_keep_state_moved_fraction of its range from the design the state belongs to restarts fresh.
+        // In-process restarts (reinitialization schedule, user_function re-fit, failed decomposition) keep the state
+        // in memory. Every completed iteration also writes MMA_State_Alg_<a>_Iter_<N>.hdf5, N = the iteration of the
+        // committed design's ADV_Alg_<a>_Iter_<N>.hdf5; restart_state_file loads one at the start of a new run.
+        tParameterList.insert( "restart_keep_state", false );
+        tParameterList.insert( "restart_keep_state_moved_fraction", 0.25 );    // <= 0: no ADV counts as moved
+        tParameterList.insert( "restart_state_file", "" );                     // MMA_State_*.hdf5 of a previous run
+        // new ADV index -> ADV index in restart_state_file (-1 = fresh state), e.g. after a prune; empty = identity
+        // (same number of ADVs): integers separated by commas or whitespace, inline or in a text file (_file)
+        tParameterList.insert( "restart_state_row_map", "" );
+        tParameterList.insert( "restart_state_row_map_file", "" );
+
         return tParameterList;
     }
 
