@@ -341,7 +341,10 @@ namespace moris::opt
                 tAlgorithms.add_parameter_list( tAlgorithmParameterList );
                 Manager tManager( tAlgorithms, tProblem );
                 tManager.perform();
-                return { tManager.get_objectives()( 0 ), tManager.get_advs() };
+
+                // objectives live on rank 0 only (Problem::get_objectives errors elsewhere); the callers check on rank 0 (MB-088)
+                real tObjective = par_rank() == 0 ? tManager.get_objectives()( 0 ) : 0.0;
+                return { tObjective, tManager.get_advs() };
             };
 
             // the rule on (gated and ungated): still reaches the Rosenbrock minimum
@@ -1606,6 +1609,12 @@ namespace moris::opt
         Vector< real >
         get_criteria( const Vector< real >& aADVs )
         {
+            // only processor 0 holds the ADVs; the others evaluate an empty dummy vector (Algorithm::dummy_solve)
+            if ( par_rank() != 0 )
+            {
+                return { {} };
+            }
+
             mEvaluations++;
             mLastFailed = ( mFault == Fault::single_evaluation and mEvaluations == mFaultyEvaluation )
                        or ( mFault == Fault::off_initial_design and aADVs( 0 ) != 0.5 );
@@ -1620,6 +1629,11 @@ namespace moris::opt
         Matrix< DDRMat >
         get_dcriteria_dadv( const Vector< real >& aADVs )
         {
+            if ( par_rank() != 0 )
+            {
+                return { {} };
+            }
+
             if ( mLastFailed )
             {
                 mGradientsOnFailed++;
@@ -1674,24 +1688,28 @@ namespace moris::opt
 
     TEST_CASE( "Native GCMMA rejects a failed conservatism inner trial", "[optimization][MB-023]" )
     {
+        // every rank enters solve (the others serve criteria requests in Algorithm::dummy_solve); only rank 0 checks
+        // evaluation 1 is the initial design, 2 the (non-conservative) first trial, 3 the first inner trial
+        failed_evaluation::reset( failed_evaluation::Fault::single_evaluation, 3 );
         if ( par_rank() == 0 )
         {
-            // evaluation 1 is the initial design, 2 the (non-conservative) first trial, 3 the first inner trial
-            failed_evaluation::reset( failed_evaluation::Fault::single_evaluation, 3 );
             failed_evaluation::remove_restart_files();
-            std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
+        }
+        std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
 
-            Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
-            tAlgorithmParameterList.set( "max_its", 1 );
-            tAlgorithmParameterList.set( "max_inner_its", 3 );
-            tAlgorithmParameterList.set( "step_size", 0.3 );
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "max_its", 1 );
+        tAlgorithmParameterList.set( "max_inner_its", 3 );
+        tAlgorithmParameterList.set( "step_size", 0.3 );
 
-            Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
-            {
-                Tracer tTracer( "OPT", "Manager", "Perform" );
-                tAlgorithm.solve( 0, tProblem );
-            }
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+        }
 
+        if ( par_rank() == 0 )
+        {
             // the inner loop was entered and its failed trial was evaluated
             REQUIRE( failed_evaluation::mEvaluations > 3 );
 
@@ -1707,24 +1725,28 @@ namespace moris::opt
 
     TEST_CASE( "Native GCMMA restores the accepted state after exhausted backtracking", "[optimization][MB-024]" )
     {
+        // every rank enters solve (the others serve criteria requests in Algorithm::dummy_solve); only rank 0 checks
+        // every trial fails, however short the step; only the initial design evaluates
+        failed_evaluation::reset( failed_evaluation::Fault::off_initial_design );
         if ( par_rank() == 0 )
         {
-            // every trial fails, however short the step; only the initial design evaluates
-            failed_evaluation::reset( failed_evaluation::Fault::off_initial_design );
             failed_evaluation::remove_restart_files();
-            std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
+        }
+        std::shared_ptr< Problem > tProblem = failed_evaluation::create_problem();
 
-            Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
-            tAlgorithmParameterList.set( "max_its", 1 );
-            tAlgorithmParameterList.set( "max_inner_its", 0 );
-            tAlgorithmParameterList.set( "step_size", 0.3 );
+        Parameter_List tAlgorithmParameterList = moris::prm::create_mma_parameter_list();
+        tAlgorithmParameterList.set( "max_its", 1 );
+        tAlgorithmParameterList.set( "max_inner_its", 0 );
+        tAlgorithmParameterList.set( "step_size", 0.3 );
 
-            Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
-            {
-                Tracer tTracer( "OPT", "Manager", "Perform" );
-                tAlgorithm.solve( 0, tProblem );
-            }
+        Algorithm_MMA tAlgorithm( tAlgorithmParameterList );
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+        }
 
+        if ( par_rank() == 0 )
+        {
             // initial design + first trial + 15 backtracks + the restore evaluation of the held design
             CHECK( failed_evaluation::mEvaluations == 18 );
             CHECK( failed_evaluation::mGradientsOnFailed == 0 );
