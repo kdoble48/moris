@@ -55,6 +55,7 @@ set(HEADERS
 	# ADV/fields
 	ADV/fields/cl_GEN_Field.hpp
 	ADV/fields/cl_GEN_Field_Analytic.hpp
+	ADV/fields/cl_GEN_Field_Evaluation_Log.hpp
 	ADV/fields/cl_GEN_Field_Discrete_Integration.hpp
 	ADV/fields/cl_GEN_Constant_Field.hpp
 	ADV/fields/cl_GEN_Scaled_Field.hpp
@@ -120,6 +121,7 @@ set(LIB_SOURCES
 
 	# ADV/fields
 	ADV/fields/cl_GEN_Field.cpp
+	ADV/fields/cl_GEN_Field_Evaluation_Log.cpp
 	ADV/fields/cl_GEN_Field_Discrete_Integration.cpp
 	ADV/fields/cl_GEN_Constant_Field.cpp
 	ADV/fields/cl_GEN_Scaled_Field.cpp

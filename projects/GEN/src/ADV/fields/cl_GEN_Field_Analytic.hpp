@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "cl_GEN_Field.hpp"
+#include "cl_GEN_Field_Evaluation_Log.hpp"
 #include "cl_MTK_Mapper.hpp"
 
 namespace moris::gen
@@ -90,7 +91,12 @@ namespace moris::gen
                 uint                    aNodeIndex,
                 const Matrix< DDRMat >& aCoordinates ) final
         {
-            return this->get_field_value( aCoordinates );
+            real tValue = this->get_field_value( aCoordinates );
+            if ( mEvaluationLog )
+            {
+                mEvaluationLog->log_background_node( aNodeIndex, aCoordinates, tValue );
+            }
+            return tValue;
         }
 
         /**
@@ -104,7 +110,12 @@ namespace moris::gen
                 const Derived_Node& aDerivedNode,
                 const Node_Manager& aNodeManager ) final
         {
-            return this->get_field_value( aDerivedNode.get_global_coordinates() );
+            real tValue = this->get_field_value( aDerivedNode.get_global_coordinates() );
+            if ( mEvaluationLog )
+            {
+                mEvaluationLog->log_derived_node( aDerivedNode, tValue );
+            }
+            return tValue;
         }
 
         /**
@@ -133,7 +144,22 @@ namespace moris::gen
          */
         real get_field_value_at_point( const Matrix< DDRMat >& aCoordinates ) override
         {
-            return this->get_field_value( aCoordinates );
+            real tValue = this->get_field_value( aCoordinates );
+            if ( mEvaluationLog )
+            {
+                mEvaluationLog->log_point( aCoordinates, tValue );
+            }
+            return tValue;
+        }
+
+        /**
+         * Analytic fields record their evaluations in an attached Field_Evaluation_Log (log_field_evaluations).
+         *
+         * @return true
+         */
+        bool supports_evaluation_log() const override
+        {
+            return true;
         }
 
         /**

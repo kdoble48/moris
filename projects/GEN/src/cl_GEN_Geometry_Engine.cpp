@@ -85,6 +85,7 @@ namespace moris::gen
         for ( uint iGeometryIndex = 0; iGeometryIndex < mGeometries.size(); iGeometryIndex++ )
         {
             mGeometries( iGeometryIndex )->set_decomposition_index( iGeometryIndex );
+            mGeometries( iGeometryIndex )->start_field_evaluation_log( iGeometryIndex );
         }
 
         // Set requested PDVs
@@ -130,6 +131,7 @@ namespace moris::gen
         for ( uint iGeometryIndex = 0; iGeometryIndex < mGeometries.size(); iGeometryIndex++ )
         {
             mGeometries( iGeometryIndex )->set_decomposition_index( iGeometryIndex );
+            mGeometries( iGeometryIndex )->start_field_evaluation_log( iGeometryIndex );
         }
 
         // Create integration mesh

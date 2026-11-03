@@ -29,6 +29,7 @@
 #include "cl_HMR_Element.hpp"
 #include "cl_MTK_Vertex.hpp"
 #include "cl_GEN_Cell_Feature_Detector.hpp"
+#include "cl_GEN_Field_Evaluation_Log.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -783,6 +784,9 @@ namespace moris::wrk
                     if ( tNumRefinements( iLagMesh ) > aRefinementNumber )
                     {
                         // Loop over all nodes in the Lagrange mesh and get field values
+                        // GEN evaluation log: node regions of the default (node-sign) refinement criterion
+                        gen::Evaluation_Stage tStage( "refine_node_sign" );
+                        gen::Evaluation_Pass  tPass( (sint)aRefinementNumber );
                         Matrix< DDRMat > tFieldValues( aMesh->get_num_nodes(), 1 );
                         for ( uint tNodeIndex = 0; tNodeIndex < aMesh->get_num_nodes(); tNodeIndex++ )
                         {
@@ -810,6 +814,7 @@ namespace moris::wrk
             const std::shared_ptr< Performer >& aPerformer,
             uint                                aMeshIndex )
     {
+        gen::Evaluation_Stage tStage( "refine_low_level" );
         uint tNumElements = 0;
 
         // Loop over fields
@@ -863,6 +868,9 @@ namespace moris::wrk
             uint                                aMeshIndex,
             bool                                aFinalCheck )
     {
+        // GEN evaluation log: detector lattice and query-point evaluations of this pass (or of the final check)
+        gen::Evaluation_Stage tStage( aFinalCheck ? "refine_final_check" : "refine_feature_pass" );
+        gen::Evaluation_Pass  tPass( (sint)aPass );
         uint tSamples = aPerformer->get_feature_refinement_samples( aFieldIndex );
 
         // refinement passes this field has run (the final check reports them; aPass is then number_of_refinements)
@@ -1106,6 +1114,8 @@ namespace moris::wrk
             const Vector< std::shared_ptr< Performer > >& aPerformers,
             uint                                          aMeshIndex )
     {
+        gen::Evaluation_Stage   tStage( "refine_equalize" );
+        gen::Evaluation_Purpose tPurpose( "equalize_cut_lattice" );
         // fields refined on this mesh that XTK can see cut inside cells whose nodes share one region
         Vector< std::pair< uint, uint > > tFields;    // (performer, field)
         bool                              tAnyFeature = false;

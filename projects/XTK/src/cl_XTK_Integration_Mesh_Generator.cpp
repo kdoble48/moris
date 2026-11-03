@@ -16,6 +16,7 @@
 #include "cl_XTK_Integration_Mesh_Generator.hpp"
 #include "cl_GEN_Cell_Feature_Detector.hpp"
 #include "cl_GEN_Geometry_Engine.hpp"
+#include "cl_GEN_Field_Evaluation_Log.hpp"
 #include "cl_XTK_Decomposition_Algorithm_Factory.hpp"
 #include "cl_XTK_Decomposition_Algorithm.hpp"
 #include "fn_determine_cell_topology.hpp"
@@ -59,6 +60,8 @@ namespace moris::xtk
     std::shared_ptr< Cut_Integration_Mesh >
     Integration_Mesh_Generator::perform()
     {
+        // GEN evaluation log: every field evaluation during the cut is tagged with the XTK step that asked for it
+        gen::Evaluation_Stage tStage( "xtk_other" );
         // log/trace this operation
         Tracer tTracer( "XTK", "Integration_Mesh_Generator", "perform", mXTKModel->mVerboseLevel, 0 );
 
@@ -99,6 +102,7 @@ namespace moris::xtk
             // perform the decomposition
             Decomposition_Data tDecompositionData;
 
+            gen::Evaluation_Stage tDecompositionStage( iSubMethod == 0 ? "xtk_decomposition_1" : ( iSubMethod == 1 ? "xtk_decomposition_2" : "xtk_decomposition_3+" ) );
             tDecompositionAlgorithm->perform( &tGenerationData, &tDecompositionData, tCutIntegrationMesh.get(), tBackgroundMesh, this );
         }
 
@@ -216,6 +220,7 @@ namespace moris::xtk
 
             // perform the regular subdivision on the non-intersected cells
             Decomposition_Data tDecompositionData;
+            gen::Evaluation_Stage tTriangulateStage( "xtk_triangulate_post" );
             tRegSubAlg->perform( &tGenerationData, &tDecompositionData, tCutIntegrationMesh.get(), tBackgroundMesh, this );
 
             // assign list of intersected BG cells back to Mesh Generation Data
@@ -241,6 +246,7 @@ namespace moris::xtk
 
             // perform the decomposition
             Decomposition_Data tDecompositionData;
+            gen::Evaluation_Stage tElevateStage( "xtk_order_elevation" );
             tElevateOrderAlg->perform( &tGenerationData, &tDecompositionData, tCutIntegrationMesh.get(), tBackgroundMesh, this );
         }
 
@@ -472,6 +478,7 @@ namespace moris::xtk
             Cut_Integration_Mesh*             aCutIntegrationMesh,
             uint                              aGeometryIndex )
     {
+        gen::Evaluation_Stage tStage( "xtk_child_vertex_selection" );
         // fields interpolated from the corners cannot change region inside a cell with uniform corners
         if ( not this->get_geom_engine()->can_change_region_inside_cell( aGeometryIndex ) )
         {
@@ -585,6 +592,7 @@ namespace moris::xtk
             Cut_Integration_Mesh*             aCutIntegrationMesh,
             mtk::Mesh*                        aBackgroundMesh )
     {
+        gen::Evaluation_Stage tStage( "xtk_cell_selection" );
         Tracer tTracer( "XTK", "Integration_Mesh_Generator", "Determine intersected background cells", mXTKModel->mVerboseLevel, 1 );
         uint   tNumGeometries = this->get_geom_engine()->get_number_of_geometries();
 
@@ -672,6 +680,8 @@ namespace moris::xtk
                     {
                         continue;
                     }
+                    gen::Evaluation_Stage    tCheckStage( "xtk_resolution_check" );
+                    gen::Evaluation_Purpose  tCheckPurpose( "resolution_check_lattice" );
                     gen::Cell_Feature_Report tReport = mXTKModel->get_geom_engine()->detect_cell_features( iGeom, tCorners, tOrder, tResolutionSamples );
                     for ( uint iEdge = 0; iEdge < tCellEdges.size(); iEdge++ )
                     {
@@ -708,6 +718,7 @@ namespace moris::xtk
 
                 if ( not tIsIntersected and tTestInteriorPoints( iGeom ) )
                 {
+                    gen::Evaluation_Purpose tInteriorPurpose( "xtk_interior_sample" );
                     tIsIntersected = mXTKModel->get_geom_engine()->is_intersected( iGeom, tGeometricQuery.get_query_entity_to_vertex_connectivity(), tGeometricQuery.get_query_indexed_coordinates(), tInteriorPoints );
                     tNumInteriorOnly += tIsIntersected;
                 }
@@ -801,6 +812,7 @@ namespace moris::xtk
             Cut_Integration_Mesh* aCutIntegrationMesh,
             mtk::Mesh*            aBackgroundMesh )
     {
+        gen::Evaluation_Stage tStage( "xtk_query_check" );
         gen::Geometry_Engine* tEngine        = this->get_geom_engine();
         uint                  tNumGeometries = tEngine->get_number_of_geometries();
         uint                  tNumCells      = aBackgroundMesh->get_num_elems();
@@ -921,6 +933,8 @@ namespace moris::xtk
             Cut_Integration_Mesh*             aCutIntegrationMesh,
             mtk::Mesh*                        aBackgroundMesh )
     {
+        gen::Evaluation_Stage   tStage( "xtk_non_intersected_selection" );
+        gen::Evaluation_Purpose tPurpose( "xtk_interior_sample" );
         Tracer tTracer( "XTK", "Integration_Mesh_Generator", "Determine intersected background cells", mXTKModel->mVerboseLevel, 1 );
         uint   tNumGeometries = this->get_geom_engine()->get_number_of_geometries();
 
@@ -1095,6 +1109,7 @@ namespace moris::xtk
     Integration_Mesh_Generator::compute_ig_cell_bulk_phase(
             Cut_Integration_Mesh* aCutIntegrationMesh )
     {
+        gen::Evaluation_Stage tStage( "xtk_cell_bulk_phase" );
         // log/trace this function
         Tracer tTracer( "XTK", "Integration_Mesh_Generator", "Compute IG cell bulk phases", mXTKModel->mVerboseLevel, 1 );
 
@@ -1437,6 +1452,7 @@ namespace moris::xtk
             mtk::Mesh*                                               aBackgroundMesh,
             const std::shared_ptr< Cell_Neighborhood_Connectivity >& aCutNeighborhood )
     {
+        gen::Evaluation_Stage tStage( "xtk_subphases" );
         // trace/log this function
         Tracer tTracer( "XTK", "Integration_Mesh_Generator", "Identify subphases", mXTKModel->mVerboseLevel, 1 );
 

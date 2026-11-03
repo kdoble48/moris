@@ -44,12 +44,16 @@ namespace moris::gen
 {
     // Forward declare derived node
     class Derived_Node;
+    class Field_Evaluation_Log;
 
     class Field
     {
       protected:
         ADV_Handler      mADVHandler;
         Matrix< DDRMat > mSensitivities;
+
+        // diagnostic log of this field's evaluations (log_field_evaluations); nullptr = off
+        std::shared_ptr< Field_Evaluation_Log > mEvaluationLog;
 
       private:
         std::string        mName;
@@ -108,6 +112,34 @@ namespace moris::gen
          * Destructor
          */
         virtual ~Field() = default;
+
+        /**
+         * Whether this field records its evaluations in an attached Field_Evaluation_Log (analytic fields).
+         *
+         * @return false for fields that do not support the log
+         */
+        virtual bool supports_evaluation_log() const
+        {
+            return false;
+        }
+
+        /**
+         * Attaches a diagnostic log of this field's evaluations (nullptr detaches it).
+         *
+         * @param aLog Evaluation log
+         */
+        void set_evaluation_log( std::shared_ptr< Field_Evaluation_Log > aLog )
+        {
+            mEvaluationLog = std::move( aLog );
+        }
+
+        /**
+         * Gets the attached evaluation log (nullptr if none).
+         */
+        const std::shared_ptr< Field_Evaluation_Log >& get_evaluation_log() const
+        {
+            return mEvaluationLog;
+        }
 
         /**
          * Copies the current field into a shared pointer with replacement variables for new constants.

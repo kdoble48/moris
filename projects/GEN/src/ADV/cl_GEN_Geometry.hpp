@@ -210,6 +210,17 @@ namespace moris::gen
             return mDecompositionIndex;
         }
 
+        /**
+         * Starts the diagnostic log of this geometry's field evaluations if it was requested (level sets:
+         * log_field_evaluations). Called by the geometry engine once the geometry index is known.
+         *
+         * @param aGeometryIndex Index of this geometry in the geometry engine
+         */
+        virtual void
+        start_field_evaluation_log( uint aGeometryIndex )
+        {
+        }
+
       private:
         uint mDecompositionIndex = MORIS_UINT_MAX;
     };

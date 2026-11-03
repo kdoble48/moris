@@ -11,6 +11,7 @@
 #include "cl_GEN_Intersection_Node_Analytic.hpp"
 #include "cl_GEN_Basis_Node.hpp"
 #include "cl_GEN_Level_Set_Geometry.hpp"
+#include "cl_GEN_Field_Evaluation_Log.hpp"
 #include "fn_eye.hpp"
 #include "fn_norm.hpp"
 #include "fn_trans.hpp"
@@ -99,6 +100,7 @@ namespace moris::gen
     {
         // d xi / d phi_i of the linear crossing xi = ( 2 c - phi_1 - phi_2 ) / ( phi_2 - phi_1 ), as Intersection_Node_Linear;
         // used for the linear-fallback sensitivities (the analytic ones take the field sensitivities at x*)
+        Evaluation_Operation tOperation( "sensitivity" );
         real tThreshold = mInterfaceGeometry.get_isocontour_threshold();
         real tPhi0      = mInterfaceGeometry.get_field_value( this->get_first_parent_node().get_index(), this->get_first_parent_node().get_global_coordinates() );
         real tPhi1      = mInterfaceGeometry.get_field_value( this->get_second_parent_node().get_index(), this->get_second_parent_node().get_global_coordinates() );

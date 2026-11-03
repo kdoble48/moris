@@ -11,6 +11,7 @@
 #include "cl_GEN_Field.hpp"
 #include "cl_GEN_Derived_Node.hpp"
 #include "cl_GEN_Basis_Node.hpp"
+#include "cl_GEN_Field_Evaluation_Log.hpp"
 #include "cl_MTK_Field_Discrete.hpp"
 
 namespace moris::gen
@@ -270,8 +271,9 @@ namespace moris::gen
         mtk::Interpolation_Mesh* tInterpolationMesh = aMeshPair.get_interpolation_mesh();
 
         // Get nodal values
-        uint             tNumberOfNodes = tInterpolationMesh->get_num_nodes();
-        Matrix< DDRMat > tNodalValues( tNumberOfNodes, 1 );
+        Evaluation_Operation tOperation( "mtk_field_values", false );
+        uint                 tNumberOfNodes = tInterpolationMesh->get_num_nodes();
+        Matrix< DDRMat >     tNodalValues( tNumberOfNodes, 1 );
         for ( uint tNodeIndex = 0; tNodeIndex < tNumberOfNodes; tNodeIndex++ )
         {
             tNodalValues( tNodeIndex ) =

@@ -18,6 +18,7 @@
 #include "cl_GEN_Parent_Node.hpp"
 #include "cl_GEN_Basis_Node.hpp"
 #include "cl_GEN_Interpolation.hpp"
+#include "cl_GEN_Field_Evaluation_Log.hpp"
 #include "cl_MTK_Interpolation_Function_Base.hpp"
 #include "cl_MTK_Interpolation_Function_Factory.hpp"
 #include "fn_dot.hpp"
@@ -44,6 +45,8 @@ namespace moris::gen
             , mFeatureQueryFunctionName( aParameterList.exists( "feature_query_function" ) ? aParameterList.get< std::string >( "feature_query_function" ) : "" )
             , mFeatureQueryCheck( aParameterList.exists( "feature_query_check" ) ? aParameterList.get< uint >( "feature_query_check" ) : 1 )
             , mFeatureQueryRefine( aParameterList.exists( "feature_query_refine" ) and aParameterList.get< bool >( "feature_query_refine" ) )
+            , mLogFieldEvaluations( aParameterList.exists( "log_field_evaluations" ) ? aParameterList.get< std::string >( "log_field_evaluations" ) : "" )
+            , mLogFieldEvaluationsBox( aParameterList.exists( "log_field_evaluations_box" ) ? aParameterList.get< std::string >( "log_field_evaluations_box" ) : "" )
     {
         MORIS_ERROR( mFeatureQueryCheck <= 2, "Level_Set_Parameters: feature_query_check must be 0 (off), 1 (log) or 2 (error)." );
     }
@@ -120,6 +123,7 @@ namespace moris::gen
                 "Level_Set_Geometry: query point %u has phase 0 (sign of the exact field), which needs an analytic field; "
                 "give its phase (+1 / -1) explicitly.",
                 aPointIndex );
+        Evaluation_Purpose tPurpose( "query_expected_sign" );
         real tValue = mField->get_field_value_at_point( tPoint.mCoordinates ) - mParameters.mIsocontourThreshold;
         if ( std::abs( tValue ) <= mParameters.mIsocontourTolerance )
         {
@@ -137,6 +141,9 @@ namespace moris::gen
         MORIS_ASSERT( this->can_change_region_inside_cell(),
                 "Level_Set_Geometry::get_feature_query_represented_region() - only for fields evaluated exactly at any point." );
 
+        // every evaluation of the predictor (lattice and edge roots of the cell holding the point) is tagged as such
+        Evaluation_Purpose   tPurpose( "query_predictor" );
+        Evaluation_Operation tOperation( "query_predictor" );
         real                 tThreshold = mParameters.mIsocontourThreshold;
         Point_Field_Function tPhi       = [ this, tThreshold ]( const Matrix< DDRMat >& aPoint ) -> real {
             return mField->get_field_value_at_point( aPoint ) - tThreshold;
@@ -173,6 +180,9 @@ namespace moris::gen
         MORIS_ASSERT( this->can_change_region_inside_cell(),
                 "Level_Set_Geometry::detect_cell_features() - only for fields evaluated exactly at any point." );
 
+        // lattice samples of the sub-cell feature detector (a caller such as the XTK resolution check can name them)
+        Evaluation_Purpose    tPurpose( "detector_lattice", false );
+        Evaluation_Operation  tOperation( "feature_detector" );
         Cell_Feature_Settings tSettings;
         tSettings.mSamples        = aSamples;
         tSettings.mLagrangeOrder  = aLagrangeOrder;
@@ -191,6 +201,7 @@ namespace moris::gen
 
     real Level_Set_Geometry::get_field_value_at_point_exact( const Matrix< DDRMat >& aCoordinates ) const
     {
+        Evaluation_Purpose tPurpose( "point_exact", false );
         return mField->get_field_value_at_point( aCoordinates );
     }
 
@@ -214,6 +225,8 @@ namespace moris::gen
 
     Matrix< DDRMat > Level_Set_Geometry::get_dfield_dcoordinates_at_point( const Matrix< DDRMat >& aCoordinates, real aStep ) const
     {
+        Evaluation_Purpose   tPurpose( "sensitivity_fd_gradient" );
+        Evaluation_Operation tOperation( "sensitivity" );
         uint             tNumDims = aCoordinates.numel();
         Matrix< DDRMat > tGradient( 1, tNumDims, 0.0 );
         for ( uint iDim = 0; iDim < tNumDims; ++iDim )
@@ -232,6 +245,29 @@ namespace moris::gen
     void Level_Set_Geometry::set_node_manager( Node_Manager& aNodeManager )
     {
         mNodeManager = &aNodeManager;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void Level_Set_Geometry::start_field_evaluation_log( uint aGeometryIndex )
+    {
+        if ( mParameters.mLogFieldEvaluations.empty() )
+        {
+            return;
+        }
+        if ( not mField->supports_evaluation_log() )
+        {
+            MORIS_LOG_WARNING(
+                    "log_field_evaluations on %s: the field is not analytic (only analytic fields record their "
+                    "evaluations); nothing is logged.",
+                    this->get_name().c_str() );
+            return;
+        }
+        mField->set_evaluation_log( std::make_shared< Field_Evaluation_Log >(
+                mParameters.mLogFieldEvaluations,
+                mParameters.mLogFieldEvaluationsBox,
+                aGeometryIndex,
+                this->get_name() ) );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -255,6 +291,7 @@ namespace moris::gen
             uint                    aNodeIndex,
             const Matrix< DDRMat >& aNodeCoordinates )
     {
+        Evaluation_Operation tOperation( "region", false );
         // If it's a background node, can get geometric region from field value
         if ( mNodeManager->is_background_node( aNodeIndex ) )
         {
@@ -340,6 +377,8 @@ namespace moris::gen
     {
         MORIS_ASSERT( this->can_change_region_inside_cell(),
                 "Level_Set_Geometry::get_geometric_region_at_point() - only for fields evaluated exactly at derived nodes." );
+        Evaluation_Purpose   tPurpose( "region_at_point", false );
+        Evaluation_Operation tOperation( "region_at_point", false );
         return this->determine_geometric_region( mField->get_field_value_at_point( aCoordinates ) );
     }
 
@@ -408,6 +447,7 @@ namespace moris::gen
         }
         else if ( this->use_multilinear_interpolation() )
         {
+            Evaluation_Operation tOperation( "multilinear_root" );
             // get isocontour threshold from geometry
             real tIsocontourThreshold = this->get_isocontour_threshold();
 
@@ -689,6 +729,7 @@ namespace moris::gen
             const Parent_Node& aFirstParentNode,
             const Parent_Node& aSecondParentNode )
     {
+        Evaluation_Operation tOperation( "linear_crossing" );
         // Interface geometry values
         Matrix< DDRMat > tInterfaceGeometryValues = { { this->get_field_value( aFirstParentNode.get_index(), aFirstParentNode.get_global_coordinates() ) },
             { this->get_field_value( aSecondParentNode.get_index(), aSecondParentNode.get_global_coordinates() ) } };
@@ -708,6 +749,7 @@ namespace moris::gen
             const Parent_Node& aFirstParentNode,
             const Parent_Node& aSecondParentNode )
     {
+        Evaluation_Operation    tOperation( "analytic_root" );
         const Matrix< DDRMat >& tFirstX    = aFirstParentNode.get_global_coordinates();
         const Matrix< DDRMat >& tSecondX   = aSecondParentNode.get_global_coordinates();
         real                    tThreshold = this->get_isocontour_threshold();
@@ -741,6 +783,7 @@ namespace moris::gen
             tXi = 0.0;
         }
 
+        Evaluation_Purpose tPurpose( "root_iterate" );
         const uint tMaxIterations     = mParameters.mAnalyticIntersectionMaxIterations;    // default 200; bisection alone reaches the bracket tolerance in 45 steps
         const real tResidualTolerance = 1e-14;    // on the field value
         const real tBracketTolerance  = 1e-13;    // on the edge coordinate
@@ -849,6 +892,7 @@ namespace moris::gen
             const Parent_Node&                aFirstParentNode,
             const Parent_Node&                aSecondParentNode )
     {
+        Evaluation_Operation tOperation( "cell_order_root" );
         MORIS_ERROR( not Derived_Node::get_override_linear_interpolation(),
                 "Level_Set_Geometry: use_cell_order_intersection needs derived nodes with the cell's own-order basis, but "
                 "another geometry forces linear interpolation (use_multilinear_interpolation without cell order)." );
@@ -994,6 +1038,7 @@ namespace moris::gen
             const Vector< Basis_Node >& tParentNodes = aParentNode.get_locator_nodes();
 
             // Geometry values
+            Evaluation_Operation tOperation( "sensitivity" );
             real tDeltaPhi = this->get_field_value( tParentNodes( 1 ).get_index(), tParentNodes( 1 ).get_global_coordinates() )
                            - this->get_field_value( tParentNodes( 0 ).get_index(), tParentNodes( 0 ).get_global_coordinates() );
 

@@ -35,6 +35,8 @@ namespace moris::gen
         std::string                   mFeatureQueryFunctionName;             // deck function adding query points (loaded by the design factory)
         uint                          mFeatureQueryCheck;                    // 0 off, 1 log mismatches, 2 error on a mismatch (after the cut)
         bool                          mFeatureQueryRefine;                   // refine near points the cut would represent on the wrong side
+        std::string                   mLogFieldEvaluations;                  // diagnostic CSV of every field evaluation (log_field_evaluations); "" = off
+        std::string                   mLogFieldEvaluationsBox;               // only evaluations inside "xmin,xmax,ymin,ymax[,zmin,zmax]" are written
 
         /**
          * Constructor with a given parameter list
@@ -72,6 +74,14 @@ namespace moris::gen
          * @param aNodeManager Geometry engine node manager
          */
         void set_node_manager( Node_Manager& aNodeManager ) override;
+
+        /**
+         * Attaches a Field_Evaluation_Log to the field if log_field_evaluations is set (analytic fields only; other
+         * fields are left alone with a warning). Called by the geometry engine with this geometry's index.
+         *
+         * @param aGeometryIndex Index of this geometry in the geometry engine
+         */
+        void start_field_evaluation_log( uint aGeometryIndex ) override;
 
         /**
          * Accesses the isocontour level that determines the interface for this geometry
