@@ -25,6 +25,8 @@ namespace moris::gen
         real mIsocontourThreshold;      // Level set isocontour level
         real mIsocontourTolerance;      // Interface tolerance based on geometry value
         real mIntersectionTolerance;    // Interface tolerance based on intersecction distance
+        bool mUseAnalyticIntersection;  // Analytic fields: intersections on the field itself (bracketed root along the parent edge)
+        uint mAnalyticIntersectionMaxIterations;    // Iteration limit of that root; beyond it the edge takes the linear crossing
 
         /**
          * Constructor with a given parameter list
@@ -39,6 +41,9 @@ namespace moris::gen
     {
       private:
         Level_Set_Parameters mParameters;
+        uint                 mNumAnalyticIntersections         = 0;    // edges cut by the analytic root (use_analytic_intersection)
+        uint                 mNumAnalyticIntersectionFallbacks = 0;    // of those, edges that fell back to the linear crossing
+        bool                 mLastAnalyticIntersectionFellBack = false;    // whether the last analytic intersection fell back
 
       public:
         /**
@@ -66,6 +71,38 @@ namespace moris::gen
          * @return the isocontour level that determines the geometry interface
          */
         real get_isocontour_threshold() const;
+
+        /**
+         * Whether edge intersections are found on the analytic field itself (use_analytic_intersection): a bracketed
+         * root of phi( x( xi ) ) - threshold along the parent edge, instead of the linear interpolant of the end values.
+         * Only for fields with exact derived-node values (analytic / user-defined fields).
+         *
+         * @return Analytic intersection flag
+         */
+        bool use_analytic_intersection() const;
+
+        /**
+         * Field value, ADV sensitivities, determining ADV IDs and spatial gradient (central difference) of the
+         * analytic field at an arbitrary point (used by Intersection_Node_Analytic).
+         */
+        real             get_field_value_at_point_exact( const Matrix< DDRMat >& aCoordinates ) const;
+        Matrix< DDRMat > get_dfield_dadvs_at_point( const Matrix< DDRMat >& aCoordinates ) const;
+        Vector< sint >   get_determining_adv_ids_at_point( const Matrix< DDRMat >& aCoordinates ) const;
+        Matrix< DDRMat > get_dfield_dcoordinates_at_point( const Matrix< DDRMat >& aCoordinates, real aStep ) const;
+
+        /**
+         * Number of edges this geometry cut with the analytic root (use_analytic_intersection), and how many of them
+         * fell back to the linear crossing (field not finite inside the edge, or no convergence). Cumulative.
+         */
+        uint get_number_of_analytic_intersections() const;
+
+        /**
+         * Whether the last call of the analytic root (compute_intersection_local_coordinate with
+         * use_analytic_intersection) fell back to the linear crossing. Intersection_Node_Analytic reads it in its
+         * constructor, right after its local coordinate was computed, and then uses the linear-crossing sensitivities.
+         */
+        bool last_analytic_intersection_fell_back() const;
+        uint get_number_of_analytic_intersection_fallbacks() const;
 
         /**
          * Gets if this geometry depends on ADVs.
@@ -311,6 +348,45 @@ namespace moris::gen
                 const Vector< Background_Node* >& aBackgroundNodes,
                 const Parent_Node&                aFirstParentNode,
                 const Parent_Node&                aSecondParentNode );
+
+        /**
+         * Linear intersection: the zero of the linear interpolant of the two parent values (the default path).
+         *
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @return Parent edge local coordinate (outside [-1, 1] if the parent values have the same sign)
+         */
+        real compute_intersection_local_coordinate_linear(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode );
+
+        /**
+         * Analytic intersection (use_analytic_intersection): root of r( xi ) = phi( x( xi ) ) - c on the analytic field
+         * itself along the parent edge, x( xi ) = 0.5 ( 1 - xi ) x_1 + 0.5 ( 1 + xi ) x_2, by Illinois (modified regula
+         * falsi) on the sign-change bracket [-1, 1] (|r| < 1e-14 or bracket width < 1e-13 in xi). Edges without a strict
+         * sign change take the linear path unchanged. A non-finite field value inside the edge, or no convergence within
+         * the iteration limit, falls back to the linear crossing and is counted (and warned about, the first 10 times).
+         *
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @return Parent edge local coordinate
+         */
+        real compute_intersection_local_coordinate_analytic(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode );
+
+        /**
+         * Counts and warns about an analytic intersection that could not be bracketed, and returns the linear crossing.
+         *
+         * @param aFirstParentNode Node marking the starting point of the intersection edge
+         * @param aSecondParentNode Node marking the ending point of the intersection edge
+         * @param aReason Why the root was not found
+         * @return Linear-crossing local coordinate
+         */
+        real fall_back_to_linear_intersection(
+                const Parent_Node& aFirstParentNode,
+                const Parent_Node& aSecondParentNode,
+                const char*        aReason );
 
         /**
          * Determines the geometric region of a point based on a level set value
