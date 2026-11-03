@@ -21,6 +21,7 @@ set(TEST_SOURCES
     xtk/UT_XTK_Cut_Mesh_Modification.cpp
     xtk/UT_XTK_Cut_Mesh_RegSub.cpp
     xtk/UT_XTK_Cut_Mesh.cpp
+    xtk/UT_XTK_Cut_Mesh_Global_Ids.cpp
     xtk/UT_XTK_Downward_Inheritance.cpp
     xtk/UT_XTK_Enrichment_2D.cpp
     xtk/UT_XTK_Enrichment.cpp

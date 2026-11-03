@@ -2544,7 +2544,8 @@ namespace moris::xtk
         MORIS_ASSERT( aEntityRank == mtk::EntityRank::NODE || aEntityRank == mtk::EntityRank::ELEMENT,
                 "Enriched_Integration_Mesh::allocate_entity_ids() - Only Elements or Nodes have ids" );
 
-        moris_id tGlobalMax = this->get_max_entity_id( aEntityRank );
+        // the first free id is one past the largest id in use (get_max_entity_id() returns the largest id itself)
+        moris_id tGlobalMax = this->get_max_entity_id( aEntityRank ) + 1;
 
         int tProcRank = par_rank();
         int tProcSize = par_size();

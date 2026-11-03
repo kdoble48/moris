@@ -67,19 +67,43 @@ of the file (pvtools: <tt>pvkit.load(..., fix_ids=True)</tt> /
 default IOSS reader and for anything keyed on global ids (Find Data by GlobalID,
 id labeling, re-export).
 
-@section IdsIndicesConflation Historical conflation in Cut_Integration_Mesh (fixed)
+@section IdsIndicesConflation Index-as-id conflation in Cut_Integration_Mesh (fixed twice)
 
-Historically, \c Cut_Integration_Mesh::get_glb_entity_id_from_entity_loc_index() returned
-<tt>get_index()</tt> — the local index — not <tt>get_id()</tt>, while the inverse query
-\c get_loc_entity_ind_from_entity_glb_id() was keyed by the <em>real</em> ids. The round
+\c Cut_Integration_Mesh::get_glb_entity_id_from_entity_loc_index() once returned
+<tt>get_index()</tt>, the local index, not <tt>get_id()</tt>, while the inverse query
+\c get_loc_entity_ind_from_entity_glb_id() is keyed by the <em>real</em> ids. The round
 trip id &rarr; index &rarr; id was therefore inconsistent, and in parallel the index-as-id
-answer collided across processors (it only "worked" serially because indices and 0-based
-ids are nearly interchangeable there).
+answer collided across processors.
 
-This was fixed upstream (kkmaute/moris commit f1539681c, merged 2026-07): the query now
-returns <tt>get_id()</tt>, consistent with \c vis::Visualization_Mesh. Code written
-against the old behavior that relied on receiving indices from this query should use
-<tt>get_index()</tt> / the index-based accessors directly.
+History:
+- Upstream kkmaute/moris f1539681c (merged into the fork 2026-07) made the query return
+  <tt>get_id()</tt>.
+- Fork PR #20 (10aaa6d2b, 2026-10-13, SDF reinitialization) carried a stale whole-file copy
+  of \c cl_XTK_Cut_Integration_Mesh.cpp (the blob of fork commit 47064bbfd, 2026-07-02, from
+  before the upstream sync) and so put <tt>get_index()</tt> back. Nothing in PR #20 used the
+  query: its reinitialization code works on indices and facet connectivity.
+- MB-096 (2026-11) restored <tt>get_id()</tt> and added the test
+  <tt>XTK-test.exe "[XTK_CUT_MESH_GLOBAL_IDS]"</tt>, which runs on any number of ranks.
+
+The query is reached through \c Enriched_Integration_Mesh, which forwards to the cut mesh, so
+it is the id the FEM-facing integration mesh reports. While it returned indices:
+- \c mtk::Writer_Exodus wrote rank-local node and element maps into the parallel
+  <tt>xtk_temp.exo.N.r</tt> files, which \c epu then merged by id into a degenerate mesh.
+- \c Enriched_Integration_Mesh::get_max_entity_id() returned roughly the largest local index, so
+  \c Enriched_Integration_Mesh::allocate_entity_ids() handed the ghost transition cells ids
+  that existing cells already had.
+
+The query now returns <tt>get_id()</tt>, consistent with \c vis::Visualization_Mesh. Code that
+needs an index from this query should use <tt>get_index()</tt> or the index-based accessors
+directly.
+
+Two related fixes came with MB-096, both on the ghost-cell path:
+- \c Enriched_Integration_Mesh::allocate_entity_ids() starts at
+  <tt>get_max_entity_id() + 1</tt>; it started at the maximum itself, so the first ghost
+  transition cell took the id of the cell holding the largest id.
+- \c Cut_Integration_Mesh::add_integration_cell() registers the new cell in the id-to-index map
+  (and errors on an id already in use), so \c get_loc_entity_ind_from_entity_glb_id() finds the
+  ghost transition cells.
 
 */
 
