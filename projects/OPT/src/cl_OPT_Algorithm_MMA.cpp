@@ -74,6 +74,8 @@ namespace moris::opt
         mMoveMax    = aParameterList.get< real >( "move_adapt_max" );
         mMoveInit   = aParameterList.get< real >( "move_adapt_init" );
         mMoveGate   = aParameterList.get< bool >( "move_adapt_gate" );
+        mMoveOsc    = aParameterList.get< bool >( "move_adapt_oscillation" );
+        mMoveOscTol = aParameterList.get< real >( "move_adapt_oscillation_tol" );
 
         mGuardRise   = aParameterList.get< real >( "move_guard_rise" );
         mGuardFeas   = aParameterList.get< real >( "move_guard_feas" );
@@ -101,6 +103,21 @@ namespace moris::opt
                             "clamp [%.3g, %.3g] of range, %s)",
                     mMoveInit, mMoveShrink, mMoveGrow, mMoveMin, mMoveMax,
                     mMoveGate ? "gated on move-bound hits" : "ungated" );
+        }
+
+        MORIS_ERROR( !mMoveOsc || ( mMoveAdapt && mMoveGate ),
+                "Native MMA: move_adapt_oscillation needs move_adapt = true and move_adapt_gate = true (the ungated rule "
+                "already adapts every ADV on a sign flip)." );
+        MORIS_ERROR( !mMoveOsc || ( mMoveOscTol >= 0.0 && mMoveOscTol <= 1.0 ),
+                "Native MMA: move_adapt_oscillation needs 0 <= move_adapt_oscillation_tol <= 1." );
+        if ( mMoveOsc )
+        {
+            MORIS_LOG_INFO(
+                    "Native MMA: oscillation shrink ON (ADVs inside their move box: x%.3g on a sign flip, x%.3g on "
+                    "agreement of increments >= %.3g of the move limit)",
+                    mMoveShrink,
+                    mMoveGrow,
+                    mMoveOscTol );
         }
 
         MORIS_LOG_INFO( "Native MMA initialized: max_its=%d, step_size=%.6f, penalty=%.2f%s%s%s",
@@ -562,6 +579,7 @@ namespace moris::opt
         mMove.assign( mNumVar, mMoveAdapt ? mn( mx( mMoveInit, mMoveMin ), mMoveMax ) : mStepSize );
         mMoveHit.assign( mNumVar, 0 );
         mMoveHitPrev.assign( mNumVar, 0 );
+        mOscPrevStep.assign( mNumVar, 0.0 );
     }
 
     //------------------------------------------------------------------------------
@@ -606,6 +624,54 @@ namespace moris::opt
                 {
                     aMove[ i ] *= aGrow;
                 }
+            }
+            aMove[ i ] = std::min( std::max( aMove[ i ], (double)aMin ), (double)aMax );
+        }
+        return tShrunk;
+    }
+
+    //------------------------------------------------------------------------------
+
+    int
+    Algorithm_MMA::adapt_move_limits_oscillation(
+            std::vector< double >&       aMove,
+            const std::vector< double >& aStep,
+            const std::vector< double >& aPrevStep,
+            const std::vector< double >& aRange,
+            const std::vector< int >&    aSkip,
+            real                         aShrink,
+            real                         aGrow,
+            real                         aMin,
+            real                         aMax,
+            real                         aTol,
+            int&                         aGrown )
+    {
+        int tShrunk = 0;
+        aGrown      = 0;
+        for ( std::size_t i = 0; i < aMove.size(); ++i )
+        {
+            if ( aSkip[ i ] )
+            {
+                continue;
+            }
+
+            // increments that use only a small part of the move box (round-off, a converged ADV) say nothing about it
+            const double tSignificant = aTol * aMove[ i ] * aRange[ i ];
+            if ( std::abs( aStep[ i ] ) < tSignificant || std::abs( aPrevStep[ i ] ) < tSignificant )
+            {
+                continue;
+            }
+
+            const double tProd = aStep[ i ] * aPrevStep[ i ];
+            if ( tProd < 0.0 )
+            {
+                aMove[ i ] *= aShrink;
+                tShrunk++;
+            }
+            else if ( tProd > 0.0 )
+            {
+                aMove[ i ] *= aGrow;
+                aGrown++;
             }
             aMove[ i ] = std::min( std::max( aMove[ i ], (double)aMin ), (double)aMax );
         }
@@ -1590,7 +1656,9 @@ namespace moris::opt
                     tHits += mMoveHit[ i ];
                 }
 
-                if ( iter >= 2 )
+                // the oscillation rule also runs at the first iteration of a warm solve: the increment before it is
+                // the one kept across the restart (xold1 = xold2 there)
+                if ( iter >= 2 || ( mMoveOsc && mWarmSolve ) )
                 {
                     std::vector< double > tRange( mNumVar );
                     std::vector< int >    tGate( mNumVar, 1 );
@@ -1599,14 +1667,45 @@ namespace moris::opt
                         tRange[ i ] = xmax[ i ] - xmin[ i ];
                         if ( mMoveGate ) tGate[ i ] = mMoveHit[ i ] || mMoveHitPrev[ i ];
                     }
-                    int tShrunk = adapt_move_limits( mMove, xval, xold1, xold2, tRange, tGate,
-                            mMoveShrink, mMoveGrow, mMoveMin, mMoveMax );
+                    int tShrunk = 0;
+                    if ( iter >= 2 )
+                    {
+                        tShrunk = adapt_move_limits( mMove, xval, xold1, xold2, tRange, tGate, mMoveShrink, mMoveGrow, mMoveMin, mMoveMax );
+                    }
+
+                    // oscillation shrink for the ADVs the gate left out
+                    std::string tOscText;
+                    if ( mMoveOsc )
+                    {
+                        std::vector< double > tStep( mNumVar );
+                        std::vector< double > tPrevStep( mNumVar );
+                        int                   tEligible = 0;
+                        for ( int i = 0; i < mNumVar; ++i )
+                        {
+                            tStep[ i ]     = xval[ i ] - xold1[ i ];
+                            tPrevStep[ i ] = iter >= 2 ? xold1[ i ] - xold2[ i ] : mOscPrevStep[ i ];
+                            tEligible += tGate[ i ] ? 0 : 1;
+                        }
+                        int tGrown     = 0;
+                        int tOscShrunk = adapt_move_limits_oscillation( mMove, tStep, tPrevStep, tRange, tGate, mMoveShrink, mMoveGrow, mMoveMin, mMoveMax, mMoveOscTol, tGrown );
+
+                        char tBuf[ 128 ];
+                        std::snprintf( tBuf, sizeof( tBuf ), " | osc-shrunk %d of %d (grown %d)", tOscShrunk, tEligible, tGrown );
+                        tOscText = tBuf;
+                    }
 
                     std::vector< double > tSorted( mMove );
                     std::nth_element( tSorted.begin(), tSorted.begin() + mNumVar / 2, tSorted.end() );
                     const auto tMinMax = std::minmax_element( mMove.begin(), mMove.end() );
-                    MORIS_LOG_INFO( "MMA move adapt iter %d: hits %d shrunk %d of %d | move min=%.4e median=%.4e max=%.4e",
-                            (int)iter, tHits, tShrunk, mNumVar, *tMinMax.first, tSorted[ mNumVar / 2 ], *tMinMax.second );
+                    MORIS_LOG_INFO( "MMA move adapt iter %d: hits %d shrunk %d of %d%s | move min=%.4e median=%.4e max=%.4e",
+                            (int)iter,
+                            tHits,
+                            tShrunk,
+                            mNumVar,
+                            tOscText.c_str(),
+                            *tMinMax.first,
+                            tSorted[ mNumVar / 2 ],
+                            *tMinMax.second );
                 }
             }
 
@@ -1646,6 +1745,14 @@ namespace moris::opt
             tState.mLowWidth[ i ] = xval[ i ] - tLow;
             tState.mUppWidth[ i ] = tUpp - xval[ i ];
             tState.mMoveStep[ i ] = mMove[ i ] * ( xmax[ i ] - xmin[ i ] );
+        }
+        if ( mMoveOsc )
+        {
+            tState.mLastStep.resize( mNumVar );
+            for ( int i = 0; i < mNumVar; ++i )
+            {
+                tState.mLastStep[ i ] = xval[ i ] - xold1[ i ];
+            }
         }
         tState.mLowerBounds = xmin;
         tState.mUpperBounds = xmax;
@@ -1711,7 +1818,7 @@ namespace moris::opt
 
         const real tFreshMove = mMoveAdapt ? mn( mx( mMoveInit, mMoveMin ), mMoveMax ) : mStepSize;
 
-        mWarmStartCounts = apply_restart_state( mKeptState, tRowMap, xval, xmin, xmax, mMovedFraction, mAsympAdapt0, mMoveAdapt, tFreshMove, mMoveMin, mMoveMax, low, upp, mMove );
+        mWarmStartCounts = apply_restart_state( mKeptState, tRowMap, xval, xmin, xmax, mMovedFraction, mAsympAdapt0, mMoveAdapt, tFreshMove, mMoveMin, mMoveMax, low, upp, mMove, mMoveOsc ? &mOscPrevStep : nullptr );
 
         raa0      = mKeptState.mRaa0;
         raa       = mKeptState.mRaa;
@@ -1732,6 +1839,10 @@ namespace moris::opt
             tApplied.mLowWidth[ i ] = xval[ i ] - low[ i ];
             tApplied.mUppWidth[ i ] = upp[ i ] - xval[ i ];
             tApplied.mMoveStep[ i ] = mMove[ i ] * ( xmax[ i ] - xmin[ i ] );
+        }
+        if ( mMoveOsc )
+        {
+            tApplied.mLastStep = mOscPrevStep;
         }
         tApplied.mLowerBounds = xmin;
         tApplied.mUpperBounds = xmax;
@@ -1796,7 +1907,8 @@ namespace moris::opt
             real                         aMoveMax,
             std::vector< double >&       aLow,
             std::vector< double >&       aUpp,
-            std::vector< double >&       aMove )
+            std::vector< double >&       aMove,
+            std::vector< double >*       aLastStep )
     {
         const std::size_t tNumVar = aX.size();
         const std::size_t tNumOld = aState.mCentre.size();
@@ -1811,6 +1923,11 @@ namespace moris::opt
         if ( aKeepMove )
         {
             aMove.resize( tNumVar );
+        }
+        const bool tHaveLastStep = aState.mLastStep.size() == tNumOld;
+        if ( aLastStep )
+        {
+            aLastStep->assign( tNumVar, 0.0 );
         }
 
         Restart_Counts tCounts;
@@ -1856,6 +1973,10 @@ namespace moris::opt
                 {
                     aMove[ i ] = mn( mx( aState.mMoveStep[ tOld ] / tRange, aMoveMin ), aMoveMax );
                 }
+                if ( aLastStep && tHaveLastStep )
+                {
+                    ( *aLastStep )[ i ] = aState.mLastStep[ tOld ];
+                }
                 tCounts.mKept++;
             }
         }
@@ -1882,6 +2003,10 @@ namespace moris::opt
         save_vector_to_hdf5_file( tFileID, "LowWidth", aState.mLowWidth, tStatus );
         save_vector_to_hdf5_file( tFileID, "UppWidth", aState.mUppWidth, tStatus );
         save_vector_to_hdf5_file( tFileID, "MoveStep", aState.mMoveStep, tStatus );
+        if ( !aState.mLastStep.empty() )
+        {
+            save_vector_to_hdf5_file( tFileID, "LastStep", aState.mLastStep, tStatus );
+        }
         save_vector_to_hdf5_file( tFileID, "LowerBounds", aState.mLowerBounds, tStatus );
         save_vector_to_hdf5_file( tFileID, "UpperBounds", aState.mUpperBounds, tStatus );
         save_vector_to_hdf5_file( tFileID, "Raa", aState.mRaa, tStatus );
@@ -1909,6 +2034,10 @@ namespace moris::opt
         load_vector_from_hdf5_file( tFileID, "LowWidth", tState.mLowWidth, tStatus );
         load_vector_from_hdf5_file( tFileID, "UppWidth", tState.mUppWidth, tStatus );
         load_vector_from_hdf5_file( tFileID, "MoveStep", tState.mMoveStep, tStatus );
+        if ( dataset_exists( tFileID, "LastStep" ) )
+        {
+            load_vector_from_hdf5_file( tFileID, "LastStep", tState.mLastStep, tStatus );
+        }
         load_vector_from_hdf5_file( tFileID, "LowerBounds", tState.mLowerBounds, tStatus );
         load_vector_from_hdf5_file( tFileID, "UpperBounds", tState.mUpperBounds, tStatus );
         load_vector_from_hdf5_file( tFileID, "Raa", tState.mRaa, tStatus );
@@ -1921,6 +2050,7 @@ namespace moris::opt
 
         const std::size_t tNumVar = tState.mCentre.size();
         MORIS_ERROR( tState.mLowWidth.size() == tNumVar && tState.mUppWidth.size() == tNumVar && tState.mMoveStep.size() == tNumVar
+                             && ( tState.mLastStep.empty() || tState.mLastStep.size() == tNumVar )
                              && tState.mPenalty.size() == tState.mRaa.size(),
                 "Native MMA: inconsistent optimizer state file %s.",
                 aFileName.c_str() );

@@ -2385,4 +2385,396 @@ namespace moris::opt
 
         warm_restart::remove_state_files();
     }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // move_adapt_oscillation: a separable kink objective f = sum_i w sqrt( ( x_i - c_i )^2 + eps^2 ) under an inactive
+    // constraint. With the asymptotes on their 0.01 * range floor from the start (asymp_adapt0 = 0.01) and a small
+    // gradient (w = 5e-4, so that the conservatism term raa0 balances the one-sided MMA approximation), each step is
+    // about 0.57 of the asymptote distance, i.e. 0.0057 of the range: inside the 0.015 move box and short of the
+    // subproblem bound 0.009, so the gated move-limit rule never sees a move-bound hit and the design jumps across
+    // the kink every iteration (a period-2 limit cycle inside the box, as in GS-LS D-255 at 0.55-0.59 of the limit).
+
+    namespace oscillation
+    {
+        real sWeight = 5.0e-4;
+        real sEps    = 1.0e-6;
+        real sTarget = 0.5;    ///< c_i = sTarget + 0.003 ( i + 1 )
+
+        real
+        target( uint aI )
+        {
+            return sTarget + 0.003 * ( aI + 1 );
+        }
+
+        Matrix< DDRMat >
+        compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            real tObjective = 0.0;
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                const real tD = aCriteria( iADV ) - target( iADV );
+                tObjective += sWeight * std::sqrt( tD * tD + sEps * sEps );
+            }
+            return { { tObjective } };
+        }
+
+        Matrix< DDRMat >
+        compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            Matrix< DDRMat > tGradient( 1, aCriteria.size(), 0.0 );
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                const real tD        = aCriteria( iADV ) - target( iADV );
+                tGradient( 0, iADV ) = sWeight * tD / std::sqrt( tD * tD + sEps * sEps );
+            }
+            return tGradient;
+        }
+
+        /** sum x_i - N <= 0: inactive for any interior design */
+        Matrix< DDRMat >
+        compute_constraints( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            real tSum = 0.0;
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                tSum += aCriteria( iADV );
+            }
+            return { { tSum - (real)aCriteria.size() } };
+        }
+
+        std::shared_ptr< Problem >
+        make_problem( const std::shared_ptr< warm_restart::Interface_Forced_Restart >& aInterface )
+        {
+            Parameter_List tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+
+            std::shared_ptr< Problem > tProblem = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    aInterface,
+                    &warm_restart::get_constraint_types,
+                    &compute_objectives,
+                    &compute_constraints,
+                    &warm_restart::zero_dadv,
+                    &compute_dobjective_dcriteria,
+                    &warm_restart::zero_dadv,
+                    &warm_restart::compute_dconstraint_dcriteria );
+            tProblem->initialize();
+            return tProblem;
+        }
+
+        /** the evaluated designs x_0, x_1, ... (one evaluation per iteration: no inner loop, no guard) */
+        std::vector< std::vector< real > >
+        run( bool aOscillation, real aAsympAdapt0, real aStepSize, sint aMaxIts )
+        {
+            std::shared_ptr< warm_restart::Interface_Forced_Restart > tInterface = std::make_shared< warm_restart::Interface_Forced_Restart >();
+            std::shared_ptr< Problem >                                tProblem   = oscillation::make_problem( tInterface );
+
+            Parameter_List tParameterList = moris::prm::create_mma_parameter_list();
+            tParameterList.set( "max_its", aMaxIts );
+            tParameterList.set( "norm_drop", 1.0e-14 );
+            tParameterList.set( "step_size", aStepSize );
+            tParameterList.set( "asymp_adapt0", aAsympAdapt0 );
+            tParameterList.set( "move_adapt", true );
+            tParameterList.set( "move_adapt_min", 1.0e-6 );
+            tParameterList.set( "move_adapt_oscillation", aOscillation );
+
+            Algorithm_MMA tAlgorithm( tParameterList );
+            warm_restart::solve_with_restarts( tAlgorithm, tProblem );
+            return tInterface->mEvaluated;
+        }
+
+        /** largest |x_k - x_{k-1}| over iterations [aFirst, end) */
+        real
+        max_step( const std::vector< std::vector< real > >& aX, uint aFirst )
+        {
+            real tMax = 0.0;
+            for ( uint k = aFirst; k < aX.size(); k++ )
+            {
+                for ( uint i = 0; i < aX[ k ].size(); i++ )
+                {
+                    tMax = std::max( tMax, std::abs( aX[ k ][ i ] - aX[ k - 1 ][ i ] ) );
+                }
+            }
+            return tMax;
+        }
+
+        /** fraction of increments in [aFirst, end) that reverse the previous one */
+        real
+        alternation( const std::vector< std::vector< real > >& aX, uint aFirst )
+        {
+            uint tFlips = 0;
+            uint tCount = 0;
+            for ( uint k = aFirst; k < aX.size(); k++ )
+            {
+                for ( uint i = 0; i < aX[ k ].size(); i++ )
+                {
+                    const real tD1 = aX[ k ][ i ] - aX[ k - 1 ][ i ];
+                    const real tD0 = aX[ k - 1 ][ i ] - aX[ k - 2 ][ i ];
+                    tFlips += tD1 * tD0 < 0.0 ? 1 : 0;
+                    tCount++;
+                }
+            }
+            return (real)tFlips / (real)tCount;
+        }
+
+        /** first iteration from which every ADV stays within aTol of its target, or the number of iterations */
+        uint
+        iterations_to( const std::vector< std::vector< real > >& aX, real aTol )
+        {
+            uint tFirst = aX.size();
+            for ( uint k = aX.size(); k-- > 0; )
+            {
+                bool tInside = true;
+                for ( uint i = 0; i < aX[ k ].size(); i++ )
+                {
+                    tInside = tInside && std::abs( aX[ k ][ i ] - target( i ) ) <= aTol;
+                }
+                if ( !tInside )
+                {
+                    break;
+                }
+                tFirst = k;
+            }
+            return tFirst;
+        }
+    }    // namespace oscillation
+
+    TEST_CASE( "Native MMA oscillation move-limit rule", "[optimization][move_adapt_oscillation]" )
+    {
+        // range 1 unless noted; move limits before the update in tMove
+        // ADV 0: significant flip (+0.006, -0.005 on a 0.01 limit): shrink 0.7
+        // ADV 1: significant agreement: grow 1.2
+        // ADV 2: flip, but the last increment is below 0.1 of the limit (round-off): unchanged
+        // ADV 3: flip, but the previous increment is below 0.1 of the limit: unchanged
+        // ADV 4: gated (handled by the move-bound rule): unchanged
+        // ADV 5: flip at the floor: stays at the floor
+        // ADV 6: agreement into the cap
+        // ADV 7: zero increment: unchanged
+        // ADV 8: range 10: a flip of 0.05 on a limit of 0.01 (0.1 in ADV units): 0.5 of the limit, significant
+        std::vector< double > tMove  = { 0.01, 0.01, 0.01, 0.01, 0.01, 1.0e-4, 0.014, 0.01, 0.01 };
+        std::vector< double > tStep  = { -0.005, 0.004, -0.0009, -0.006, -0.006, -1.0e-4, 0.01, 0.0, -0.05 };
+        std::vector< double > tPrev  = { 0.006, 0.006, 0.006, 0.0009, 0.006, 1.0e-4, 0.01, 0.006, 0.05 };
+        std::vector< double > tRange = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0 };
+        std::vector< int >    tSkip  = { 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+
+        int tGrown  = -1;
+        int tShrunk = Algorithm_MMA::adapt_move_limits_oscillation( tMove, tStep, tPrev, tRange, tSkip, 0.7, 1.2, 1.0e-4, 0.015, 0.1, tGrown );
+
+        CHECK( tShrunk == 3 );
+        CHECK( tGrown == 2 );
+        CHECK( tMove[ 0 ] == Approx( 0.007 ).epsilon( 1e-14 ) );
+        CHECK( tMove[ 1 ] == Approx( 0.012 ).epsilon( 1e-14 ) );
+        CHECK( tMove[ 2 ] == 0.01 );
+        CHECK( tMove[ 3 ] == 0.01 );
+        CHECK( tMove[ 4 ] == 0.01 );
+        CHECK( tMove[ 5 ] == 1.0e-4 );
+        CHECK( tMove[ 6 ] == 0.015 );
+        CHECK( tMove[ 7 ] == 0.01 );
+        CHECK( tMove[ 8 ] == Approx( 0.007 ).epsilon( 1e-14 ) );
+
+        // tolerance 0: every nonzero flip counts, a zero increment still does not
+        std::vector< double > tMove0 = { 0.01, 0.01 };
+        std::vector< double > tStep0 = { -1.0e-12, 0.0 };
+        std::vector< double > tPrev0 = { 1.0e-12, 0.006 };
+        std::vector< double > tR0    = { 1.0, 1.0 };
+        std::vector< int >    tS0    = { 0, 0 };
+        CHECK( Algorithm_MMA::adapt_move_limits_oscillation( tMove0, tStep0, tPrev0, tR0, tS0, 0.7, 1.2, 1.0e-4, 0.015, 0.0, tGrown ) == 1 );
+        CHECK( tMove0[ 1 ] == 0.01 );
+
+        // the key needs the gated move_adapt rule
+        Parameter_List tNoAdapt = moris::prm::create_mma_parameter_list();
+        tNoAdapt.set( "move_adapt_oscillation", true );
+        CHECK_THROWS( Algorithm_MMA( tNoAdapt ) );
+        Parameter_List tUngated = moris::prm::create_mma_parameter_list();
+        tUngated.set( "move_adapt", true );
+        tUngated.set( "move_adapt_gate", false );
+        tUngated.set( "move_adapt_oscillation", true );
+        CHECK_THROWS( Algorithm_MMA( tUngated ) );
+    }
+
+    TEST_CASE( "Native MMA oscillation shrink damps an interior limit cycle", "[optimization][move_adapt_oscillation]" )
+    {
+        if ( par_rank() != 0 )
+        {
+            return;
+        }
+        oscillation::sWeight = 5.0e-4;
+        oscillation::sTarget = 0.5;
+
+        // 80 iterations; the tail is the last 20
+        const std::vector< std::vector< real > > tOff = oscillation::run( false, 0.01, 0.015, 80 );
+        const std::vector< std::vector< real > > tOn  = oscillation::run( true, 0.01, 0.015, 80 );
+        REQUIRE( tOff.size() == 81 );
+        REQUIRE( tOn.size() == 81 );
+
+        // key off: a period-2 cycle inside the move box (every increment reverses, at ~0.38 of the 0.015 move limit)
+        const real tOffTail = oscillation::max_step( tOff, 61 );
+        CHECK( oscillation::alternation( tOff, 61 ) == 1.0 );
+        CHECK( tOffTail > 0.3 * 0.015 );
+        CHECK( tOffTail < 0.6 * 0.015 );
+
+        // key on: the move limits shrink on every reversal; the step decays geometrically to the floor (1e-6)
+        const real tOnTail = oscillation::max_step( tOn, 61 );
+        MORIS_LOG_INFO( "oscillation test: tail (iterations 61-80) max step off %.4e (alternation %.3f), on %.4e (alternation %.3f)",
+                tOffTail,
+                oscillation::alternation( tOff, 61 ),
+                tOnTail,
+                oscillation::alternation( tOn, 61 ) );
+        CHECK( tOnTail < 1.0e-3 * tOffTail );
+        CHECK( oscillation::max_step( tOn, 41 ) < 0.1 * oscillation::max_step( tOn, 11 ) );
+        for ( uint i = 0; i < 4; i++ )
+        {
+            CHECK( std::abs( tOn.back()[ i ] - oscillation::target( i ) ) < 1.0e-5 );
+        }
+
+        // both start alike: the rule needs two increments, so the first two iterations are the same
+        CHECK( tOff[ 1 ] == tOn[ 1 ] );
+        CHECK( tOff[ 2 ] == tOn[ 2 ] );
+    }
+
+    TEST_CASE( "Native MMA oscillation shrink does not slow a monotone approach", "[optimization][move_adapt_oscillation]" )
+    {
+        if ( par_rank() != 0 )
+        {
+            return;
+        }
+        // targets 0.8 + 0.003 ( i + 1 ), 0.3 from the start 0.5, a steep kink (w = 1) and the default asymptotes: the
+        // design walks to the targets on the move box; the key must not delay the arrival
+        oscillation::sWeight                          = 1.0;
+        oscillation::sTarget                          = 0.8;
+        const std::vector< std::vector< real > > tOff = oscillation::run( false, 0.5, 0.015, 60 );
+        const std::vector< std::vector< real > > tOn  = oscillation::run( true, 0.5, 0.015, 60 );
+
+        const uint tArriveOff = oscillation::iterations_to( tOff, 1.0e-3 );
+        const uint tArriveOn  = oscillation::iterations_to( tOn, 1.0e-3 );
+        oscillation::sWeight  = 5.0e-4;
+        oscillation::sTarget  = 0.5;
+        MORIS_LOG_INFO( "oscillation test: monotone approach within 1e-3 from iteration %u (off), %u (on)", tArriveOff, tArriveOn );
+        CHECK( tArriveOff < 40 );
+        CHECK( tArriveOn <= tArriveOff );
+
+        // the monotone part of the walk (every step on the box) is the same design sequence
+        for ( uint k = 0; k <= 15; k++ )
+        {
+            CHECK( tOff[ k ] == tOn[ k ] );
+        }
+    }
+
+    TEST_CASE( "Native MMA oscillation shrink keeps the last increment across restarts", "[optimization][move_adapt_oscillation][restart_keep_state]" )
+    {
+        if ( par_rank() != 0 )
+        {
+            return;
+        }
+        using namespace warm_restart;
+        warm_restart::remove_state_files();
+
+        // apply_restart_state: the kept increment follows the row map; fresh, moved and state-less ADVs get 0
+        {
+            Algorithm_MMA::Restart_State tState;
+            tState.mValid    = true;
+            tState.mCentre   = { 0.5, 0.5, 0.5, 0.5 };
+            tState.mLowWidth = { 0.1, 0.1, 0.1, 0.1 };
+            tState.mUppWidth = { 0.1, 0.1, 0.1, 0.1 };
+            tState.mMoveStep = { 0.01, 0.01, 0.01, 0.01 };
+            tState.mLastStep = { 0.01, -0.02, 0.03, 0.04 };
+
+            std::vector< double > tX    = { 0.55, 0.5, 0.5, 0.95 };    // ADV 3 moved
+            std::vector< double > tXMin = { 0.0, 0.0, 0.0, 0.0 };
+            std::vector< double > tXMax = { 1.0, 1.0, 1.0, 1.0 };
+            std::vector< double > tLow, tUpp, tMove, tLast;
+            Algorithm_MMA::apply_restart_state( tState, {}, tX, tXMin, tXMax, 0.25, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove, &tLast );
+            CHECK( tLast == std::vector< double >{ 0.01, -0.02, 0.03, 0.0 } );
+
+            std::vector< double > tX3 = { 0.1, 0.5, 0.9 };
+            std::vector< double > tB3 = { 0.0, 0.0, 0.0 };
+            std::vector< double > tU3 = { 1.0, 1.0, 1.0 };
+            Algorithm_MMA::apply_restart_state( tState, { 3, -1, 0 }, tX3, tB3, tU3, 0.0, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove, &tLast );
+            CHECK( tLast == std::vector< double >{ 0.04, 0.0, 0.01 } );
+
+            tState.mLastStep.clear();
+            Algorithm_MMA::apply_restart_state( tState, {}, tX, tXMin, tXMax, 0.25, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove, &tLast );
+            CHECK( tLast == std::vector< double >( 4, 0.0 ) );
+        }
+
+        // in-process restart (evaluation 6, ADV 3 moved by 0.4): the kept increments survive, ADV 3 starts without one
+        Parameter_List tParameters = algorithm_parameters( true, 40 );
+        tParameters.set( "move_adapt_oscillation", true );
+        std::shared_ptr< Interface_Forced_Restart > tInterface = std::make_shared< Interface_Forced_Restart >();
+        tInterface->mRestartAtCall                             = 6;
+        tInterface->mShift                                     = { 0.0, 0.003, 0.0, 0.4 };
+        std::shared_ptr< Problem >   tProblem                  = make_problem( tInterface );
+        Algorithm_MMA                tAlgorithm( tParameters );
+        Algorithm_MMA::Restart_State tBefore;
+        std::vector< real >          tRestartX;
+        {
+            Tracer tTracer( "OPT", "Manager", "Perform" );
+            tAlgorithm.solve( 0, tProblem );
+            REQUIRE( tProblem->restart_optimization() );
+            tBefore = tAlgorithm.get_kept_state();
+            tProblem->initialize();
+            for ( uint iADV = 0; iADV < 4; iADV++ )
+            {
+                tRestartX.push_back( tProblem->get_advs()( iADV ) );
+            }
+            tAlgorithm.set_restart_index( 39 );
+            tAlgorithm.solve( 0, tProblem );
+        }
+        REQUIRE( tBefore.mLastStep.size() == 4 );
+        const Algorithm_MMA::Restart_State& tStart = tAlgorithm.get_warm_start_state();
+        REQUIRE( tStart.mLastStep.size() == 4 );
+        bool tNonZero = false;
+        for ( uint iADV = 0; iADV < 3; iADV++ )
+        {
+            CHECK( tStart.mLastStep[ iADV ] == tBefore.mLastStep[ iADV ] );
+            tNonZero = tNonZero || tBefore.mLastStep[ iADV ] != 0.0;
+        }
+        CHECK( tNonZero );
+        CHECK( tStart.mLastStep[ 3 ] == 0.0 );
+
+        // the state after the first iteration of the restarted solve holds that iteration's increment
+        const Algorithm_MMA::Restart_State& tAfter = tAlgorithm.get_kept_state();
+        const std::vector< real >&          tX1    = tInterface->mEvaluated.back();
+        for ( uint iADV = 0; iADV < 4; iADV++ )
+        {
+            CHECK( tAfter.mLastStep[ iADV ] == tX1[ iADV ] - tRestartX[ iADV ] );
+        }
+        warm_restart::remove_state_files();
+
+        // state files: written with the increment when the key is on (and read back), without it when off
+        for ( bool tOsc : { false, true } )
+        {
+            Parameter_List tFileParameters = algorithm_parameters( true, 4 );
+            tFileParameters.set( "move_adapt_oscillation", tOsc );
+            std::shared_ptr< Interface_Forced_Restart > tFileInterface = std::make_shared< Interface_Forced_Restart >();
+            std::shared_ptr< Problem >                  tFileProblem   = make_problem( tFileInterface );
+            Algorithm_MMA                               tFileAlgorithm( tFileParameters );
+            solve_with_restarts( tFileAlgorithm, tFileProblem );
+
+            std::string tName;
+            uint        tLatestIter = 0;
+            for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
+            {
+                const std::string tEntryName = tEntry.path().filename().string();
+                if ( tEntryName.rfind( "MMA_State_Alg_0_Iter_", 0 ) == 0 )
+                {
+                    const uint tIter = (uint)std::stoul( tEntryName.substr( 21 ) );
+                    if ( tName.empty() || tIter > tLatestIter )
+                    {
+                        tName       = tEntryName;
+                        tLatestIter = tIter;
+                    }
+                }
+            }
+            REQUIRE( !tName.empty() );
+            hid_t tFileID = open_hdf5_file( tName, false, true );
+            CHECK( dataset_exists( tFileID, "LastStep" ) == tOsc );
+            close_hdf5_file( tFileID );
+
+            Algorithm_MMA::Restart_State tFile = Algorithm_MMA::read_restart_state( tName );
+            CHECK( tFile.mLastStep == tFileAlgorithm.get_kept_state().mLastStep );
+            CHECK( tFile.mLastStep.size() == ( tOsc ? 4u : 0u ) );
+            warm_restart::remove_state_files();
+        }
+    }
+
 }    // namespace moris::opt

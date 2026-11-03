@@ -104,6 +104,9 @@ namespace moris::opt
         std::vector< double > mMove;      ///< per-ADV move limit (fraction of range)
         std::vector< int >    mMoveHit;   ///< 1 if the accepted step of this ADV sat on its move bound
         std::vector< int >    mMoveHitPrev;   ///< same for the previous accepted step
+        bool                  mMoveOsc    = false;    ///< move_adapt_oscillation: also adapt ADVs the gate leaves out
+        real                  mMoveOscTol = 0.1;      ///< significant increment, fraction of the ADV's move limit
+        std::vector< double > mOscPrevStep;           ///< increment before the first one of this solve (kept across a restart)
 
         // ---- rise guard (move_guard_*) ----
         real mGuardRise   = -1.0;     ///< relative objective rise that rejects a step from a feasible design; < 0 off
@@ -139,6 +142,7 @@ namespace moris::opt
             std::vector< double > mLowWidth;       ///< centre - low of the next asymptotes (> 0)
             std::vector< double > mUppWidth;       ///< upp - centre of the next asymptotes (> 0)
             std::vector< double > mMoveStep;       ///< per-ADV move limit times the ADV range
+            std::vector< double > mLastStep;       ///< last committed increment (move_adapt_oscillation; else empty)
             std::vector< double > mLowerBounds;    ///< bounds the state was saved with (diagnostic)
             std::vector< double > mUpperBounds;
             std::vector< double > mRaa;        ///< constraint conservatism weights raa_j
@@ -163,6 +167,8 @@ namespace moris::opt
          * * range_i, move_i = aFreshMove) when k = -1, or when aMovedFraction > 0 and |x_i - centre_k| > aMovedFraction
          * * range_i (the restart moved it out of the region the kept state describes). Widths are clamped to the
          * asymptote limits [0.01, 10] * range_i of asymp(). aMove is left unchanged if aKeepMove is false (fixed box).
+         * If aLastStep is given, it receives the kept last increment of each ADV (0 for a fresh or moved ADV, or when
+         * the state holds none).
          */
         static Restart_Counts apply_restart_state(
                 const Restart_State&         aState,
@@ -178,9 +184,11 @@ namespace moris::opt
                 real                         aMoveMax,
                 std::vector< double >&       aLow,
                 std::vector< double >&       aUpp,
-                std::vector< double >&       aMove );
+                std::vector< double >&       aMove,
+                std::vector< double >*       aLastStep = nullptr );
 
-        /** write aState to an HDF5 file (datasets Centre, LowWidth, UppWidth, MoveStep, bounds, Raa, Penalty, scalars) */
+        /** write aState to an HDF5 file (datasets Centre, LowWidth, UppWidth, MoveStep, bounds, Raa, Penalty, scalars;
+         * LastStep if the state holds one) */
         static void write_restart_state( const std::string& aFileName, const Restart_State& aState, uint aOptIter );
 
         /** read a state written by write_restart_state() */
@@ -342,6 +350,29 @@ namespace moris::opt
                 real                         aGrow,
                 real                         aMin,
                 real                         aMax );
+
+        /**
+         * Oscillation move-limit update (move_adapt_oscillation) for the ADVs the move-bound gate leaves out
+         * (aSkip[i] == 0). With the last increment d1 = aStep[i], the one before d0 = aPrevStep[i] and the move limit
+         * L_i = aMove[i] * aRange[i] before the update, if |d1| >= aTol * L_i and |d0| >= aTol * L_i:
+         *   d1 * d0 < 0 (sign flip)  => aMove[i] = aShrink * aMove[i]
+         *   d1 * d0 > 0 (agreement)  => aMove[i] = aGrow * aMove[i]
+         * then clamped to [aMin, aMax]. Smaller increments and skipped ADVs leave aMove[i] unchanged.
+         * @param[out] aGrown number of ADVs grown
+         * @return number of ADVs shrunk
+         */
+        static int adapt_move_limits_oscillation(
+                std::vector< double >&       aMove,
+                const std::vector< double >& aStep,
+                const std::vector< double >& aPrevStep,
+                const std::vector< double >& aRange,
+                const std::vector< int >&    aSkip,
+                real                         aShrink,
+                real                         aGrow,
+                real                         aMin,
+                real                         aMax,
+                real                         aTol,
+                int&                         aGrown );
 
         /**
          * Rise-guard test: true if the current design is feasible (all aCon <= aFeas) and the trial objective
