@@ -27,6 +27,45 @@
 using namespace moris;
 namespace moris::xtk
 {
+    namespace
+    {
+        // MB-095: number of distinct hidden background edges over all processors
+        uint
+        count_global_hidden_edges( const std::set< std::pair< moris_id, moris_id > >& aLocalEdges )
+        {
+            // an edge on a processor boundary belongs to cells owned by several processors, so the local counts
+            // cannot simply be summed; gather the edges (pairs of global vertex ids) on processor 0 and count the union
+            Matrix< IdMat > tLocalEdges( 2, aLocalEdges.size() );
+            uint            tEdgeIndex = 0;
+            for ( const std::pair< moris_id, moris_id >& iEdge : aLocalEdges )
+            {
+                tLocalEdges( 0, tEdgeIndex ) = iEdge.first;
+                tLocalEdges( 1, tEdgeIndex ) = iEdge.second;
+                tEdgeIndex++;
+            }
+
+            Vector< Matrix< IdMat > > tGatheredEdges;
+            gatherv_mats( tLocalEdges, tGatheredEdges, 0 );
+
+            uint tNumEdges = 0;
+            if ( par_rank() == 0 )
+            {
+                std::set< std::pair< moris_id, moris_id > > tAllEdges;
+                for ( const Matrix< IdMat >& iProcEdges : tGatheredEdges )
+                {
+                    for ( uint iEdge = 0; iEdge < iProcEdges.n_cols(); iEdge++ )
+                    {
+                        tAllEdges.insert( { iProcEdges( 0, iEdge ), iProcEdges( 1, iEdge ) } );
+                    }
+                }
+                tNumEdges = tAllEdges.size();
+            }
+
+            // only processor 0 holds the count: the sum hands it to every processor
+            return sum_all( tNumEdges );
+        }
+    }    // namespace
+
     // ----------------------------------------------------------------------------------
 
     Integration_Mesh_Generator::Integration_Mesh_Generator()
@@ -633,7 +672,8 @@ namespace moris::xtk
             tCheckResolution        = tCheckResolution or tCheckGeometry( iGeom );
         }
         uint                  tNumDims            = aBackgroundMesh->get_spatial_dim();
-        Vector< std::set< std::pair< moris_index, moris_index > > > tHiddenEdges( tNumGeometries );
+        // MB-095: hidden edges are keyed by global vertex ids, so that the edge sets of all processors can be merged
+        Vector< std::set< std::pair< moris_id, moris_id > > > tHiddenEdges( tNumGeometries );
         Vector< uint >        tUnseenCells( tNumGeometries, 0 );
         Vector< uint >        tTopologyCells( tNumGeometries, 0 );
         Vector< uint >        tInsignificant( tNumGeometries, 0 );
@@ -645,12 +685,13 @@ namespace moris::xtk
         // iterate through all cells
         for ( uint iCell = 0; iCell < tNumCells; iCell++ )
         {
-            // MB-084 resolution check (log only; does not change the cut)
-            if ( tCheckResolution )
+            // MB-084 resolution check (log only; does not change the cut). MB-095: only the cells this processor owns,
+            // so that the sums over all processors count every cell once (aura cells are owned elsewhere)
+            if ( tCheckResolution and aBackgroundMesh->get_mtk_cell( (moris_index)iCell ).get_owner() == (moris_id)par_rank() )
             {
                 const mtk::Cell&   tCell        = aBackgroundMesh->get_mtk_cell( (moris_index)iCell );
                 Matrix< DDRMat >   tCoords      = tCell.get_vertex_coords();
-                Matrix< IndexMat > tVertexInds  = tCell.get_vertex_inds();
+                Matrix< IdMat >    tVertexIds   = tCell.get_vertex_ids();
                 uint               tNumCorners  = 1u << tNumDims;
                 uint               tOrder       = tCoords.n_rows() == tNumCorners ? 1 : 2;
                 Matrix< DDRMat >   tCorners( tNumCorners, tNumDims );
@@ -672,8 +713,8 @@ namespace moris::xtk
                     {
                         if ( tReport.mHiddenEdgeMask & ( 1u << iEdge ) )
                         {
-                            moris_index tA = tVertexInds( tCellEdges( iEdge ).first );
-                            moris_index tB = tVertexInds( tCellEdges( iEdge ).second );
+                            moris_id tA = tVertexIds( tCellEdges( iEdge ).first );
+                            moris_id tB = tVertexIds( tCellEdges( iEdge ).second );
                             tHiddenEdges( iGeom ).insert( { std::min( tA, tB ), std::max( tA, tB ) } );
                         }
                     }
@@ -734,7 +775,9 @@ namespace moris::xtk
             MORIS_LOG_INFO( "XTK - Cells intersected only inside (subdivision vertices, MB-031): %u", tNumInteriorOnly );
         }
 
-        // MB-084: report the geometry resolution check (all processors; shared edges on processor boundaries may count twice)
+        // MB-084: report the geometry resolution check over all processors. MB-095: every owned cell is counted by its
+        // owner only; a background edge shared by cells on several processors counts once (the edge sets are merged on
+        // processor 0)
         if ( tCheckResolution )
         {
             aCutIntegrationMesh->mResolutionHiddenEdges.resize( tNumGeometries, 0 );
@@ -748,7 +791,7 @@ namespace moris::xtk
                 {
                     continue;
                 }
-                uint tEdges    = sum_all( uint( tHiddenEdges( iGeom ).size() ) );
+                uint tEdges    = count_global_hidden_edges( tHiddenEdges( iGeom ) );
                 uint tUnseen   = sum_all( tUnseenCells( iGeom ) );
                 uint tTopology = sum_all( tTopologyCells( iGeom ) );
                 uint tShallow  = sum_all( tInsignificant( iGeom ) );
