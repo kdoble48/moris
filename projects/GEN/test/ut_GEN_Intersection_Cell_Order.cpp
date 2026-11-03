@@ -49,16 +49,16 @@ namespace moris::gen
     // internal linkage: GEN-test links several files with a helper type of this name (-Werror=odr under LTO)
     namespace
     {
-    /**
-     * Statistics of the edge intersections XTK's 2D regular subdivision would query on every cell of a mesh: the 4
-     * outer edges and the 4 spokes from the corners to the cell center (Regular_Subdivision_4_TRIS).
-     */
-    struct Cut_Statistics
-    {
-        real           mMaxDistance      = 0.0;    // max distance of an intersection from the analytic circle
-        uint           mNumIntersections = 0;      // number of intersected edges
-        Vector< real > mCoordinates;               // all intersection coordinates (x0, y0, x1, y1, ...) in query order
-    };
+        /**
+         * Statistics of the edge intersections XTK's 2D regular subdivision would query on every cell of a mesh: the 4
+         * outer edges and the 4 spokes from the corners to the cell center (Regular_Subdivision_4_TRIS).
+         */
+        struct Cut_Statistics
+        {
+            real           mMaxDistance      = 0.0;    // max distance of an intersection from the analytic circle
+            uint           mNumIntersections = 0;      // number of intersected edges
+            Vector< real > mCoordinates;               // all intersection coordinates (x0, y0, x1, y1, ...) in query order
+        };
     }    // namespace
 
     //--------------------------------------------------------------------------------------------------------------
