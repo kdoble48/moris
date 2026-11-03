@@ -16,6 +16,7 @@ set(TEST_SOURCES
 	ut_GEN_Property.cpp
 	ut_GEN_Intersection_Level_Set.cpp
 	ut_GEN_Intersection_Cell_Order.cpp
+	ut_GEN_Intersection_Analytic.cpp
 	ut_GEN_ADV_Filter.cpp
 	ut_GEN_Intersection_Surface_Mesh.cpp
 	cl_GEN_Geometry_Engine_Test.cpp

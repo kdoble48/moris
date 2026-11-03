@@ -13,6 +13,7 @@
 #include <utility>
 #include "cl_GEN_Intersection_Node_Linear.hpp"
 #include "cl_GEN_Intersection_Node_Bilinear.hpp"
+#include "cl_GEN_Intersection_Node_Analytic.hpp"
 #include "cl_GEN_Derived_Node.hpp"
 #include "cl_GEN_Parent_Node.hpp"
 #include "cl_GEN_Basis_Node.hpp"
@@ -20,6 +21,8 @@
 #include "cl_MTK_Interpolation_Function_Base.hpp"
 #include "cl_MTK_Interpolation_Function_Factory.hpp"
 #include "fn_dot.hpp"
+#include "fn_stringify_matrix.hpp"
+#include "cl_Logger.hpp"
 
 namespace moris::gen
 {
@@ -32,6 +35,8 @@ namespace moris::gen
             , mIsocontourThreshold( aParameterList.get< real >( "isocontour_threshold" ) )
             , mIsocontourTolerance( aParameterList.get< real >( "isocontour_tolerance" ) )
             , mIntersectionTolerance( aParameterList.get< real >( "intersection_tolerance" ) )
+            , mUseAnalyticIntersection( aParameterList.exists( "use_analytic_intersection" ) and aParameterList.get< bool >( "use_analytic_intersection" ) )
+            , mAnalyticIntersectionMaxIterations( aParameterList.exists( "analytic_intersection_max_iterations" ) ? aParameterList.get< uint >( "analytic_intersection_max_iterations" ) : 200 )
     {
     }
 
@@ -45,6 +50,56 @@ namespace moris::gen
             , Design_Field( std::move( aField ), aParameters, aNodeManager )
             , mParameters( aParameters )
     {
+        MORIS_ERROR( not mParameters.mUseAnalyticIntersection or ( mField->has_exact_derived_node_values() and not this->use_multilinear_interpolation() ),
+                "Level_Set_Geometry: use_analytic_intersection needs an analytic field (exact derived-node values) and "
+                "excludes use_multilinear_interpolation / use_cell_order_intersection." );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Level_Set_Geometry::use_analytic_intersection() const
+    {
+        return mParameters.mUseAnalyticIntersection;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Level_Set_Geometry::get_field_value_at_point_exact( const Matrix< DDRMat >& aCoordinates ) const
+    {
+        return mField->get_field_value_at_point( aCoordinates );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Matrix< DDRMat > Level_Set_Geometry::get_dfield_dadvs_at_point( const Matrix< DDRMat >& aCoordinates ) const
+    {
+        // analytic fields ignore the node index and evaluate at the coordinates; copy (the field reuses its storage)
+        Matrix< DDRMat > tSensitivities = mField->get_dfield_dadvs( 0, aCoordinates );
+        return tSensitivities;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< sint > Level_Set_Geometry::get_determining_adv_ids_at_point( const Matrix< DDRMat >& aCoordinates ) const
+    {
+        return mField->get_determining_adv_ids( 0, aCoordinates );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Matrix< DDRMat > Level_Set_Geometry::get_dfield_dcoordinates_at_point( const Matrix< DDRMat >& aCoordinates, real aStep ) const
+    {
+        uint             tNumDims = aCoordinates.numel();
+        Matrix< DDRMat > tGradient( 1, tNumDims, 0.0 );
+        for ( uint iDim = 0; iDim < tNumDims; ++iDim )
+        {
+            Matrix< DDRMat > tPlus  = aCoordinates;
+            Matrix< DDRMat > tMinus = aCoordinates;
+            tPlus( iDim ) += aStep;
+            tMinus( iDim ) -= aStep;
+            tGradient( iDim ) = ( mField->get_field_value_at_point( tPlus ) - mField->get_field_value_at_point( tMinus ) ) / ( 2.0 * aStep );
+        }
+        return tGradient;
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -173,7 +228,19 @@ namespace moris::gen
             mtk::Geometry_Type                aBackgroundGeometryType,
             mtk::Interpolation_Order          aBackgroundInterpolationOrder )
     {
-        if ( this->use_multilinear_interpolation() )
+        if ( mParameters.mUseAnalyticIntersection )
+        {
+            // Create intersection node on the analytic field itself
+            return new Intersection_Node_Analytic(
+                    aNodeIndex,
+                    aBackgroundNodes,
+                    aFirstParentNode,
+                    aSecondParentNode,
+                    aBackgroundGeometryType,
+                    aBackgroundInterpolationOrder,
+                    *this );
+        }
+        else if ( this->use_multilinear_interpolation() )
         {
             // Create multilinear intersection node
             return new Intersection_Node_Bilinear(
@@ -206,7 +273,11 @@ namespace moris::gen
             const Parent_Node&                aFirstParentNode,
             const Parent_Node&                aSecondParentNode )
     {
-        if ( this->use_cell_order_intersection() )
+        if ( mParameters.mUseAnalyticIntersection )
+        {
+            return this->compute_intersection_local_coordinate_analytic( aFirstParentNode, aSecondParentNode );
+        }
+        else if ( this->use_cell_order_intersection() )
         {
             return this->compute_intersection_local_coordinate_cell_order( aBackgroundNodes, aFirstParentNode, aSecondParentNode );
         }
@@ -483,22 +554,171 @@ namespace moris::gen
         }
         else
         {
-            // Interface geometry values
-            Matrix< DDRMat > tInterfaceGeometryValues = { { this->get_field_value( aFirstParentNode.get_index(), aFirstParentNode.get_global_coordinates() ) },
-                { this->get_field_value( aSecondParentNode.get_index(), aSecondParentNode.get_global_coordinates() ) } };
-
-            // Get isocontour threshold
-            real tIsocontourThreshold = this->get_isocontour_threshold();
-
-            // Interpolate
-            Matrix< DDRMat > tLocalCoordinates = Interpolation::linear_interpolation_value( tInterfaceGeometryValues, tIsocontourThreshold );
-
-            return tLocalCoordinates( 0 );
+            return this->compute_intersection_local_coordinate_linear( aFirstParentNode, aSecondParentNode );
         }
     }
 
     //--------------------------------------------------------------------------------------------------------------
 
+    real Level_Set_Geometry::compute_intersection_local_coordinate_linear(
+            const Parent_Node& aFirstParentNode,
+            const Parent_Node& aSecondParentNode )
+    {
+        // Interface geometry values
+        Matrix< DDRMat > tInterfaceGeometryValues = { { this->get_field_value( aFirstParentNode.get_index(), aFirstParentNode.get_global_coordinates() ) },
+            { this->get_field_value( aSecondParentNode.get_index(), aSecondParentNode.get_global_coordinates() ) } };
+
+        // Get isocontour threshold
+        real tIsocontourThreshold = this->get_isocontour_threshold();
+
+        // Interpolate
+        Matrix< DDRMat > tLocalCoordinates = Interpolation::linear_interpolation_value( tInterfaceGeometryValues, tIsocontourThreshold );
+
+        return tLocalCoordinates( 0 );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Level_Set_Geometry::compute_intersection_local_coordinate_analytic(
+            const Parent_Node& aFirstParentNode,
+            const Parent_Node& aSecondParentNode )
+    {
+        const Matrix< DDRMat >& tFirstX    = aFirstParentNode.get_global_coordinates();
+        const Matrix< DDRMat >& tSecondX   = aSecondParentNode.get_global_coordinates();
+        real                    tThreshold = this->get_isocontour_threshold();
+
+        // residuals at the parents (exact analytic values, as used for the geometric regions)
+        real tFirstResidual  = this->get_field_value( aFirstParentNode.get_index(), tFirstX ) - tThreshold;
+        real tSecondResidual = this->get_field_value( aSecondParentNode.get_index(), tSecondX ) - tThreshold;
+
+        // reset the fallback flag; Intersection_Node_Analytic reads it right after its local coordinate is computed
+        mLastAnalyticIntersectionFellBack = false;
+
+        // no strict sign change (an end on the isocontour, or no crossing): the linear path decides, so the result is
+        // the one without the key (-1 / +1 for an end on the isocontour, outside [-1, 1] for no crossing)
+        if ( not( tFirstResidual * tSecondResidual < 0.0 ) )
+        {
+            return this->compute_intersection_local_coordinate_linear( aFirstParentNode, aSecondParentNode );
+        }
+
+        mNumAnalyticIntersections++;
+
+        // Illinois (modified regula falsi) on the sign-change bracket [-1, 1] in the edge coordinate xi,
+        // x( xi ) = 0.5 ( 1 - xi ) x_1 + 0.5 ( 1 + xi ) x_2; the iterate stays inside the bracket (bisection otherwise)
+        real tLower         = -1.0;
+        real tUpper         = 1.0;
+        real tLowerResidual = tFirstResidual;
+        real tUpperResidual = tSecondResidual;
+        int  tLastSide      = 0;
+        real tXi            = ( tFirstResidual + tSecondResidual ) / ( tFirstResidual - tSecondResidual );
+        if ( not( tXi > tLower and tXi < tUpper ) )
+        {
+            tXi = 0.0;
+        }
+
+        const uint tMaxIterations     = mParameters.mAnalyticIntersectionMaxIterations;    // default 200; bisection alone reaches the bracket tolerance in 45 steps
+        const real tResidualTolerance = 1e-14;    // on the field value
+        const real tBracketTolerance  = 1e-13;    // on the edge coordinate
+
+        for ( uint iIteration = 0; iIteration < tMaxIterations; ++iIteration )
+        {
+            Matrix< DDRMat > tX        = 0.5 * ( 1.0 - tXi ) * tFirstX + 0.5 * ( 1.0 + tXi ) * tSecondX;
+            real             tResidual = mField->get_field_value_at_point( tX ) - tThreshold;
+
+            // a field that is not finite inside the edge cannot be bracketed: use the linear crossing
+            if ( not std::isfinite( tResidual ) )
+            {
+                return this->fall_back_to_linear_intersection( aFirstParentNode, aSecondParentNode, "non-finite field value inside the edge" );
+            }
+
+            if ( std::abs( tResidual ) < tResidualTolerance or tUpper - tLower < tBracketTolerance )
+            {
+                return tXi;
+            }
+
+            if ( ( tResidual > 0.0 ) == ( tUpperResidual > 0.0 ) )
+            {
+                // upper end replaced; the lower end is kept, halve its residual if it was kept last time as well
+                tUpper         = tXi;
+                tUpperResidual = tResidual;
+                if ( tLastSide == -1 )
+                {
+                    tLowerResidual *= 0.5;
+                }
+                tLastSide = -1;
+            }
+            else
+            {
+                // lower end replaced
+                tLower         = tXi;
+                tLowerResidual = tResidual;
+                if ( tLastSide == 1 )
+                {
+                    tUpperResidual *= 0.5;
+                }
+                tLastSide = 1;
+            }
+
+            tXi = ( tLower * tUpperResidual - tUpper * tLowerResidual ) / ( tUpperResidual - tLowerResidual );
+            if ( not( tXi > tLower and tXi < tUpper ) )
+            {
+                tXi = 0.5 * ( tLower + tUpper );
+            }
+        }
+
+        // not converged within the iteration limit: use the linear crossing
+        return this->fall_back_to_linear_intersection( aFirstParentNode, aSecondParentNode, "root not converged within the iteration limit" );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real Level_Set_Geometry::fall_back_to_linear_intersection(
+            const Parent_Node& aFirstParentNode,
+            const Parent_Node& aSecondParentNode,
+            const char*        aReason )
+    {
+        mNumAnalyticIntersectionFallbacks++;
+        mLastAnalyticIntersectionFellBack = true;
+
+        // warn for the first few, then count only (the count is returned by get_number_of_analytic_intersection_fallbacks)
+        const uint tMaxWarnings = 10;
+        if ( mNumAnalyticIntersectionFallbacks <= tMaxWarnings )
+        {
+            MORIS_LOG_WARNING( "use_analytic_intersection on %s: %s, edge %s - %s uses the linear crossing (fallback %u of %u analytic intersections)%s",
+                    this->get_name().c_str(),
+                    aReason,
+                    ios::stringify_log( aFirstParentNode.get_global_coordinates() ).c_str(),
+                    ios::stringify_log( aSecondParentNode.get_global_coordinates() ).c_str(),
+                    mNumAnalyticIntersectionFallbacks,
+                    mNumAnalyticIntersections,
+                    mNumAnalyticIntersectionFallbacks == tMaxWarnings ? "; further fallbacks are counted without a warning" : "" );
+        }
+
+        return this->compute_intersection_local_coordinate_linear( aFirstParentNode, aSecondParentNode );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Level_Set_Geometry::last_analytic_intersection_fell_back() const
+    {
+        return mLastAnalyticIntersectionFellBack;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint Level_Set_Geometry::get_number_of_analytic_intersections() const
+    {
+        return mNumAnalyticIntersections;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint Level_Set_Geometry::get_number_of_analytic_intersection_fallbacks() const
+    {
+        return mNumAnalyticIntersectionFallbacks;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
     real Level_Set_Geometry::compute_intersection_local_coordinate_cell_order(
             const Vector< Background_Node* >& aBackgroundNodes,
             const Parent_Node&                aFirstParentNode,
