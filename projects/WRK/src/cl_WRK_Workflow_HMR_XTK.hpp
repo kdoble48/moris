@@ -101,6 +101,9 @@ namespace moris
             /// last (re)refinement (on the mesh refined for the design it was cut with); empty until that cut
             Vector< uint > mRedetectBaselineEdges;
 
+            /// MB-087 / MB-089: evaluations in which perform() redid the GEN refinement on the current design
+            uint mNumRefinementRedos = 0;
+
             /**
              * Errors if any GEN design uses discretization_mode = "additive" while HMR remeshing or level-set
              * reinitialization is active (the additive field split cannot be remapped).
@@ -133,8 +136,25 @@ namespace moris
              * MB-089: per geometry, feature_refinement_redetect_edges (-1 = off). All -1 when no geometry asks for the
              * re-detection, when GEN does not refine the mesh, or when the ADVs are not all primitive (a redo of the
              * refinement needs a remeshing performer then).
+             *
+             * @param aNumADVs Number of ADVs of the design, the same on every processor (get_num_advs_on_all_procs())
              */
             Vector< sint > get_feature_redetect_thresholds( uint aNumADVs );
+
+            /**
+             * MB-097: the number of ADVs in aADVs on processor 0, on every processor. The full ADV vector exists on
+             * processor 0 only (the other processors evaluate through opt::Algorithm::dummy_solve() with an empty vector,
+             * GEN's get_advs() is empty there), so a decision that guards a collective (the redo of the GEN refinement,
+             * the restart paths of initialize()) must not compare the local size. Collective: every processor calls it.
+             */
+            uint get_num_advs_on_all_procs( const Vector< real >& aADVs ) const;
+
+            /**
+             * MB-097: GEN's current ADVs, complete on every processor (processor 0's vector, broadcast): a GEN rebuilt
+             * from its parameter list refines the mesh before the ADVs are distributed, on every processor, with its
+             * primitive ADVs. Collective: every processor calls it.
+             */
+            Vector< real > get_current_advs_on_all_procs();
 
             /**
              * Background cells of the decomposition mesh on refinement level > 0, and all background cells (owned, summed
@@ -186,6 +206,12 @@ namespace moris
             bool is_reinit_active() const override
             {
                 return !mSDFWeanedOff;
+            }
+
+            /** MB-087 / MB-089: evaluations in which perform() redid the GEN refinement on the current design */
+            uint get_num_refinement_redos() const
+            {
+                return mNumRefinementRedos;
             }
 
             //------------------------------------------------------------------------------

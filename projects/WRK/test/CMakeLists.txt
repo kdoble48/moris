@@ -15,7 +15,8 @@ set(TEST_SOURCES
     UT_WRK_Remeshing_Mini_Performer.cpp
     UT_WRK_Reinitialize_Preserve.cpp
     UT_WRK_Feature_Redetect.cpp
-    UT_WRK_Reinitialize_User_Function.cpp )
+    UT_WRK_Reinitialize_User_Function.cpp
+    UT_WRK_Parallel_Refinement_Redo.cpp )
 
 # List test dependencies
 set(TEST_DEPENDENCIES
@@ -49,7 +50,7 @@ target_link_libraries(${WRK_TEST} ${TEST_DEPENDENCIES})
 set_target_properties(${WRK_TEST} PROPERTIES OUTPUT_NAME ${WRK_TEST}${EXE_EXT})
 
 ## create dynamically linked .so files
-set(WRK_TEST_INPUT_FILE_BASE WRK_Input_1 WRK_Input_2)
+set(WRK_TEST_INPUT_FILE_BASE WRK_Input_1 WRK_Input_2 WRK_Input_3)
 
 set(SO_TPLS
 "trilinos"

@@ -58,6 +58,22 @@ namespace moris::wrk
             }
             return true;
         }
+
+        // MB-097: processor 0's ADVs on every processor. The full ADV vector exists on processor 0 only: the optimizer
+        // runs there, the other processors evaluate through opt::Algorithm::dummy_solve() with an empty vector, and
+        // GEN's get_advs() is empty on them. Collective: every processor calls it.
+        void
+        broadcast_advs( Vector< real >& aADVs )
+        {
+            if ( par_size() == 1 )
+            {
+                return;
+            }
+            uint tNumADVs = aADVs.size();
+            broadcast( tNumADVs );
+            aADVs.resize( tNumADVs );
+            MPI_Bcast( aADVs.memptr(), (int)tNumADVs, MPI_DOUBLE, 0, moris::get_comm() );
+        }
     }    // namespace
 
     //--------------------------------------------------------------------------------------------------------------
@@ -162,8 +178,9 @@ namespace moris::wrk
 
         // a new GEN from its parameter list, at the current ADVs: after the first distribution, fields stored on the old
         // mesh (discretization_mesh_index = -1, e.g. fixed pads) can no longer be evaluated on the new mesh, and the
-        // MB-085 equalisation only sees fields that are still analytic; a new GEN is in the state of the first refinement
-        Vector< real > tCurrentADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+        // MB-085 equalisation only sees fields that are still analytic; a new GEN is in the state of the first refinement.
+        // Every processor refines with the full ADV vector (MB-097)
+        Vector< real >                          tCurrentADVs      = this->get_current_advs_on_all_procs();
         Module_Parameter_Lists tGENParameterList = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::GEN );
         std::shared_ptr< gen::Geometry_Engine > tNewGEN = std::make_shared< gen::Geometry_Engine >( tGENParameterList, mPerformerManager->mLibrary );
         MORIS_ERROR( tCurrentADVs.size() == tNewGEN->get_num_primitive_advs(),
@@ -258,6 +275,26 @@ namespace moris::wrk
             tThresholds( iGeom ) = tGEN->get_feature_refinement_redetect_edges( iGeom );
         }
         return tThresholds;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint
+    Workflow_HMR_XTK::get_num_advs_on_all_procs( const Vector< real >& aADVs ) const
+    {
+        uint tNumADVs = aADVs.size();
+        broadcast( tNumADVs );
+        return tNumADVs;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< real >
+    Workflow_HMR_XTK::get_current_advs_on_all_procs()
+    {
+        Vector< real > tADVs = mPerformerManager->mGENPerformer( 0 )->get_advs();
+        broadcast_advs( tADVs );
+        return tADVs;
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -442,9 +479,12 @@ namespace moris::wrk
             tIsFirstOptSolve = false;
         }
         // after first solve in optimization process, no remeshing performer, GEN-driven refinement: rebuild the mesh with
-        // the GEN refinement of the current ADVs (e.g. after an XTK failure because the design left the refined band)
+        // the GEN refinement of the current ADVs (e.g. after an XTK failure because the design left the refined band).
+        // MB-097: the ADV count of processor 0 (the only one holding the full vector), so that every processor takes the
+        // same branch of these collective rebuilds
         else if ( not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
-                  and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == mPerformerManager->mGENPerformer( 0 )->get_advs().size() )
+                  and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs()
+                              == this->get_num_advs_on_all_procs( mPerformerManager->mGENPerformer( 0 )->get_advs() ) )
         {
             this->refine_hmr_on_current_design();
         }
@@ -453,11 +493,12 @@ namespace moris::wrk
         // (without the HMR rebuild). Any optimizer restart of such a deck (reinitialize_interface_iter, a user_function
         // reinitialization, an XTK failure, a non-finite MMA step) used to stop here: "remeshing performer has not been built".
         else if ( not mPerformerManager->mRemeshingMiniPerformer( 0 )
-                  and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == mPerformerManager->mGENPerformer( 0 )->get_advs().size() )
+                  and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs()
+                              == this->get_num_advs_on_all_procs( mPerformerManager->mGENPerformer( 0 )->get_advs() ) )
         {
             Tracer tRebuildTracer( "WRK", "HMR-XTK Workflow", "Rebuild GEN on current ADVs" );
 
-            Vector< real >         tCurrentADVs      = mPerformerManager->mGENPerformer( 0 )->get_advs();
+            Vector< real >         tCurrentADVs      = this->get_current_advs_on_all_procs();
             Module_Parameter_Lists tGENParameterList = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::GEN );
 
             std::shared_ptr< gen::Geometry_Engine > tNewGEN =
@@ -699,9 +740,16 @@ namespace moris::wrk
         // (feature_refinement_redetect_edges) and than the first cut after the last refinement, redo the refinement on
         // the current ADVs through the MB-087 path below, as if the decomposition had failed. The counts are those of
         // the check that already ran in this decomposition (no extra field evaluations).
-        Vector< sint >            tRedetectThresholds = this->get_feature_redetect_thresholds( aNewADVs.size() );
+        // MB-097: the redo below is collective (HMR and GEN are rebuilt on every processor), so every input of the
+        // decision is the same on every processor: aNewADVs is complete on processor 0 only (the other processors
+        // evaluate through opt::Algorithm::dummy_solve() with an empty vector), hence processor 0's ADV count and its
+        // comparison with the design the mesh was refined for; tFlag and the hidden-edge counts are global already
+        uint                      tNumADVs            = this->get_num_advs_on_all_procs( aNewADVs );
+        Vector< sint >            tRedetectThresholds = this->get_feature_redetect_thresholds( tNumADVs );
         Vector< uint >            tHiddenEdges;
-        bool                      tMeshRefinedForThisDesign = same_advs( aNewADVs, mRefinedForADVs );
+        uint                      tRefinedForThisDesignMsg = same_advs( aNewADVs, mRefinedForADVs ) ? 1 : 0;
+        broadcast( tRefinedForThisDesignMsg );
+        bool                      tMeshRefinedForThisDesign = tRefinedForThisDesignMsg == 1;
         Feature_Redetect_Decision tRedetect;
         if ( tFlag and tXTKPerformer->get_cut_integration_mesh() )
         {
@@ -713,10 +761,17 @@ namespace moris::wrk
         // Without a remeshing performer, redo the GEN refinement (incl. the MB-084 sub-cell feature refinement) on the
         // current ADVs and cut again, in this evaluation. The number of ADVs does not change for designs that are not
         // discretized on the remeshed B-spline mesh, so the optimizer is not restarted.
-        if ( ( not tFlag or tRedetect.mRedo ) and not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
-                and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == aNewADVs.size() )
+        // MB-097: processor 0 decides, every processor follows (the inputs agree; this keeps any future rank-local input
+        // from splitting the processors at the collectives of the redo)
+        bool tRedo = ( not tFlag or tRedetect.mRedo ) and not mPerformerManager->mRemeshingMiniPerformer( 0 ) and this->gen_refines_mesh()
+                 and mPerformerManager->mGENPerformer( 0 )->get_num_primitive_advs() == tNumADVs;
+        uint tRedoMsg = tRedo ? 1 : 0;
+        broadcast( tRedoMsg );
+        if ( tRedoMsg == 1 )
         {
             Tracer tRefineTracer( "WRK", "HMR-XTK Workflow", "Refine on current design" );
+
+            mNumRefinementRedos++;
 
             std::pair< uint, uint > tCellsBefore = this->count_refined_background_cells();
 
