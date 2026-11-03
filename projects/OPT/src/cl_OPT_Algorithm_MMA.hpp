@@ -105,7 +105,7 @@ namespace moris::opt
         std::vector< int >    mMoveHit;   ///< 1 if the accepted step of this ADV sat on its move bound
         std::vector< int >    mMoveHitPrev;   ///< same for the previous accepted step
         bool                  mMoveOsc    = false;    ///< move_adapt_oscillation: also adapt ADVs the gate leaves out
-        real                  mMoveOscTol = 0.1;      ///< significant increment, fraction of the ADV's move limit
+        real                  mMoveOscTol = 0.25;     ///< significant increment, fraction of the ADV's move limit
         std::vector< double > mOscPrevStep;           ///< increment before the first one of this solve (kept across a restart)
 
         // ---- rise guard (move_guard_*) ----

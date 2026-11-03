@@ -231,7 +231,7 @@ namespace moris::prm
         // two increments of the same sign m_i = move_adapt_grow * m_i, then the clamp. Smaller increments (round-off, a
         // converged ADV) leave m_i unchanged. With restart_keep_state the last increment is kept across restarts.
         tParameterList.insert( "move_adapt_oscillation", false );      // also adapt ADVs that oscillate inside the box
-        tParameterList.insert( "move_adapt_oscillation_tol", 0.1 );    // significant increment, fraction of m_i * range
+        tParameterList.insert( "move_adapt_oscillation_tol", 0.25 );    // significant increment, fraction of m_i * range
 
         // Rise guard (off by default): when the current design is feasible (every constraint <= move_guard_feas) and
         // a trial step raises the objective by more than move_guard_rise * |f0|, the step is rejected and the move
