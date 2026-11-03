@@ -81,11 +81,30 @@ namespace moris
             // cell with a crossing, so the cells left below this level were evaluated before and cannot change
             std::map< std::pair< const Performer*, uint >, uint > mFeatureMinLevel;
 
+            // geometry-aware query points (feature_query_refine) that the cut would represent on the wrong side, per
+            // field, as of the last pass or the final check
+            std::map< std::pair< const Performer *, uint >, uint > mFeatureQueryWrong;
+
             std::shared_ptr< Library_IO > mLibrary = nullptr;
+
+            // XTK allows cut cells on different refinement levels (allow_mixed_level_cut_cells): sub-cell feature
+            // refinement refines only the cells that hide a feature (and the query-point cells), and the cut cells are
+            // not lifted to one level afterwards (equalize_cut_cell_levels is skipped)
+            bool mAllowMixedLevelCutCells = false;
 
             //--------------------------------------------------------------------------------------------------------------
 
           public:
+            //--------------------------------------------------------------------------------------------------------------
+
+            /**
+             * @brief let cut cells stay on different refinement levels (XTK allow_mixed_level_cut_cells)
+             */
+            void
+            set_allow_mixed_level_cut_cells( bool aAllow )
+            {
+                mAllowMixedLevelCutCells = aAllow;
+            }
             //--------------------------------------------------------------------------------------------------------------
 
             Refinement_Mini_Performer(){};
@@ -188,12 +207,34 @@ namespace moris
             //--------------------------------------------------------------------------------------------------------------
 
             /**
+             * Number of geometry-aware query points (feature_query_refine) that the cut of the final mesh represents
+             * on the wrong side, summed over the fields (0 when no field refines on query points).
+             */
+            uint
+            get_num_unresolved_query_points() const
+            {
+                uint tCount = 0;
+                for ( const auto &iField : mFeatureQueryWrong )
+                {
+                    tCount += iField.second;
+                }
+                return tCount;
+            }
+
+            //--------------------------------------------------------------------------------------------------------------
+
+            /**
              * Sub-cell feature refinement pass of one field (MB-084): detects features on every active cell of the
              * Lagrange mesh, and, unless no cell hides a feature, queues every cell that contains a zero crossing
              * (all cut cells have to stay on one level for XTK). Marks the field resolved otherwise.
              *
+             * With geometry-aware query points (feature_query_refine), a point whose cell's cut represents the wrong side
+             * keeps the passes going regardless of the depth tolerance: its cell and the cells with a crossing within its
+             * radius are queued (only those, when no cell hides a feature; the other cut cells are brought to the same
+             * level by equalize_cut_cell_levels()). Points still wrong in the final check are logged UNRESOLVED.
+             *
              * @param aFinalCheck Only detect and report (after the last pass); queue nothing
-             * @return Number of cells that hide a feature (all processors)
+             * @return Number of cells that hide a feature plus query points on the wrong side (all processors)
              */
             uint queue_feature_refinement(
                     const std::shared_ptr< hmr::HMR >  &aHMR,

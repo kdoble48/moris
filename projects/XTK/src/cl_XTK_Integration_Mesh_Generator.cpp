@@ -9,6 +9,8 @@
  */
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -27,6 +29,130 @@
 using namespace moris;
 namespace moris::xtk
 {
+    // ----------------------------------------------------------------------------------
+    // mixed-level cut cells (allow_mixed_level_cut_cells): geometry of the face footprints of subphases across a
+    // refinement-level jump. Background faces are axis aligned, so a footprint is a polygon (3D) or an interval (2D) in
+    // the two (one) coordinates tangential to the shared face.
+    // ----------------------------------------------------------------------------------
+
+    bool
+    mixed_level_cut_cells_allowed( Model* aXTKModel )
+    {
+        const Parameter_List& tParameters = aXTKModel->get_parameter_list();
+        return tParameters.exists( "allow_mixed_level_cut_cells" ) and tParameters.get< bool >( "allow_mixed_level_cut_cells" );
+    }
+
+    namespace
+    {
+        using Polygon_2D = std::vector< std::array< real, 2 > >;
+
+        struct Face_Piece
+        {
+            moris_index mSubphase;
+            moris_index mBulkPhase;
+            Polygon_2D  mPolygon;    // 3D: convex polygon, counter-clockwise; 2D: two points (interval in coordinate 0)
+            real        mMeasure;
+        };
+
+        // signed area of a polygon
+        real
+        polygon_signed_area( const Polygon_2D& aPolygon )
+        {
+            real tArea = 0.0;
+            for ( uint i = 0; i < aPolygon.size(); i++ )
+            {
+                const std::array< real, 2 >& tA = aPolygon[ i ];
+                const std::array< real, 2 >& tB = aPolygon[ ( i + 1 ) % aPolygon.size() ];
+                tArea += tA[ 0 ] * tB[ 1 ] - tB[ 0 ] * tA[ 1 ];
+            }
+            return 0.5 * tArea;
+        }
+
+        // > 0 if aP lies left of the directed edge aA -> aB
+        real
+        edge_side( const std::array< real, 2 >& aA, const std::array< real, 2 >& aB, const std::array< real, 2 >& aP )
+        {
+            return ( aB[ 0 ] - aA[ 0 ] ) * ( aP[ 1 ] - aA[ 1 ] ) - ( aB[ 1 ] - aA[ 1 ] ) * ( aP[ 0 ] - aA[ 0 ] );
+        }
+
+        // Sutherland-Hodgman: clip a polygon against a convex counter-clockwise polygon, return the area of the overlap
+        real
+        convex_overlap_area( const Polygon_2D& aSubject, const Polygon_2D& aClip )
+        {
+            Polygon_2D tOutput = aSubject;
+            for ( uint iEdge = 0; iEdge < aClip.size() and not tOutput.empty(); iEdge++ )
+            {
+                const std::array< real, 2 >& tA     = aClip[ iEdge ];
+                const std::array< real, 2 >& tB     = aClip[ ( iEdge + 1 ) % aClip.size() ];
+                Polygon_2D                   tInput = tOutput;
+                tOutput.clear();
+                for ( uint i = 0; i < tInput.size(); i++ )
+                {
+                    const std::array< real, 2 >& tP  = tInput[ i ];
+                    const std::array< real, 2 >& tQ  = tInput[ ( i + 1 ) % tInput.size() ];
+                    real                         tSp = edge_side( tA, tB, tP );
+                    real                         tSq = edge_side( tA, tB, tQ );
+                    if ( tSp >= 0.0 )
+                    {
+                        tOutput.push_back( tP );
+                    }
+                    if ( ( tSp >= 0.0 ) != ( tSq >= 0.0 ) )
+                    {
+                        real tT = tSp / ( tSp - tSq );
+                        tOutput.push_back( { tP[ 0 ] + tT * ( tQ[ 0 ] - tP[ 0 ] ), tP[ 1 ] + tT * ( tQ[ 1 ] - tP[ 1 ] ) } );
+                    }
+                }
+            }
+            return tOutput.size() < 3 ? 0.0 : std::abs( polygon_signed_area( tOutput ) );
+        }
+
+        // overlap measure of two face pieces (length in 2D, area in 3D)
+        real
+        piece_overlap( const Face_Piece& aFirst, const Face_Piece& aSecond, uint aSpatialDim )
+        {
+            if ( aSpatialDim == 2 )
+            {
+                real tLow  = std::max( std::min( aFirst.mPolygon[ 0 ][ 0 ], aFirst.mPolygon[ 1 ][ 0 ] ), std::min( aSecond.mPolygon[ 0 ][ 0 ], aSecond.mPolygon[ 1 ][ 0 ] ) );
+                real tHigh = std::min( std::max( aFirst.mPolygon[ 0 ][ 0 ], aFirst.mPolygon[ 1 ][ 0 ] ), std::max( aSecond.mPolygon[ 0 ][ 0 ], aSecond.mPolygon[ 1 ][ 0 ] ) );
+                return std::max( 0.0, tHigh - tLow );
+            }
+            return convex_overlap_area( aFirst.mPolygon, aSecond.mPolygon );
+        }
+
+        // tangential coordinates of a point on a face with normal along aNormalAxis
+        std::array< real, 2 >
+        tangential( const Matrix< DDRMat >& aCoords, uint aRow, uint aNormalAxis, uint aSpatialDim )
+        {
+            std::array< real, 2 > tPoint = { 0.0, 0.0 };
+            uint                  tCount = 0;
+            for ( uint iAxis = 0; iAxis < aSpatialDim; iAxis++ )
+            {
+                if ( iAxis != aNormalAxis )
+                {
+                    tPoint[ tCount++ ] = aCoords( aRow, iAxis );
+                }
+            }
+            return tPoint;
+        }
+
+        // finish a piece: orient a 3D polygon counter-clockwise and compute its measure
+        void
+        finish_piece( Face_Piece& aPiece, uint aSpatialDim )
+        {
+            if ( aSpatialDim == 2 )
+            {
+                aPiece.mMeasure = std::abs( aPiece.mPolygon[ 1 ][ 0 ] - aPiece.mPolygon[ 0 ][ 0 ] );
+                return;
+            }
+            real tArea = polygon_signed_area( aPiece.mPolygon );
+            if ( tArea < 0.0 )
+            {
+                std::reverse( aPiece.mPolygon.begin(), aPiece.mPolygon.end() );
+            }
+            aPiece.mMeasure = std::abs( tArea );
+        }
+    }    // namespace
+
     // ----------------------------------------------------------------------------------
 
     Integration_Mesh_Generator::Integration_Mesh_Generator()
@@ -182,6 +308,10 @@ namespace moris::xtk
 
         // identify and construct the subphase groups
         this->identify_and_construct_subphases( &tGenerationData, tCutIntegrationMesh.get(), tBackgroundMesh, tNeighborhood );
+
+        // geometry-aware query points: does the cut represent the declared side at each point? (needs the parent-cell
+        // to child-cell map, which the subphase construction completes)
+        this->check_feature_query_points( tCutIntegrationMesh.get(), tBackgroundMesh );
 
         // construct subphase neighborhood
         std::shared_ptr< Subphase_Neighborhood_Connectivity > tSubphaseNeighborhood = std::make_shared< Subphase_Neighborhood_Connectivity >();
@@ -569,6 +699,19 @@ namespace moris::xtk
             MORIS_LOG_INFO( "XTK - cut cells on refinement levels %d to %d; %u cells below level %d, e.g. cell %d at (%g, %g, %g)",
                     tGlobalMinLevel, tGlobalMaxLevel, tNumBelow, tGlobalMaxLevel, tExample, tCoords( 0, 0 ), tCoords( 0, 1 ),
                     tCoords.n_cols() > 2 ? tCoords( 0, 2 ) : 0.0 );
+
+            // mixed-level cut cells: the subphase neighborhood links subphases across level jumps by the overlap of
+            // their face footprints (construct_subphase_neighborhood), so the decomposition can go ahead
+            if ( mixed_level_cut_cells_allowed( mXTKModel ) )
+            {
+                uint tNumCut = sum_all( uint( aMeshGenerationData.mAllIntersectedBgCellInds.size() ) );
+                tNumBelow    = sum_all( tNumBelow );
+                MORIS_LOG_INFO( "XTK - mixed-level cut cells allowed (allow_mixed_level_cut_cells): %u of %u cut cells below level %d",
+                        tNumBelow,
+                        tNumCut,
+                        tGlobalMaxLevel );
+                aCutIntegrationMesh->mSameLevelChildMeshes = true;
+            }
         }
     }
 
@@ -787,6 +930,125 @@ namespace moris::xtk
         }
 
         return true;
+    }
+
+    // ----------------------------------------------------------------------------------
+
+    void
+    Integration_Mesh_Generator::check_feature_query_points(
+            Cut_Integration_Mesh* aCutIntegrationMesh,
+            mtk::Mesh*            aBackgroundMesh )
+    {
+        gen::Geometry_Engine* tEngine        = this->get_geom_engine();
+        uint                  tNumGeometries = tEngine->get_number_of_geometries();
+        uint                  tNumCells      = aBackgroundMesh->get_num_elems();
+        moris_index           tParRank       = moris::par_rank();
+
+        for ( uint iGeom = 0; iGeom < tNumGeometries; iGeom++ )
+        {
+            uint tCheck     = tEngine->get_feature_query_check( iGeom );
+            uint tNumPoints = tEngine->get_num_feature_query_points( iGeom );
+            if ( tCheck == 0 or tNumPoints == 0 )
+            {
+                continue;
+            }
+            aCutIntegrationMesh->mFeatureQueryLocated.resize( tNumGeometries, 0 );
+            aCutIntegrationMesh->mFeatureQueryMismatches.resize( tNumGeometries, 0 );
+
+            uint        tLocated    = 0;
+            uint        tMismatched = 0;
+            std::string tFirstMismatch;
+            for ( uint iPoint = 0; iPoint < tNumPoints; iPoint++ )
+            {
+                const Matrix< DDRMat >& tPoint = tEngine->get_feature_query_point( iGeom, iPoint ).mCoordinates;
+
+                // the background cell holding the point, owned by this processor
+                moris_index tBgCell = -1;
+                for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+                {
+                    const mtk::Cell& tCell = aBackgroundMesh->get_mtk_cell( (moris_index)iCell );
+                    if ( gen::cell_contains_point( tCell.get_vertex_coords(), tPoint ) )
+                    {
+                        tBgCell = tCell.get_owner() == tParRank ? (moris_index)iCell : -1;
+                        break;
+                    }
+                }
+                if ( tBgCell < 0 )
+                {
+                    continue;
+                }
+                tLocated++;
+
+                // the integration cell holding the point: the background cell itself, or one of its children
+                const mtk::Cell* tIgCell = &aBackgroundMesh->get_mtk_cell( tBgCell );
+                if ( aCutIntegrationMesh->parent_cell_has_children( tBgCell ) )
+                {
+                    tIgCell = nullptr;
+                    std::shared_ptr< IG_Cell_Group > tGroup =
+                            aCutIntegrationMesh->get_ig_cell_group( aCutIntegrationMesh->get_parent_cell_group_index( tBgCell ) );
+                    for ( mtk::Cell* iChild : tGroup->mIgCellGroup )
+                    {
+                        if ( gen::simplex_contains_point( iChild->get_vertex_coords(), tPoint ) )
+                        {
+                            tIgCell = iChild;
+                            break;
+                        }
+                    }
+                }
+
+                sint tRepresented = tIgCell ? tEngine->get_cell_geometric_region( iGeom, *tIgCell ) : 0;
+                sint tExpected    = tEngine->get_feature_query_expected_region( iGeom, iPoint );
+                if ( tExpected == 0 or tRepresented == tExpected )
+                {
+                    continue;
+                }
+                tMismatched++;
+
+                char tLine[ 512 ];
+                std::snprintf( tLine, sizeof( tLine ),
+                        "geometry %u, query point %u at (%g, %g, %g): the cut represents side %+d, expected %+d "
+                        "(background cell level %u%s)",
+                        iGeom,
+                        iPoint,
+                        tPoint( 0 ),
+                        tPoint( 1 ),
+                        tPoint.numel() > 2 ? tPoint( 2 ) : 0.0,
+                        tRepresented,
+                        tExpected,
+                        uint( aBackgroundMesh->get_mtk_cell( tBgCell ).get_level() ),
+                        tIgCell ? "" : "; no integration cell holds the point" );
+                MORIS_LOG_WARNING( "XTK - feature query point mismatch: %s.", tLine );
+                if ( tFirstMismatch.empty() )
+                {
+                    tFirstMismatch = tLine;
+                }
+            }
+
+            tLocated                                              = sum_all( tLocated );
+            tMismatched                                           = sum_all( tMismatched );
+            aCutIntegrationMesh->mFeatureQueryLocated( iGeom )    = tLocated;
+            aCutIntegrationMesh->mFeatureQueryMismatches( iGeom ) = tMismatched;
+
+            if ( tMismatched > 0 )
+            {
+                MORIS_LOG_WARNING( "XTK - geometry %u, feature query points: %u of %u mismatched (%u located on the mesh).",
+                        iGeom,
+                        tMismatched,
+                        tNumPoints,
+                        tLocated );
+            }
+            else
+            {
+                MORIS_LOG_INFO( "XTK - geometry %u, feature query points: %u of %u mismatched (%u located on the mesh).",
+                        iGeom,
+                        tMismatched,
+                        tNumPoints,
+                        tLocated );
+            }
+            MORIS_ERROR( tCheck < 2 or tMismatched == 0,
+                    "XTK - feature query point mismatch (feature_query_check = 2): %s.",
+                    tFirstMismatch.empty() ? "on another processor" : tFirstMismatch.c_str() );
+        }
     }
 
     // ----------------------------------------------------------------------------------
@@ -1538,6 +1800,13 @@ namespace moris::xtk
         // get the number of SPs in the mesh
         uint tNumSPs = aCutIntegrationMesh->get_num_subphases();
 
+        // cut cells may lie on different refinement levels (allow_mixed_level_cut_cells)
+        bool tMixedLevels = mixed_level_cut_cells_allowed( mXTKModel );
+
+        // level jumps with a cut coarser cell: number of faces, phase-disagreement ("crack") measure, largest crack per
+        // face relative to the face, fine / coarse subphases on the face without a same-phase partner, total face measure
+        std::array< real, 6 > tLevelJumpStats = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+
         // initialize lists in Subphase_Neighborhood_Connectivity
         aSubphaseNeighborhood->mSubphaseToSubPhase.resize( tNumSPs );
         aSubphaseNeighborhood->mSubphaseToSubPhaseMySideOrds.resize( tNumSPs );
@@ -1591,6 +1860,29 @@ namespace moris::xtk
                 moris_index tMyOrdinal              = tCellToCellSideOrd( 1, iNeighborIpCell );
                 moris_index tNeighborOrdinal        = tCellToCellSideOrd( 2, iNeighborIpCell );
                 moris_index tTransitionCellLocation = tCellToCellSideOrd( 3, iNeighborIpCell );
+
+                // mixed-level cut cells: across a level jump whose coarser cell is cut, the integration meshes of the two
+                // cells do not conform; link subphases by the overlap of their face footprints (seen from either side)
+                if ( tMixedLevels and tOtherCell->get_level() != tCurrentCell->get_level() )
+                {
+                    mtk::Cell const * tCoarseCell = tOtherCell->get_level() < tCurrentCell->get_level() ? tOtherCell : tCurrentCell;
+                    if ( aCutIntegrationMesh->parent_cell_has_children( tCoarseCell->get_index() ) )
+                    {
+                        this->link_subphases_across_level_jump(
+                                aCutIntegrationMesh,
+                                aBackgroundMesh,
+                                aFacetConnectivity,
+                                aBgFacetToChildFacet,
+                                tCurrentCell,
+                                tMyOrdinal,
+                                tOtherCell,
+                                tNeighborOrdinal,
+                                tTransitionCellLocation,
+                                aSubphaseNeighborhood,
+                                tLevelJumpStats );
+                        continue;
+                    }
+                }
 
                 // find Ig-cells that are representative for connection from center-Bg-cell through currently treated side ordinal
                 Vector< moris_index > tMyCellSubphaseIndices( 0 );    // list of Sub-phases (indices) present on current Lag-elem
@@ -1776,7 +2068,248 @@ namespace moris::xtk
                 }    // end if: case that there's no transition between refinement levels
             }    // end for: loop over the base IP cell's respective neighbors
         }    // end for: loop over all base IP cells
+
+        // report the level jumps between cut and finer cells (counted from the finer side)
+        if ( tMixedLevels )
+        {
+            uint tNumFaces     = sum_all( uint( tLevelJumpStats[ 0 ] ) );
+            real tCrack        = sum_all( tLevelJumpStats[ 1 ] );
+            real tMaxCrack     = max_all( tLevelJumpStats[ 2 ] );
+            uint tOrphanFine   = sum_all( uint( tLevelJumpStats[ 3 ] ) );
+            uint tOrphanCoarse = sum_all( uint( tLevelJumpStats[ 4 ] ) );
+            real tFaceMeasure  = sum_all( tLevelJumpStats[ 5 ] );
+            MORIS_LOG_INFO(
+                    "XTK - mixed-level cut cells: %u faces between a cut cell and a finer cell; phases disagree on %g of "
+                    "%g face measure (largest %.3g of one face); subphases without a same-phase partner across the face: "
+                    "%u finer, %u coarser",
+                    tNumFaces,
+                    tCrack,
+                    tFaceMeasure,
+                    tMaxCrack,
+                    tOrphanFine,
+                    tOrphanCoarse );
+        }
     }    // end function
+
+    // ----------------------------------------------------------------------------------
+
+    namespace
+    {
+        // smallest and largest coordinate of a cell's vertices along an axis
+        std::pair< real, real >
+        coordinate_range( const Matrix< DDRMat >& aCoords, uint aAxis )
+        {
+            real tMin = MORIS_REAL_MAX;
+            real tMax = -MORIS_REAL_MAX;
+            for ( uint iVertex = 0; iVertex < aCoords.n_rows(); iVertex++ )
+            {
+                tMin = std::min( tMin, aCoords( iVertex, aAxis ) );
+                tMax = std::max( tMax, aCoords( iVertex, aAxis ) );
+            }
+            return { tMin, tMax };
+        }
+
+        // footprints of a background cell's subphases on one of its faces (mixed-level cut cells)
+        void
+        collect_face_pieces(
+                Cut_Integration_Mesh*                                      aCutIntegrationMesh,
+                mtk::Mesh*                                                 aBackgroundMesh,
+                const std::shared_ptr< Facet_Based_Connectivity >&         aFacetConnectivity,
+                Vector< std::shared_ptr< Vector< moris::moris_index > > >* aBgFacetToChildFacet,
+                mtk::Cell const *                                          aBgCell,
+                moris_index                                                aSideOrdinal,
+                uint                                                       aNormalAxis,
+                std::vector< Face_Piece >&                                 aPieces )
+        {
+            uint tDim = aBackgroundMesh->get_spatial_dim();
+            aPieces.clear();
+
+            // uncut cell: one subphase (index = cell index) covers its whole face, an axis-aligned rectangle (interval in 2D)
+            if ( not aCutIntegrationMesh->parent_cell_has_children( aBgCell->get_index() ) )
+            {
+                Matrix< DDRMat >      tCoords = aBgCell->get_vertex_coords();
+                std::array< real, 2 > tMin    = { MORIS_REAL_MAX, MORIS_REAL_MAX };
+                std::array< real, 2 > tMax    = { -MORIS_REAL_MAX, -MORIS_REAL_MAX };
+                for ( uint iVertex = 0; iVertex < tCoords.n_rows(); iVertex++ )
+                {
+                    std::array< real, 2 > tPoint = tangential( tCoords, iVertex, aNormalAxis, tDim );
+                    for ( uint i = 0; i < 2; i++ )
+                    {
+                        tMin[ i ] = std::min( tMin[ i ], tPoint[ i ] );
+                        tMax[ i ] = std::max( tMax[ i ], tPoint[ i ] );
+                    }
+                }
+                Face_Piece tPiece;
+                tPiece.mSubphase  = aBgCell->get_index();
+                tPiece.mBulkPhase = aCutIntegrationMesh->get_subphase_bulk_phase( tPiece.mSubphase );
+                if ( tDim == 2 )
+                {
+                    tPiece.mPolygon = { { tMin[ 0 ], 0.0 }, { tMax[ 0 ], 0.0 } };
+                }
+                else
+                {
+                    tPiece.mPolygon = { { tMin[ 0 ], tMin[ 1 ] }, { tMax[ 0 ], tMin[ 1 ] }, { tMax[ 0 ], tMax[ 1 ] }, { tMin[ 0 ], tMax[ 1 ] } };
+                }
+                finish_piece( tPiece, tDim );
+                aPieces.push_back( tPiece );
+                return;
+            }
+
+            // cut cell: the integration facets on its background facet, each with the subphase of its integration cell
+            moris_index tBgFacetIndex = aBackgroundMesh->get_entity_connected_to_entity_loc_inds(
+                    aBgCell->get_index(),
+                    mtk::EntityRank::ELEMENT,
+                    aBackgroundMesh->get_facet_rank() )( aSideOrdinal );
+
+            const std::shared_ptr< Vector< moris_index > >& tChildFacets = ( *aBgFacetToChildFacet )( tBgFacetIndex );
+            MORIS_ERROR( tChildFacets != nullptr,
+                    "Integration_Mesh_Generator::collect_face_pieces() - background cell %d is cut, but background facet %d (side "
+                    "ordinal %d) has no child facets.",
+                    aBgCell->get_index(),
+                    tBgFacetIndex,
+                    aSideOrdinal );
+
+            for ( moris_index iChildFacet : *tChildFacets )
+            {
+                const Vector< mtk::Vertex* >& tVertices = aFacetConnectivity->mFacetVertices( iChildFacet );
+                for ( mtk::Cell* iIgCell : aFacetConnectivity->mFacetToCell( iChildFacet ) )
+                {
+                    moris_index tSubphase = aCutIntegrationMesh->get_ig_cell_subphase_index( iIgCell->get_index() );
+                    if ( aCutIntegrationMesh->get_subphase_parent_cell( tSubphase )->get_index() != aBgCell->get_index() )
+                    {
+                        continue;
+                    }
+                    Face_Piece tPiece;
+                    tPiece.mSubphase  = tSubphase;
+                    tPiece.mBulkPhase = aCutIntegrationMesh->get_subphase_bulk_phase( tSubphase );
+
+                    // corner vertices come first (a facet of a higher-order cell lists its edge vertices after them)
+                    for ( uint iVertex = 0; iVertex < tDim; iVertex++ )
+                    {
+                        Matrix< DDRMat > tPoint = tVertices( iVertex )->get_coords();
+                        tPiece.mPolygon.push_back( tangential( tPoint, 0, aNormalAxis, tDim ) );
+                    }
+                    finish_piece( tPiece, tDim );
+                    aPieces.push_back( tPiece );
+                }
+            }
+        }
+    }    // namespace
+
+    // ----------------------------------------------------------------------------------
+
+    void
+    Integration_Mesh_Generator::link_subphases_across_level_jump(
+            Cut_Integration_Mesh*                                        aCutIntegrationMesh,
+            mtk::Mesh*                                                   aBackgroundMesh,
+            const std::shared_ptr< Facet_Based_Connectivity >&           aFacetConnectivity,
+            Vector< std::shared_ptr< Vector< moris::moris_index > > >*   aBgFacetToChildFacet,
+            mtk::Cell const *                                            aCell,
+            moris_index                                                  aMyOrdinal,
+            mtk::Cell const *                                            aNeighborCell,
+            moris_index                                                  aNeighborOrdinal,
+            moris_index                                                  aTransitionLocation,
+            const std::shared_ptr< Subphase_Neighborhood_Connectivity >& aSubphaseNeighborhood,
+            std::array< real, 6 >&                                       aStats )
+    {
+        uint tDim = aBackgroundMesh->get_spatial_dim();
+
+        // the face normal: the axis along which the two cells only touch (their extents overlap least)
+        Matrix< DDRMat > tMyCoords       = aCell->get_vertex_coords();
+        Matrix< DDRMat > tNeighborCoords = aNeighborCell->get_vertex_coords();
+        uint             tNormalAxis     = 0;
+        real             tSmallest       = MORIS_REAL_MAX;
+        real             tFineMeasure    = 1.0;
+        bool             tIAmFine        = aCell->get_level() > aNeighborCell->get_level();
+        for ( uint iAxis = 0; iAxis < tDim; iAxis++ )
+        {
+            std::pair< real, real > tMine    = coordinate_range( tMyCoords, iAxis );
+            std::pair< real, real > tTheirs  = coordinate_range( tNeighborCoords, iAxis );
+            real                    tOverlap = std::min( tMine.second, tTheirs.second ) - std::max( tMine.first, tTheirs.first );
+            if ( tOverlap < tSmallest )
+            {
+                tSmallest   = tOverlap;
+                tNormalAxis = iAxis;
+            }
+        }
+        const Matrix< DDRMat >& tFineCoords = tIAmFine ? tMyCoords : tNeighborCoords;
+        for ( uint iAxis = 0; iAxis < tDim; iAxis++ )
+        {
+            if ( iAxis != tNormalAxis )
+            {
+                std::pair< real, real > tRange = coordinate_range( tFineCoords, iAxis );
+                tFineMeasure *= tRange.second - tRange.first;
+            }
+        }
+        real tTolerance = 1.0e-9 * tFineMeasure;
+
+        // footprints of the subphases of both cells on the shared face
+        std::vector< Face_Piece > tMyPieces;
+        std::vector< Face_Piece > tNeighborPieces;
+        collect_face_pieces( aCutIntegrationMesh, aBackgroundMesh, aFacetConnectivity, aBgFacetToChildFacet, aCell, aMyOrdinal, tNormalAxis, tMyPieces );
+        collect_face_pieces( aCutIntegrationMesh, aBackgroundMesh, aFacetConnectivity, aBgFacetToChildFacet, aNeighborCell, aNeighborOrdinal, tNormalAxis, tNeighborPieces );
+
+        // link same-phase subphases whose footprints overlap with positive measure; the same rule from both sides makes
+        // the neighborhood symmetric
+        std::set< std::pair< moris_index, moris_index > > tLinks;
+        std::map< moris_index, real >                     tMyOverlap;    // footprint measure inside the common face, per subphase
+        std::map< moris_index, real >                     tNeighborOverlap;
+        std::set< moris_index >                           tMyLinked;
+        std::set< moris_index >                           tNeighborLinked;
+        real                                              tCrack = 0.0;
+        for ( const Face_Piece& iMine : tMyPieces )
+        {
+            for ( const Face_Piece& iTheirs : tNeighborPieces )
+            {
+                real tOverlap = piece_overlap( iMine, iTheirs, tDim );
+                if ( tOverlap <= tTolerance )
+                {
+                    continue;
+                }
+                tMyOverlap[ iMine.mSubphase ] += tOverlap;
+                tNeighborOverlap[ iTheirs.mSubphase ] += tOverlap;
+                if ( iMine.mBulkPhase == iTheirs.mBulkPhase )
+                {
+                    tLinks.insert( { iMine.mSubphase, iTheirs.mSubphase } );
+                    tMyLinked.insert( iMine.mSubphase );
+                    tNeighborLinked.insert( iTheirs.mSubphase );
+                }
+                else
+                {
+                    tCrack += tOverlap;
+                }
+            }
+        }
+
+        for ( const std::pair< moris_index, moris_index >& iLink : tLinks )
+        {
+            aSubphaseNeighborhood->mSubphaseToSubPhase( iLink.first )->push_back( iLink.second );
+            aSubphaseNeighborhood->mSubphaseToSubPhaseMySideOrds( iLink.first )->push_back( aMyOrdinal );
+            aSubphaseNeighborhood->mSubphaseToSubPhaseNeighborSideOrds( iLink.first )->push_back( aNeighborOrdinal );
+            aSubphaseNeighborhood->mTransitionNeighborCellLocation( iLink.first )->push_back( aTransitionLocation );
+        }
+
+        // diagnostics, from the finer side only (each face once)
+        if ( tIAmFine )
+        {
+            uint tOrphanFine   = 0;
+            uint tOrphanCoarse = 0;
+            for ( const std::pair< const moris_index, real >& iOverlap : tMyOverlap )
+            {
+                tOrphanFine += ( iOverlap.second > tTolerance and tMyLinked.count( iOverlap.first ) == 0 ) ? 1 : 0;
+            }
+            for ( const std::pair< const moris_index, real >& iOverlap : tNeighborOverlap )
+            {
+                tOrphanCoarse += ( iOverlap.second > tTolerance and tNeighborLinked.count( iOverlap.first ) == 0 ) ? 1 : 0;
+            }
+            aStats[ 0 ] += 1.0;
+            aStats[ 1 ] += tCrack;
+            aStats[ 2 ] = std::max( aStats[ 2 ], tCrack / tFineMeasure );
+            aStats[ 3 ] += tOrphanFine;
+            aStats[ 4 ] += tOrphanCoarse;
+            aStats[ 5 ] += tFineMeasure;
+        }
+    }
 
     // ----------------------------------------------------------------------------------
 

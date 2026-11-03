@@ -151,7 +151,19 @@ namespace moris::gen
                         // Level-set field
                         if ( tGeometryType == "level_set" )
                         {
-                            mGeometries( tGeometryIndex++ ) = std::make_shared< Level_Set_Geometry >( mFields( tFieldIndex - 1 ), Level_Set_Parameters( iParameterList ), aNodeManager );
+                            std::shared_ptr< Level_Set_Geometry > tLevelSet = std::make_shared< Level_Set_Geometry >( mFields( tFieldIndex - 1 ), Level_Set_Parameters( iParameterList ), aNodeManager );
+
+                            // geometry-aware query points from a deck function (feature_query_function)
+                            const std::string& tQueryFunctionName = tLevelSet->get_feature_query_function_name();
+                            if ( not tQueryFunctionName.empty() )
+                            {
+                                MORIS_ERROR( aLibrary, "GEN: feature_query_function %s needs the input library.", tQueryFunctionName.c_str() );
+                                Feature_Query_Function tQueryFunction = aLibrary->load_function< Feature_Query_Function >( tQueryFunctionName );
+                                Matrix< DDRMat >       tQueryRows;
+                                tQueryFunction( tQueryRows );
+                                tLevelSet->add_feature_query_points( feature_query_points_from_rows( tQueryRows ) );
+                            }
+                            mGeometries( tGeometryIndex++ ) = tLevelSet;
                         }
                         else if ( tGeometryType == "voxel" )
                         {

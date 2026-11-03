@@ -573,6 +573,7 @@ namespace moris::wrk
         // sub-cell feature refinement (MB-084) starts unresolved for every field, on every cell
         mResolvedFeatureFields.clear();
         mFeatureMinLevel.clear();
+        mFeatureQueryWrong.clear();
 
         // get the maximum number of refinements that need to be performed and therefore refinement iterations
         moris::sint tMaxNumRefinements = this->get_max_refinement_level( aPerformers );
@@ -697,6 +698,15 @@ namespace moris::wrk
         {
             moris_index tMeshIndex = tMeshIndices( iMesh );
 
+            // mixed-level cut cells: XTK links subphases across level jumps, so the cut cells may stay where the
+            // refinement left them; only cells cut inside while their corners agree are lifted (see
+            // equalize_cut_cell_levels)
+            if ( mAllowMixedLevelCutCells )
+            {
+                MORIS_LOG_INFO(
+                        "GEN refinement: cut cells left on their own levels (XTK allow_mixed_level_cut_cells), "
+                        "except cells cut only inside." );
+            }
             this->equalize_cut_cell_levels( aHMR, aPerformers, tMeshIndex );
 
             for ( moris_index iPerformer = 0; iPerformer < tNumPerformers; iPerformer++ )
@@ -858,6 +868,7 @@ namespace moris::wrk
         uint tMinLevel0 = mFeatureMinLevel.count( { aPerformer.get(), aFieldIndex } ) ? mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] : 0;
         uint tNumSkipped = 0;
 
+        Vector< hmr::Element* > tHiddenQueue;    // cells that hide a feature the cut misses (mixed-level cut cells)
         for ( hmr::Element* iElement : tCandidates )
         {
             if ( uint( iElement->get_level() ) < tMinLevel0 )
@@ -878,7 +889,96 @@ namespace moris::wrk
                 tMaxLevel = std::max( tMaxLevel, uint( iElement->get_level() ) );
             }
             tNumHidden += ( tFlags & gen::CELL_FEATURE_HIDDEN ) ? 1 : 0;
+            if ( tFlags & gen::CELL_FEATURE_HIDDEN )
+            {
+                tHiddenQueue.push_back( iElement );
+            }
             tNumInsignificant += ( tFlags & gen::CELL_FEATURE_INSIGNIFICANT ) ? 1 : 0;
+        }
+
+        // geometry-aware query points (feature_query_refine): points that the cut of the cell holding them would
+        // represent on the wrong side, and the cells within their radius that have to be refined for them
+        Vector< hmr::Element* > tQueryQueue;
+        uint                    tNumQueryWrong     = 0;
+        uint                    tNumQueryLocated   = 0;
+        uint                    tMinQueryCellLevel = std::numeric_limits< uint >::max();
+        uint                    tNumQueryPoints    = aPerformer->get_num_feature_query_refine_points( aFieldIndex );
+        for ( uint iPoint = 0; iPoint < tNumQueryPoints; iPoint++ )
+        {
+            Matrix< DDRMat > tPoint;
+            real             tRadius = 0.0;
+            aPerformer->get_feature_query_point( aFieldIndex, iPoint, tPoint, tRadius );
+
+            // the active cell holding the point (on this processor)
+            hmr::Element*    tCell = nullptr;
+            Matrix< DDRMat > tCellCorners;
+            for ( hmr::Element* iElement : tCandidates )
+            {
+                uint tOrder  = 1;
+                tCellCorners = element_corners( iElement, tOrder );
+                if ( gen::cell_contains_point( tCellCorners, tPoint ) )
+                {
+                    tCell = iElement;
+                    break;
+                }
+            }
+            if ( tCell == nullptr )
+            {
+                continue;
+            }
+            tNumQueryLocated++;
+
+            sint tExpected    = 0;
+            sint tRepresented = 0;
+            aPerformer->get_feature_query_regions( aFieldIndex, iPoint, tCellCorners, tExpected, tRepresented );
+            if ( tExpected == 0 or tRepresented == tExpected )
+            {
+                continue;
+            }
+            tNumQueryWrong++;
+
+            if ( aFinalCheck )
+            {
+                MORIS_LOG_WARNING(
+                        "GEN feature query point - geometry %u, point %u at (%g, %g, %g): UNRESOLVED after %u passes "
+                        "(number_of_refinements reached). The cut of its cell (level %u) represents side %+d, "
+                        "expected %+d.",
+                        aFieldIndex,
+                        iPoint,
+                        tPoint( 0 ),
+                        tPoint( 1 ),
+                        tPoint.numel() > 2 ? tPoint( 2 ) : 0.0,
+                        aPass,
+                        uint( tCell->get_level() ),
+                        tRepresented,
+                        tExpected );
+                continue;
+            }
+
+            // default radius: one cell of the coarsest Lagrange level
+            if ( tRadius <= 0.0 )
+            {
+                real tExtent = 0.0;
+                for ( uint iDim = 0; iDim < tCellCorners.n_cols(); iDim++ )
+                {
+                    uint tUpperCorner = tCellCorners.n_cols() == 2 ? 2 : 6;    // exodus order: corner 2 / 6 is the upper one
+                    tExtent           = std::max( tExtent, std::abs( tCellCorners( tUpperCorner, iDim ) - tCellCorners( 0, iDim ) ) );
+                }
+                tRadius = tExtent * std::pow( 2.0, real( tCell->get_level() ) );
+            }
+
+            // the cell holding the point, and the cells within the radius that hold a crossing (the depth tolerance
+            // does not apply: the user declared the feature real)
+            tQueryQueue.push_back( tCell );
+            tMinQueryCellLevel = std::min( tMinQueryCellLevel, uint( tCell->get_level() ) + 1 );
+            for ( hmr::Element* iElement : tQueue )
+            {
+                uint tOrder = 1;
+                if ( iElement != tCell and gen::cell_distance_to_point( element_corners( iElement, tOrder ), tPoint ) <= tRadius )
+                {
+                    tQueryQueue.push_back( iElement );
+                }
+            }
         }
 
         tNumCrossing      = sum_all( tNumCrossing );
@@ -886,6 +986,21 @@ namespace moris::wrk
         tNumInsignificant = sum_all( tNumInsignificant );
         tMinLevel         = min_all( tMinLevel );
         tMaxLevel         = max_all( tMaxLevel );
+        tNumQueryWrong     = sum_all( tNumQueryWrong );
+        tNumQueryLocated   = sum_all( tNumQueryLocated );
+        tMinQueryCellLevel = min_all( tMinQueryCellLevel );
+
+        if ( tNumQueryPoints > 0 )
+        {
+            mFeatureQueryWrong[ { aPerformer.get(), aFieldIndex } ] = tNumQueryWrong;
+            MORIS_LOG_INFO( "GEN feature query points - geometry %u, %s %u: %u of %u points located, %u represented on the wrong side.",
+                    aFieldIndex,
+                    aFinalCheck ? "final mesh after pass" : "pass",
+                    aPass,
+                    tNumQueryLocated,
+                    tNumQueryPoints,
+                    tNumQueryWrong );
+        }
 
         if ( aFinalCheck )
         {
@@ -916,20 +1031,45 @@ namespace moris::wrk
                         "feature the cut misses, %u hold only features below the depth tolerance.",
                 aFieldIndex, aPass, tNumCrossing, tNumCrossing ? tMinLevel : 0, tMaxLevel, tNumHidden, tNumInsignificant );
 
-        if ( tNumHidden == 0 )
+        if ( tNumHidden == 0 and tNumQueryWrong == 0 )
         {
             mResolvedFeatureFields.insert( { aPerformer.get(), aFieldIndex } );
             MORIS_LOG_INFO( "GEN feature refinement - geometry %u: resolved after %u passes.", aFieldIndex, aPass );
             return 0;
         }
 
-        aHMR->put_elements_on_refinement_queue( tQueue );
+        if ( tNumHidden > 0 and mAllowMixedLevelCutCells )
+        {
+            // mixed-level cut cells: only the cells that hide a feature (and the query-point cells) are refined; the
+            // other cut cells keep their level, so every level stays a candidate of later passes
+            aHMR->put_elements_on_refinement_queue( tHiddenQueue );
+            aHMR->put_elements_on_refinement_queue( tQueryQueue );
+        }
+        else if ( tNumHidden > 0 )
+        {
+            // every cell with a crossing is refined: crossings can only remain on the new level
+            aHMR->put_elements_on_refinement_queue( tQueue );
+            aHMR->put_elements_on_refinement_queue( tQueryQueue );
+            mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = std::min( tMaxLevel + 1, tMinQueryCellLevel );
+        }
+        else
+        {
+            // only query points are wrong: refine the cells within their radius; the other cut cells follow at the end
+            // (equalize_cut_cell_levels), and stay candidates of later passes
+            aHMR->put_elements_on_refinement_queue( tQueryQueue );
+            mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = std::min( { tMinLevel, tMinQueryCellLevel, tMaxLevel + 1 } );
+            MORIS_LOG_INFO(
+                    "GEN feature query points - geometry %u, pass %u: refining %u cells within the radius of the %u "
+                    "points on the wrong side (depth tolerance overridden).",
+                    aFieldIndex,
+                    aPass,
+                    sum_all( uint( tQueryQueue.size() ) ),
+                    tNumQueryWrong );
+        }
 
-        // every cell with a crossing is refined: crossings can only remain on the new level
-        mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = tMaxLevel + 1;
         MORIS_LOG_INFO( "GEN feature refinement - geometry %u, pass %u: %u cells below level %u skipped (evaluated before).",
                 aFieldIndex, aPass, sum_all( tNumSkipped ), tMinLevel0 );
-        return tNumHidden;
+        return tNumHidden + tNumQueryWrong;
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -1011,8 +1151,16 @@ namespace moris::wrk
                     }
                     if ( aPerformers( iField.first )->detect_cell_features( iField.second, tCorners, tOrder, 2 ) & gen::CELL_FEATURE_XTK_CUT )
                     {
-                        tCutCells.push_back( iElement );
+                        // mixed-level cut cells: a cut cell whose corners agree is cut only inside (MB-031); its faces
+                        // can disagree with finer neighbours that see the feature, so it is still lifted. Cells whose
+                        // corners see the cut keep their level.
                         tMaxLevel = std::max( tMaxLevel, sint( iElement->get_level() ) );
+                        if ( mAllowMixedLevelCutCells
+                                and ( aPerformers( iField.first )->detect_cell_features( iField.second, tCorners, tOrder, 1 ) & gen::CELL_FEATURE_CROSSING ) )
+                        {
+                            break;
+                        }
+                        tCutCells.push_back( iElement );
                         break;
                     }
                 }

@@ -642,6 +642,7 @@ namespace moris::xtk
             bool                  mTriangulateAllInPost = false;    // E6 (parameter-list Model)
             uint                  mIgOrder              = 1;        // E7: ig_element_order (parameter-list Model)
             Vector< moris_index > mMeshIndices          = { 0 };    // E8: enriched B-spline mesh indices
+            bool                  mAllowMixedLevels     = false;    // allow_mixed_level_cut_cells (parameter-list Model)
         };
 
         struct Case_Outcome
@@ -754,9 +755,10 @@ namespace moris::xtk
                 // the standalone Model, or (E6, E7) the parameter-list Model, which reads triangulate_all_in_post and
                 // ig_element_order in perform_decomposition
                 std::unique_ptr< Model > tModelPointer;
-                if ( aOptions.mTriangulateAllInPost or aOptions.mIgOrder > 1 )
+                if ( aOptions.mTriangulateAllInPost or aOptions.mIgOrder > 1 or aOptions.mAllowMixedLevels )
                 {
                     Parameter_List tXtkParameters = prm::create_xtk_parameter_list();
+                    tXtkParameters.set( "allow_mixed_level_cut_cells", aOptions.mAllowMixedLevels );
                     tXtkParameters.set( "triangulate_all_in_post", aOptions.mTriangulateAllInPost );
                     tXtkParameters.set( "ig_element_order", aOptions.mIgOrder );
                     tXtkParameters.set( "enrich_mesh_indices", tMeshIndexList.str() );

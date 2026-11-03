@@ -11,6 +11,7 @@
 #ifndef MORIS_CL_XTK_Integration_Mesh_Generator_HPP_
 #define MORIS_CL_XTK_Integration_Mesh_Generator_HPP_
 
+#include <array>
 #include <utility>
 
 #include "cl_XTK_Model.hpp"
@@ -32,6 +33,14 @@
 
 namespace moris::xtk
 {
+    class Model;
+
+    /**
+     * @brief whether the XTK parameter allow_mixed_level_cut_cells is set: cut cells may lie on different Lagrange
+     * refinement levels
+     */
+    bool mixed_level_cut_cells_allowed( Model* aXTKModel );
+
     // ----------------------------------------------------------------------------------
 
     // typedef std::unordered_map< moris::moris_index, moris::moris_index > IndexMap;
@@ -639,6 +648,32 @@ namespace moris::xtk
 
         // ----------------------------------------------------------------------------------
 
+        /**
+         * @brief mixed-level cut cells (allow_mixed_level_cut_cells): link the subphases of two face-adjacent background
+         * cells on different refinement levels, the coarser one cut, by the overlap of their face footprints. The
+         * integration meshes of the two cells do not conform on the shared face, so the links cannot be read from shared
+         * integration facets. Links are pushed for the subphases of aCell only; the same rule applied from the neighbor
+         * gives the reverse links.
+         *
+         * @param aStats accumulates (from the finer side): faces, phase-disagreement measure, largest disagreement per
+         * face relative to the face, finer / coarser subphases without a same-phase partner, total face measure
+         */
+        void
+        link_subphases_across_level_jump(
+                Cut_Integration_Mesh*                                        aCutIntegrationMesh,
+                moris::mtk::Mesh*                                            aBackgroundMesh,
+                const std::shared_ptr< Facet_Based_Connectivity >&           aFacetConnectivity,
+                Vector< std::shared_ptr< Vector< moris::moris_index > > >*   aBgFacetToChildFacet,
+                moris::mtk::Cell const *                                     aCell,
+                moris::moris_index                                           aMyOrdinal,
+                moris::mtk::Cell const *                                     aNeighborCell,
+                moris::moris_index                                           aNeighborOrdinal,
+                moris::moris_index                                           aTransitionLocation,
+                const std::shared_ptr< Subphase_Neighborhood_Connectivity >& aSubphaseNeighborhood,
+                std::array< real, 6 >&                                       aStats );
+
+        // ----------------------------------------------------------------------------------
+
         void
         collect_subphases_attached_to_facet_on_cell(
                 Cut_Integration_Mesh*                                  aCutIntegrationMesh,
@@ -863,6 +898,17 @@ namespace moris::xtk
 
         void
         compute_ig_cell_bulk_phase( Cut_Integration_Mesh* aCutIntegrationMesh );
+
+        /**
+         * Geometry-aware query points (GEN feature_query_points / feature_query_function, feature_query_check > 0):
+         * for every point, the integration cell holding it and the side of the geometry that cell represents,
+         * against the expected side. Logs each mismatch and a summary per geometry; errors on a mismatch with
+         * feature_query_check = 2. Results in Cut_Integration_Mesh::mFeatureQueryLocated / mFeatureQueryMismatches.
+         */
+        void
+        check_feature_query_points(
+                Cut_Integration_Mesh* aCutIntegrationMesh,
+                mtk::Mesh*            aBackgroundMesh );
 
         moris_index
         deduce_ig_cell_bulk_phase_from_facets(

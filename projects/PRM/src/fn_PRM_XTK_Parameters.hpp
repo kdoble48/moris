@@ -59,6 +59,7 @@ namespace moris::prm
         tParameterList.insert( "diagnostics", false );
         tParameterList.insert( "geometry_resolution_samples", moris::uint( 2 ) );    // MB-084 check of analytic geometries: lattice sub-intervals per cell edge (2: edge midpoints, face and cell centres; 4 finds features down to h/4 at about 5x the field evaluations); counts edges the interface crosses more often than the cut, crossings the cut does not see, and cells where the cut changes the local topology; logs a warning; 0 = off
         tParameterList.insert( "geometry_resolution_error", false );                 // turn that warning into an error
+        tParameterList.insert( "allow_mixed_level_cut_cells", false );               // cut cells may lie on different Lagrange refinement levels: subphases are linked across level jumps by the overlap of their face footprints, and GEN refinement does not lift every cut cell to the finest cut level; false = all cut cells on one level, else the decomposition is refused
         tParameterList.insert( "diagnostics_id", "" );
         tParameterList.insert( "diagnostics_path", "" );
 

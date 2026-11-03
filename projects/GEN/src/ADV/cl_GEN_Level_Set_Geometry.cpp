@@ -40,7 +40,12 @@ namespace moris::gen
             , mFeatureRefinementSamples( aParameterList.exists( "feature_refinement_samples" ) ? aParameterList.get< uint >( "feature_refinement_samples" ) : 0 )
             , mFeatureRefinementLipschitz( aParameterList.exists( "feature_refinement_lipschitz" ) ? aParameterList.get< real >( "feature_refinement_lipschitz" ) : 0.0 )
             , mFeatureRefinementDepthTolerance( aParameterList.exists( "feature_refinement_depth_tolerance" ) ? aParameterList.get< real >( "feature_refinement_depth_tolerance" ) : 0.02 )
+            , mFeatureQueryPoints( aParameterList.exists( "feature_query_points" ) ? parse_feature_query_points( aParameterList.get< std::string >( "feature_query_points" ) ) : Vector< Feature_Query_Point >() )
+            , mFeatureQueryFunctionName( aParameterList.exists( "feature_query_function" ) ? aParameterList.get< std::string >( "feature_query_function" ) : "" )
+            , mFeatureQueryCheck( aParameterList.exists( "feature_query_check" ) ? aParameterList.get< uint >( "feature_query_check" ) : 1 )
+            , mFeatureQueryRefine( aParameterList.exists( "feature_query_refine" ) and aParameterList.get< bool >( "feature_query_refine" ) )
     {
+        MORIS_ERROR( mFeatureQueryCheck <= 2, "Level_Set_Parameters: feature_query_check must be 0 (off), 1 (log) or 2 (error)." );
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -59,6 +64,89 @@ namespace moris::gen
         MORIS_ERROR( mParameters.mFeatureRefinementSamples == 0 or this->can_change_region_inside_cell(),
                 "Level_Set_Geometry: feature_refinement_samples needs an analytic field (exact values at any point) without "
                 "use_multilinear_interpolation; interpolated fields cannot hide features inside a Lagrange cell." );
+        MORIS_ERROR( not mParameters.mFeatureQueryRefine or mParameters.mFeatureRefinementSamples > 0,
+                "Level_Set_Geometry: feature_query_refine works inside the GEN feature-refinement passes; set "
+                "feature_refinement_samples > 0 (and number_of_refinements, refinement_mesh_index)." );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    const Vector< Feature_Query_Point >& Level_Set_Geometry::get_feature_query_points() const
+    {
+        return mParameters.mFeatureQueryPoints;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void Level_Set_Geometry::add_feature_query_points( const Vector< Feature_Query_Point >& aPoints )
+    {
+        for ( const Feature_Query_Point& iPoint : aPoints )
+        {
+            mParameters.mFeatureQueryPoints.push_back( iPoint );
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    const std::string& Level_Set_Geometry::get_feature_query_function_name() const
+    {
+        return mParameters.mFeatureQueryFunctionName;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint Level_Set_Geometry::get_feature_query_check() const
+    {
+        return mParameters.mFeatureQueryPoints.size() > 0 ? mParameters.mFeatureQueryCheck : 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool Level_Set_Geometry::get_feature_query_refine() const
+    {
+        return mParameters.mFeatureQueryRefine and mParameters.mFeatureQueryPoints.size() > 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint Level_Set_Geometry::get_feature_query_expected_region( uint aPointIndex ) const
+    {
+        const Feature_Query_Point& tPoint = mParameters.mFeatureQueryPoints( aPointIndex );
+        if ( tPoint.mPhase != 0 )
+        {
+            return tPoint.mPhase;
+        }
+        MORIS_ERROR( this->can_change_region_inside_cell(),
+                "Level_Set_Geometry: query point %u has phase 0 (sign of the exact field), which needs an analytic field; "
+                "give its phase (+1 / -1) explicitly.",
+                aPointIndex );
+        real tValue = mField->get_field_value_at_point( tPoint.mCoordinates ) - mParameters.mIsocontourThreshold;
+        if ( std::abs( tValue ) <= mParameters.mIsocontourTolerance )
+        {
+            return 0;
+        }
+        return tValue < 0.0 ? -1 : 1;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint Level_Set_Geometry::get_feature_query_represented_region(
+            uint                    aPointIndex,
+            const Matrix< DDRMat >& aCorners ) const
+    {
+        MORIS_ASSERT( this->can_change_region_inside_cell(),
+                "Level_Set_Geometry::get_feature_query_represented_region() - only for fields evaluated exactly at any point." );
+
+        real                 tThreshold = mParameters.mIsocontourThreshold;
+        Point_Field_Function tPhi       = [ this, tThreshold ]( const Matrix< DDRMat >& aPoint ) -> real {
+            return mField->get_field_value_at_point( aPoint ) - tThreshold;
+        };
+        return represented_region_at_point(
+                tPhi,
+                aCorners,
+                mParameters.mIsocontourTolerance,
+                mParameters.mFeatureQueryPoints( aPointIndex ).mCoordinates,
+                mParameters.mUseAnalyticIntersection );
     }
 
     //--------------------------------------------------------------------------------------------------------------

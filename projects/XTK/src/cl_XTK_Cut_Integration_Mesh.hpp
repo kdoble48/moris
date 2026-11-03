@@ -769,6 +769,11 @@ namespace moris::xtk
         Vector< real > mResolutionSampledMeasure;
         Vector< real > mResolutionTemplateMeasure;
 
+        // geometry-aware query points (GEN feature_query_points), per geometry: points located on this mesh and points
+        // whose integration cell represents the wrong side of the geometry (filled when the check is on)
+        Vector< uint > mFeatureQueryLocated;
+        Vector< uint > mFeatureQueryMismatches;
+
       protected:
 
         // integration cells

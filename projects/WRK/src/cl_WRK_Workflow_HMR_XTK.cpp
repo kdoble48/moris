@@ -221,6 +221,12 @@ namespace moris::wrk
                 // HMR refined by GE
                 Refinement_Mini_Performer tRefinementPerformer;
 
+                // XTK may allow cut cells on different refinement levels: then GEN refinement stays local
+                Module_Parameter_Lists tXTKParameters = mPerformerManager->mLibrary->get_parameters_for_module( Module_Type::XTK );
+                tRefinementPerformer.set_allow_mixed_level_cut_cells(
+                        tXTKParameters( 0 )( 0 ).exists( "allow_mixed_level_cut_cells" )
+                        and tXTKParameters( 0 )( 0 ).get< bool >( "allow_mixed_level_cut_cells" ) );
+
                 // get the GEN interface performer
                 std::shared_ptr< gen::Geometry_Engine > tGeometryEngine = mPerformerManager->mGENPerformer( 0 );
 

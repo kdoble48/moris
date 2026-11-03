@@ -488,6 +488,58 @@ namespace moris::xtk
         }
     }
 
+    TEST_CASE( "XTK connectivity: cut cells on different refinement levels (allow_mixed_level_cut_cells)", "[XTK][XTK_CONNECTIVITY][XTK_MIXED_LEVEL]" )
+    {
+        // The box [0,2] x [0,1] x [0,1], 4 x 2 x 2 cells, refined one level for x > 1.5. Each case cuts cells on both
+        // levels. By default XTK refuses the decomposition (all cut cells on one level). With allow_mixed_level_cut_cells
+        // it decomposes; the integration meshes of a coarse cut cell and its finer cut neighbours do not conform on the
+        // shared face, and the subphases are linked by the overlap of their face footprints. The connectivity checker's
+        // geometric reference (footprint clipping per face) must match the links, and the enrichment its components.
+        if ( par_size() != 1 )
+        {
+            return;
+        }
+        Grid_Mesh tBox( { 4, 2, 2 }, { 2.0, 1.0, 1.0 }, 1.5 );
+
+        Vector< std::pair< Connectivity_Case, Regime > > tCases = {
+            { { "B1 slanted plane across x=1.5", { plane_through( { 1.0, 0.3, 0.2 }, { 1.5, 0.5, 0.5 }, 0.0 ) }, {} }, Regime::STORED },
+            { { "B1 slanted plane across x=1.5", { plane_through( { 1.0, 0.3, 0.2 }, { 1.5, 0.5, 0.5 }, 0.0 ) }, {} }, Regime::ANALYTIC },
+            // two void prongs cross the transition face: the coarse face carries two pieces of each phase (the old
+            // transition branch linked every same-phase pair; MB-075 refused it)
+            { { "B2 prongs crossing the transition face", { box_union( { { 1.1, 1.8, 0.2, 0.3, 0.2, 0.8 }, { 1.1, 1.8, 0.7, 0.8, 0.2, 0.8 } } ) }, {} },
+                    Regime::ANALYTIC },
+            { { "B3 x=0.3 coarse and x=1.8 fine (MB-044 layout)", { plane( 1.0, 0.0, 0.0, -0.3 ), plane( 1.0, 0.0, 0.0, -1.8 ) }, phase_table( 2, &solid_if_all_same_sign ) },
+                    Regime::STORED },
+            { { "B4 sphere across the transition face", { sphere( { 1.5, 0.5, 0.5 }, 0.3 ) }, {} }, Regime::ANALYTIC },
+            // a cut coarse cell next to uncut fine cells takes the same footprint rule when mixed levels are allowed
+            { { "A2 plane x=1.3: cut coarse cells next to uncut fine", { plane( 1.0, 0.0, 0.0, -1.3 ) }, {} }, Regime::STORED },
+        };
+        for ( const std::pair< Connectivity_Case, Regime >& iCase : tCases )
+        {
+            Run_Options tDefault;
+            Run_Options tMixed;
+            tMixed.mAllowMixedLevels = true;
+
+            Case_Outcome tRefused = run_case( tBox.mMesh, iCase.first, iCase.second, tDefault );
+            Case_Outcome tOutcome = run_case( tBox.mMesh, iCase.first, iCase.second, tMixed );
+            INFO( iCase.first.mName << " (" << regime_name( iCase.second ) << "): " << tOutcome.mMessage );
+            std::cout << iCase.first.mName << " (" << regime_name( iCase.second ) << "): default decomposed " << tRefused.mDecomposed
+                      << "; mixed: " << tOutcome.mCounts.sparse_report() << "\n";
+
+            // A2 has one cut level and decomposes by default as well
+            CHECK( tRefused.mDecomposed == ( iCase.first.mName.rfind( "A2", 0 ) == 0 ) );
+            REQUIRE( not tOutcome.mThrew );
+            REQUIRE( tOutcome.mDecomposed );
+            CHECK( tOutcome.mCounts.mCutCells > 0 );
+            CHECK( tOutcome.mCounts.mTransitionFaces > 0 );
+            CHECK( tOutcome.mCounts.mLinks == tOutcome.mCounts.mReferenceLinks );
+            CHECK( tOutcome.mCounts.mMissingLinks == 0 );
+            CHECK( tOutcome.mCounts.mExtraLinks == 0 );
+            CHECK( tOutcome.mCounts.mEnrichedBases == tOutcome.mCounts.mReferenceComponents );
+            CHECK( tOutcome.mCounts.failures() == 0 );
+        }
+    }
+
     TEST_CASE( "XTK connectivity: a cut coarse cell next to uncut finer cells (MB-075)", "[XTK][XTK_CONNECTIVITY][MB-075]" )
     {
         // The box [0,2] x [0,1] x [0,1], 4 x 2 x 2 cells, refined one level for x > 1.5. Seen from a fine cell, HMR reports
