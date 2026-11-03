@@ -864,6 +864,17 @@ namespace moris::xtk
         void
         compute_ig_cell_bulk_phase( Cut_Integration_Mesh* aCutIntegrationMesh );
 
+        /**
+         * Geometry-aware query points (GEN feature_query_points / feature_query_function, feature_query_check > 0):
+         * for every point, the integration cell holding it and the side of the geometry that cell represents,
+         * against the expected side. Logs each mismatch and a summary per geometry; errors on a mismatch with
+         * feature_query_check = 2. Results in Cut_Integration_Mesh::mFeatureQueryLocated / mFeatureQueryMismatches.
+         */
+        void
+        check_feature_query_points(
+                Cut_Integration_Mesh* aCutIntegrationMesh,
+                mtk::Mesh*            aBackgroundMesh );
+
         moris_index
         deduce_ig_cell_bulk_phase_from_facets(
                 moris::mtk::Cell const * aCell,

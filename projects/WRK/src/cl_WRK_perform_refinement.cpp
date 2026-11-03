@@ -31,6 +31,7 @@
 #include "cl_GEN_Cell_Feature_Detector.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace moris::wrk
@@ -85,6 +86,26 @@ namespace moris::wrk
                 tMax = std::max( tMax, iEntry );
             }
             return tMax;
+        }
+
+        /**
+         * Radius of a geometry-aware query point: its own, or (radius 0) one cell of the coarsest Lagrange level,
+         * computed from any active Lagrange cell (its corners, exodus order, and its refinement level).
+         */
+        real
+        query_point_radius( real aRadius, const Matrix< DDRMat >& aCellCorners, uint aCellLevel )
+        {
+            if ( aRadius > 0.0 )
+            {
+                return aRadius;
+            }
+            uint tUpperCorner = aCellCorners.n_cols() == 2 ? 2 : 6;    // exodus order: corner 2 / 6 is opposite corner 0
+            real tExtent      = 0.0;
+            for ( uint iDim = 0; iDim < aCellCorners.n_cols(); iDim++ )
+            {
+                tExtent = std::max( tExtent, std::abs( aCellCorners( tUpperCorner, iDim ) - aCellCorners( 0, iDim ) ) );
+            }
+            return tExtent * std::pow( 2.0, real( aCellLevel ) );
         }
     }    // namespace
 
@@ -573,6 +594,8 @@ namespace moris::wrk
         // sub-cell feature refinement (MB-084) starts unresolved for every field, on every cell
         mResolvedFeatureFields.clear();
         mFeatureMinLevel.clear();
+        mFeatureQueryWrong.clear();
+        mFeaturePasses.clear();
 
         // get the maximum number of refinements that need to be performed and therefore refinement iterations
         moris::sint tMaxNumRefinements = this->get_max_refinement_level( aPerformers );
@@ -842,6 +865,9 @@ namespace moris::wrk
     {
         uint tSamples = aPerformer->get_feature_refinement_samples( aFieldIndex );
 
+        // refinement passes this field has run (the final check reports them; aPass is then number_of_refinements)
+        uint tPassesRun = mFeaturePasses.count( { aPerformer.get(), aFieldIndex } ) ? mFeaturePasses[ { aPerformer.get(), aFieldIndex } ] : 0;
+
         // the active (leaf) cells of the Lagrange mesh
         Vector< hmr::Element* > tCandidates;
         aHMR->get_active_candidates_for_refinement( tCandidates, aMeshIndex );
@@ -881,11 +907,126 @@ namespace moris::wrk
             tNumInsignificant += ( tFlags & gen::CELL_FEATURE_INSIGNIFICANT ) ? 1 : 0;
         }
 
-        tNumCrossing      = sum_all( tNumCrossing );
-        tNumHidden        = sum_all( tNumHidden );
-        tNumInsignificant = sum_all( tNumInsignificant );
-        tMinLevel         = min_all( tMinLevel );
-        tMaxLevel         = max_all( tMaxLevel );
+        // geometry-aware query points (feature_query_refine): points that the cut of the cell holding them would
+        // represent on the wrong side, and the cells within their radius that have to be refined for them
+        Vector< hmr::Element* >    tQueryQueue;
+        uint                       tNumQueryWrong     = 0;
+        uint                       tNumQueryLocated   = 0;
+        uint                       tMinQueryCellLevel = std::numeric_limits< uint >::max();
+        uint                       tNumQueryPoints    = aPerformer->get_num_feature_query_refine_points( aFieldIndex );
+        Vector< Matrix< DDRMat > > tQueryPoints( tNumQueryPoints );
+        Vector< real >             tQueryRadii( tNumQueryPoints, 0.0 );
+        for ( uint iPoint = 0; iPoint < tNumQueryPoints; iPoint++ )
+        {
+            real tRadius = 0.0;
+            aPerformer->get_feature_query_point( aFieldIndex, iPoint, tQueryPoints( iPoint ), tRadius );
+            const Matrix< DDRMat >& tPoint = tQueryPoints( iPoint );
+
+            // the active cell holding the point (on this processor)
+            hmr::Element*    tCell = nullptr;
+            Matrix< DDRMat > tCellCorners;
+            for ( hmr::Element* iElement : tCandidates )
+            {
+                uint tOrder  = 1;
+                tCellCorners = element_corners( iElement, tOrder );
+                if ( gen::cell_contains_point( tCellCorners, tPoint ) )
+                {
+                    tCell = iElement;
+                    break;
+                }
+            }
+
+            // its radius (default: one cell of the coarsest Lagrange level, from any active cell of this processor)
+            if ( tCell != nullptr )
+            {
+                tQueryRadii( iPoint ) = query_point_radius( tRadius, tCellCorners, uint( tCell->get_level() ) );
+            }
+            else if ( tCandidates.size() > 0 )
+            {
+                uint tOrder           = 1;
+                tQueryRadii( iPoint ) = query_point_radius( tRadius, element_corners( tCandidates( 0 ), tOrder ), uint( tCandidates( 0 )->get_level() ) );
+            }
+
+            if ( tCell == nullptr )
+            {
+                continue;
+            }
+            tNumQueryLocated++;
+
+            sint tExpected    = 0;
+            sint tRepresented = 0;
+            aPerformer->get_feature_query_regions( aFieldIndex, iPoint, tCellCorners, tExpected, tRepresented );
+            if ( tExpected == 0 or tRepresented == tExpected )
+            {
+                continue;
+            }
+            tNumQueryWrong++;
+
+            if ( aFinalCheck )
+            {
+                MORIS_LOG_WARNING(
+                        "GEN feature query point - geometry %u, point %u at (%g, %g, %g): UNRESOLVED after %u passes "
+                        "(number_of_refinements reached). The cut of its cell (level %u) represents side %+d, "
+                        "expected %+d.",
+                        aFieldIndex,
+                        iPoint,
+                        tPoint( 0 ),
+                        tPoint( 1 ),
+                        tPoint.numel() > 2 ? tPoint( 2 ) : 0.0,
+                        tPassesRun,
+                        uint( tCell->get_level() ),
+                        tRepresented,
+                        tExpected );
+                continue;
+            }
+
+            // the cell holding the point, and the cells within the radius that hold a crossing (the depth tolerance
+            // does not apply: the user declared the feature real)
+            tQueryQueue.push_back( tCell );
+            tMinQueryCellLevel = std::min( tMinQueryCellLevel, uint( tCell->get_level() ) + 1 );
+            for ( hmr::Element* iElement : tQueue )
+            {
+                uint tOrder = 1;
+                if ( iElement != tCell and gen::cell_distance_to_point( element_corners( iElement, tOrder ), tPoint ) <= tQueryRadii( iPoint ) )
+                {
+                    tQueryQueue.push_back( iElement );
+                }
+            }
+        }
+
+        tNumCrossing       = sum_all( tNumCrossing );
+        tNumHidden         = sum_all( tNumHidden );
+        tNumInsignificant  = sum_all( tNumInsignificant );
+        tMinLevel          = min_all( tMinLevel );
+        tMaxLevel          = max_all( tMaxLevel );
+        tNumQueryWrong     = sum_all( tNumQueryWrong );
+        tNumQueryLocated   = sum_all( tNumQueryLocated );
+        tMinQueryCellLevel = min_all( tMinQueryCellLevel );
+
+        if ( tNumQueryPoints > 0 )
+        {
+            mFeatureQueryWrong[ { aPerformer.get(), aFieldIndex } ] = tNumQueryWrong;
+            if ( aFinalCheck )
+            {
+                MORIS_LOG_INFO(
+                        "GEN feature query points - geometry %u, final mesh (after %u refinement passes): %u of %u points "
+                        "located, %u represented on the wrong side.",
+                        aFieldIndex,
+                        tPassesRun,
+                        tNumQueryLocated,
+                        tNumQueryPoints,
+                        tNumQueryWrong );
+            }
+            else
+            {
+                MORIS_LOG_INFO( "GEN feature query points - geometry %u, pass %u: %u of %u points located, %u represented on the wrong side.",
+                        aFieldIndex,
+                        aPass,
+                        tNumQueryLocated,
+                        tNumQueryPoints,
+                        tNumQueryWrong );
+            }
+        }
 
         if ( aFinalCheck )
         {
@@ -904,10 +1045,13 @@ namespace moris::wrk
             }
             else
             {
-                MORIS_LOG_WARNING( "GEN feature refinement - geometry %u: UNRESOLVED. %u cells still hide sub-cell features after "
-                                   "%u refinement passes (number_of_refinements reached; MB-084). The cut does not represent "
-                                   "the geometry in these cells.",
-                        aFieldIndex, tNumHidden, aPass );
+                MORIS_LOG_WARNING(
+                        "GEN feature refinement - geometry %u: UNRESOLVED. %u cells still hide sub-cell features after "
+                        "%u refinement passes (number_of_refinements reached; MB-084). The cut does not represent "
+                        "the geometry in these cells.",
+                        aFieldIndex,
+                        tNumHidden,
+                        aPass );
             }
             return tNumHidden;
         }
@@ -916,20 +1060,42 @@ namespace moris::wrk
                         "feature the cut misses, %u hold only features below the depth tolerance.",
                 aFieldIndex, aPass, tNumCrossing, tNumCrossing ? tMinLevel : 0, tMaxLevel, tNumHidden, tNumInsignificant );
 
-        if ( tNumHidden == 0 )
+        if ( tNumHidden == 0 and tNumQueryWrong == 0 )
         {
             mResolvedFeatureFields.insert( { aPerformer.get(), aFieldIndex } );
+            mFeaturePasses[ { aPerformer.get(), aFieldIndex } ] = aPass;
             MORIS_LOG_INFO( "GEN feature refinement - geometry %u: resolved after %u passes.", aFieldIndex, aPass );
             return 0;
         }
 
-        aHMR->put_elements_on_refinement_queue( tQueue );
+        mFeaturePasses[ { aPerformer.get(), aFieldIndex } ] = aPass + 1;
 
-        // every cell with a crossing is refined: crossings can only remain on the new level
-        mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = tMaxLevel + 1;
+        if ( tNumHidden > 0 )
+        {
+            // every cell with a crossing is refined: crossings can only remain in their children. Earlier passes that
+            // refined only near query points can leave crossing cells on several levels, so the lowest one counts.
+            aHMR->put_elements_on_refinement_queue( tQueue );
+            aHMR->put_elements_on_refinement_queue( tQueryQueue );
+            mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = std::min( tMinLevel + 1, tMinQueryCellLevel );
+        }
+        else
+        {
+            // only query points are wrong: refine the cells within their radius; the other cut cells follow at the end
+            // (equalize_cut_cell_levels), and stay candidates of later passes
+            aHMR->put_elements_on_refinement_queue( tQueryQueue );
+            mFeatureMinLevel[ { aPerformer.get(), aFieldIndex } ] = std::min( { tMinLevel, tMinQueryCellLevel, tMaxLevel + 1 } );
+            MORIS_LOG_INFO(
+                    "GEN feature query points - geometry %u, pass %u: refining %u cells within the radius of the %u "
+                    "points on the wrong side (depth tolerance overridden).",
+                    aFieldIndex,
+                    aPass,
+                    sum_all( uint( tQueryQueue.size() ) ),
+                    tNumQueryWrong );
+        }
+
         MORIS_LOG_INFO( "GEN feature refinement - geometry %u, pass %u: %u cells below level %u skipped (evaluated before).",
                 aFieldIndex, aPass, sum_all( tNumSkipped ), tMinLevel0 );
-        return tNumHidden;
+        return tNumHidden + tNumQueryWrong;
     }
 
     //--------------------------------------------------------------------------------------------------------------

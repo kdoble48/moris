@@ -103,5 +103,38 @@ namespace moris::wrk
             {
                 return 0;
             }
+
+            /**
+             * Geometry-aware query points of a field used by the refinement (feature_query_refine): the number of
+             * points whose cut the refinement checks (0: off), and the coordinates (1 x d) and radius of one point
+             * (radius 0: one cell of the coarsest Lagrange level).
+             */
+            virtual uint get_num_feature_query_refine_points( uint aFieldIndex )
+            {
+                return 0;
+            }
+
+            virtual void get_feature_query_point(
+                    uint              aFieldIndex,
+                    uint              aPointIndex,
+                    Matrix< DDRMat >& aCoordinates,
+                    real&             aRadius )
+            {
+            }
+
+            /**
+             * Side of the field (+1 / -1, 0 on the interface) expected at a query point, and the side that XTK's cut of
+             * the Lagrange cell aCorners (containing the point) would represent there.
+             */
+            virtual void get_feature_query_regions(
+                    uint                    aFieldIndex,
+                    uint                    aPointIndex,
+                    const Matrix< DDRMat >& aCorners,
+                    sint&                   aExpected,
+                    sint&                   aRepresented )
+            {
+                aExpected    = 0;
+                aRepresented = 0;
+            }
     };
 }

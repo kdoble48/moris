@@ -80,5 +80,19 @@ namespace moris::wrk
                 uint                    aLagrangeOrder,
                 uint                    aSamples ) override;
 
+        uint get_num_feature_query_refine_points( uint aFieldIndex ) override;
+
+        void get_feature_query_point(
+                uint              aFieldIndex,
+                uint              aPointIndex,
+                Matrix< DDRMat >& aCoordinates,
+                real&             aRadius ) override;
+
+        void get_feature_query_regions(
+                uint                    aFieldIndex,
+                uint                    aPointIndex,
+                const Matrix< DDRMat >& aCorners,
+                sint&                   aExpected,
+                sint&                   aRepresented ) override;
 };
 }

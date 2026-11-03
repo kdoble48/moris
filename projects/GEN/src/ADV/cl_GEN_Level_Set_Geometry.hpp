@@ -31,6 +31,10 @@ namespace moris::gen
         uint mFeatureRefinementSamples;             // > 0: sub-cell feature refinement, lattice sub-intervals per direction (MB-084)
         real mFeatureRefinementLipschitz;           // bound on |grad phi| for certified gaps; 0 = off
         real mFeatureRefinementDepthTolerance;      // significance of a hidden feature, relative to the cell size
+        Vector< Feature_Query_Point > mFeatureQueryPoints;                   // geometry-aware query points (feature_query_points / _function)
+        std::string                   mFeatureQueryFunctionName;             // deck function adding query points (loaded by the design factory)
+        uint                          mFeatureQueryCheck;                    // 0 off, 1 log mismatches, 2 error on a mismatch (after the cut)
+        bool                          mFeatureQueryRefine;                   // refine near points the cut would represent on the wrong side
 
         /**
          * Constructor with a given parameter list
@@ -103,6 +107,29 @@ namespace moris::gen
                 const Matrix< DDRMat >& aCorners,
                 uint                    aLagrangeOrder,
                 uint                    aSamples ) const;
+
+        /**
+         * Geometry-aware query points (feature_query_points, feature_query_function): the points, the check level
+         * (0 off, 1 log, 2 error) and whether GEN feature refinement also refines near points the cut gets wrong.
+         */
+        const Vector< Feature_Query_Point >& get_feature_query_points() const;
+        void                                 add_feature_query_points( const Vector< Feature_Query_Point >& aPoints );
+        const std::string&                   get_feature_query_function_name() const;
+        uint                                 get_feature_query_check() const;
+        bool                                 get_feature_query_refine() const;
+
+        /**
+         * Side of this level set expected at query point aPointIndex: its phase, or for phase 0 the sign of the exact
+         * field at the point (+1 / -1; 0 on the interface). Phase 0 needs an analytic field.
+         */
+        sint get_feature_query_expected_region( uint aPointIndex ) const;
+
+        /**
+         * Side of this level set that XTK's cut of the QUAD4 / HEX8 cell aCorners represents at query point
+         * aPointIndex (represented_region_at_point(), with exact edge roots when use_analytic_intersection is on).
+         * Analytic fields only.
+         */
+        sint get_feature_query_represented_region( uint aPointIndex, const Matrix< DDRMat >& aCorners ) const;
 
         /**
          * Field value, ADV sensitivities, determining ADV IDs and spatial gradient (central difference) of the

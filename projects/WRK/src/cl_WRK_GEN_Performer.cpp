@@ -98,4 +98,40 @@ namespace moris::wrk
 
     // ----------------------------------------------------------------------------
 
+    uint
+    Gen_Performer::get_num_feature_query_refine_points( uint aFieldIndex )
+    {
+        return mGeometryEngine->get_feature_query_refine( aFieldIndex ) ? mGeometryEngine->get_num_feature_query_points( aFieldIndex ) : 0;
+    }
+
+    // ----------------------------------------------------------------------------
+
+    void
+    Gen_Performer::get_feature_query_point(
+            uint              aFieldIndex,
+            uint              aPointIndex,
+            Matrix< DDRMat >& aCoordinates,
+            real&             aRadius )
+    {
+        const gen::Feature_Query_Point& tPoint = mGeometryEngine->get_feature_query_point( aFieldIndex, aPointIndex );
+
+        aCoordinates = tPoint.mCoordinates;
+        aRadius      = tPoint.mRadius;
+    }
+
+    // ----------------------------------------------------------------------------
+
+    void
+    Gen_Performer::get_feature_query_regions(
+            uint                    aFieldIndex,
+            uint                    aPointIndex,
+            const Matrix< DDRMat >& aCorners,
+            sint&                   aExpected,
+            sint&                   aRepresented )
+    {
+        aExpected    = mGeometryEngine->get_feature_query_expected_region( aFieldIndex, aPointIndex );
+        aRepresented = mGeometryEngine->get_feature_query_represented_region( aFieldIndex, aPointIndex, aCorners );
+    }
+
+    // ----------------------------------------------------------------------------
 }
