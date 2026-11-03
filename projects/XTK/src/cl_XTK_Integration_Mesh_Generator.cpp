@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -182,6 +183,10 @@ namespace moris::xtk
 
         // identify and construct the subphase groups
         this->identify_and_construct_subphases( &tGenerationData, tCutIntegrationMesh.get(), tBackgroundMesh, tNeighborhood );
+
+        // geometry-aware query points: does the cut represent the declared side at each point? (needs the parent-cell
+        // to child-cell map, which the subphase construction completes)
+        this->check_feature_query_points( tCutIntegrationMesh.get(), tBackgroundMesh );
 
         // construct subphase neighborhood
         std::shared_ptr< Subphase_Neighborhood_Connectivity > tSubphaseNeighborhood = std::make_shared< Subphase_Neighborhood_Connectivity >();
@@ -787,6 +792,125 @@ namespace moris::xtk
         }
 
         return true;
+    }
+
+    // ----------------------------------------------------------------------------------
+
+    void
+    Integration_Mesh_Generator::check_feature_query_points(
+            Cut_Integration_Mesh* aCutIntegrationMesh,
+            mtk::Mesh*            aBackgroundMesh )
+    {
+        gen::Geometry_Engine* tEngine        = this->get_geom_engine();
+        uint                  tNumGeometries = tEngine->get_number_of_geometries();
+        uint                  tNumCells      = aBackgroundMesh->get_num_elems();
+        moris_index           tParRank       = moris::par_rank();
+
+        for ( uint iGeom = 0; iGeom < tNumGeometries; iGeom++ )
+        {
+            uint tCheck     = tEngine->get_feature_query_check( iGeom );
+            uint tNumPoints = tEngine->get_num_feature_query_points( iGeom );
+            if ( tCheck == 0 or tNumPoints == 0 )
+            {
+                continue;
+            }
+            aCutIntegrationMesh->mFeatureQueryLocated.resize( tNumGeometries, 0 );
+            aCutIntegrationMesh->mFeatureQueryMismatches.resize( tNumGeometries, 0 );
+
+            uint        tLocated    = 0;
+            uint        tMismatched = 0;
+            std::string tFirstMismatch;
+            for ( uint iPoint = 0; iPoint < tNumPoints; iPoint++ )
+            {
+                const Matrix< DDRMat >& tPoint = tEngine->get_feature_query_point( iGeom, iPoint ).mCoordinates;
+
+                // the background cell holding the point, owned by this processor
+                moris_index tBgCell = -1;
+                for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+                {
+                    const mtk::Cell& tCell = aBackgroundMesh->get_mtk_cell( (moris_index)iCell );
+                    if ( gen::cell_contains_point( tCell.get_vertex_coords(), tPoint ) )
+                    {
+                        tBgCell = tCell.get_owner() == tParRank ? (moris_index)iCell : -1;
+                        break;
+                    }
+                }
+                if ( tBgCell < 0 )
+                {
+                    continue;
+                }
+                tLocated++;
+
+                // the integration cell holding the point: the background cell itself, or one of its children
+                const mtk::Cell* tIgCell = &aBackgroundMesh->get_mtk_cell( tBgCell );
+                if ( aCutIntegrationMesh->parent_cell_has_children( tBgCell ) )
+                {
+                    tIgCell = nullptr;
+                    std::shared_ptr< IG_Cell_Group > tGroup =
+                            aCutIntegrationMesh->get_ig_cell_group( aCutIntegrationMesh->get_parent_cell_group_index( tBgCell ) );
+                    for ( mtk::Cell* iChild : tGroup->mIgCellGroup )
+                    {
+                        if ( gen::simplex_contains_point( iChild->get_vertex_coords(), tPoint ) )
+                        {
+                            tIgCell = iChild;
+                            break;
+                        }
+                    }
+                }
+
+                sint tRepresented = tIgCell ? tEngine->get_cell_geometric_region( iGeom, *tIgCell ) : 0;
+                sint tExpected    = tEngine->get_feature_query_expected_region( iGeom, iPoint );
+                if ( tExpected == 0 or tRepresented == tExpected )
+                {
+                    continue;
+                }
+                tMismatched++;
+
+                char tLine[ 512 ];
+                std::snprintf( tLine, sizeof( tLine ),
+                        "geometry %u, query point %u at (%g, %g, %g): the cut represents side %+d, expected %+d "
+                        "(background cell level %u%s)",
+                        iGeom,
+                        iPoint,
+                        tPoint( 0 ),
+                        tPoint( 1 ),
+                        tPoint.numel() > 2 ? tPoint( 2 ) : 0.0,
+                        tRepresented,
+                        tExpected,
+                        uint( aBackgroundMesh->get_mtk_cell( tBgCell ).get_level() ),
+                        tIgCell ? "" : "; no integration cell holds the point" );
+                MORIS_LOG_WARNING( "XTK - feature query point mismatch: %s.", tLine );
+                if ( tFirstMismatch.empty() )
+                {
+                    tFirstMismatch = tLine;
+                }
+            }
+
+            tLocated                                              = sum_all( tLocated );
+            tMismatched                                           = sum_all( tMismatched );
+            aCutIntegrationMesh->mFeatureQueryLocated( iGeom )    = tLocated;
+            aCutIntegrationMesh->mFeatureQueryMismatches( iGeom ) = tMismatched;
+
+            if ( tMismatched > 0 )
+            {
+                MORIS_LOG_WARNING( "XTK - geometry %u, feature query points: %u of %u mismatched (%u located on the mesh).",
+                        iGeom,
+                        tMismatched,
+                        tNumPoints,
+                        tLocated );
+            }
+            else
+            {
+                MORIS_LOG_INFO( "XTK - geometry %u, feature query points: %u of %u mismatched (%u located on the mesh).",
+                        iGeom,
+                        tMismatched,
+                        tNumPoints,
+                        tLocated );
+            }
+            MORIS_ERROR( tCheck < 2 or tMismatched == 0,
+                    "XTK - feature query point mismatch (feature_query_check = 2): %s.",
+                    tFirstMismatch.empty() ? "on another processor" : tFirstMismatch.c_str() );
+        }
     }
 
     // ----------------------------------------------------------------------------------

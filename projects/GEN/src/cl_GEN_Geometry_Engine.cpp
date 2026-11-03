@@ -680,6 +680,89 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    uint
+    Geometry_Engine::get_num_feature_query_points( uint aGeometryIndex )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        return tLevelSet ? tLevelSet->get_feature_query_points().size() : 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    const Feature_Query_Point&
+    Geometry_Engine::get_feature_query_point( uint aGeometryIndex, uint aPointIndex )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        MORIS_ERROR( tLevelSet, "Geometry_Engine::get_feature_query_point() - geometry %u is not a level set.", aGeometryIndex );
+        return tLevelSet->get_feature_query_points()( aPointIndex );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint
+    Geometry_Engine::get_feature_query_check( uint aGeometryIndex )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        return tLevelSet ? tLevelSet->get_feature_query_check() : 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    Geometry_Engine::get_feature_query_refine( uint aGeometryIndex )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        return tLevelSet and tLevelSet->get_feature_query_refine();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint
+    Geometry_Engine::get_feature_query_expected_region( uint aGeometryIndex, uint aPointIndex )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        MORIS_ERROR( tLevelSet, "Geometry_Engine::get_feature_query_expected_region() - geometry %u is not a level set.", aGeometryIndex );
+        return tLevelSet->get_feature_query_expected_region( aPointIndex );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint
+    Geometry_Engine::get_feature_query_represented_region(
+            uint                    aGeometryIndex,
+            uint                    aPointIndex,
+            const Matrix< DDRMat >& aCorners )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        MORIS_ERROR( tLevelSet and tLevelSet->can_change_region_inside_cell(),
+                "Geometry_Engine::get_feature_query_represented_region() - geometry %u is not an analytic level set.",
+                aGeometryIndex );
+        return tLevelSet->get_feature_query_represented_region( aPointIndex, aCorners );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint
+    Geometry_Engine::get_cell_geometric_region( uint aGeometryIndex, const mtk::Cell& aCell )
+    {
+        Vector< mtk::Vertex* > tVertices = aCell.get_vertex_pointers();
+        for ( mtk::Vertex* iVertex : tVertices )
+        {
+            Geometric_Region tRegion = mGeometries( aGeometryIndex )->get_geometric_region( iVertex->get_index(), iVertex->get_coords() );
+            if ( tRegion == Geometric_Region::NEGATIVE )
+            {
+                return -1;
+            }
+            if ( tRegion == Geometric_Region::POSITIVE )
+            {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
     bool
     Geometry_Engine::is_intersected(
             uint                                                         aGeometryIndex,

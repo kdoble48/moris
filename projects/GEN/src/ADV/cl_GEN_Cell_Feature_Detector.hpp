@@ -28,6 +28,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 #include "cl_Matrix.hpp"
 #include "moris_typedefs.hpp"
@@ -114,5 +115,68 @@ namespace moris::gen
      * Encode a report as Cell_Feature_Flag bits.
      */
     uint cell_feature_flags( const Cell_Feature_Report& aReport );
+
+    /**
+     * Geometry-aware query point (level-set keys feature_query_points / feature_query_function): a location at which
+     * the user declares the side of the level set the geometry has there, so the cut can be checked at that point and
+     * the Lagrange mesh refined until the cut represents it (a wedge tip or a neck that the depth tolerance misses).
+     */
+    struct Feature_Query_Point
+    {
+        Matrix< DDRMat > mCoordinates;     // 1 x d
+        sint             mPhase  = 0;      // +1 positive side (phi > isocontour_threshold), -1 negative side, 0 = sign of the exact field
+        real             mRadius = 0.0;    // refinement neighbourhood; 0 = one cell of the coarsest Lagrange level
+    };
+
+    /**
+     * Deck function of feature_query_function: fills one row per query point, x, y[, z], phase, radius.
+     */
+    typedef void ( *Feature_Query_Function )( Matrix< DDRMat >& aQueryPoints );
+
+    /**
+     * Parse feature_query_points: points separated by ';', each "x,y[,z][:phase[:radius]]" (blanks ignored).
+     */
+    Vector< Feature_Query_Point > parse_feature_query_points( const std::string& aString );
+
+    /**
+     * Query points from the rows of a matrix (feature_query_function): x, y[, z], phase, radius (d + 2 columns).
+     */
+    Vector< Feature_Query_Point > feature_query_points_from_rows( const Matrix< DDRMat >& aRows );
+
+    /**
+     * Side of the level set that XTK's cut of one QUAD4 / HEX8 cell represents at a point of the cell: the sub-simplex
+     * of the regular subdivision (4 triangles around the cell centre in 2D; 24 tets around the face and cell centres in
+     * 3D) that contains the point, split by the plane through its edge intersections (exact roots of the field when
+     * aExactRoots, as use_analytic_intersection; otherwise the linear crossing of the end values). In the 3D case of
+     * two vertices on each side the cut prism is split into three tets, as XTK does up to the choice of the diagonal.
+     *
+     * @param aPhi Field minus the isocontour threshold, evaluated exactly at a point
+     * @param aCorners Cell corner coordinates (2^d x d, exodus order)
+     * @param aInterfaceTolerance |phi| at or below this is on the interface
+     * @param aPoint Point (1 x d) inside the cell
+     * @param aExactRoots Edge intersections at the exact root (true) or the linear crossing (false)
+     * @return +1 positive side, -1 negative side, 0 every template vertex on the interface
+     */
+    sint represented_region_at_point(
+            const Point_Field_Function& aPhi,
+            const Matrix< DDRMat >&     aCorners,
+            real                        aInterfaceTolerance,
+            const Matrix< DDRMat >&     aPoint,
+            bool                        aExactRoots );
+
+    /**
+     * Whether a point lies in a simplex (TRI / TET; only the first d + 1 rows of aVertexCoordinates, the corners, count).
+     */
+    bool simplex_contains_point( const Matrix< DDRMat >& aVertexCoordinates, const Matrix< DDRMat >& aPoint );
+
+    /**
+     * Whether a point lies in the axis-aligned box of a cell's corners (tolerance relative to the cell size).
+     */
+    bool cell_contains_point( const Matrix< DDRMat >& aCorners, const Matrix< DDRMat >& aPoint );
+
+    /**
+     * Distance of a point to the axis-aligned box of a cell's corners (0 inside).
+     */
+    real cell_distance_to_point( const Matrix< DDRMat >& aCorners, const Matrix< DDRMat >& aPoint );
 
 }    // namespace moris::gen

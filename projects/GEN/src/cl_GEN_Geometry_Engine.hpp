@@ -317,6 +317,33 @@ namespace moris::gen
                 uint                    aSamples );
 
         /**
+         * Geometry-aware query points of a geometry (level-set keys feature_query_points / feature_query_function):
+         * number of points (0 for geometries that are not level sets), one point, the check level after the cut
+         * (0 off, 1 log, 2 error) and whether GEN feature refinement also refines near points the cut gets wrong.
+         */
+        uint                       get_num_feature_query_points( uint aGeometryIndex );
+        const Feature_Query_Point& get_feature_query_point( uint aGeometryIndex, uint aPointIndex );
+        uint                       get_feature_query_check( uint aGeometryIndex );
+        bool                       get_feature_query_refine( uint aGeometryIndex );
+
+        /**
+         * Side of the level set expected at a query point (+1 / -1; 0 if it lies on the interface).
+         */
+        sint get_feature_query_expected_region( uint aGeometryIndex, uint aPointIndex );
+
+        /**
+         * Side of the level set that XTK's cut of the QUAD4 / HEX8 cell aCorners would represent at a query point that
+         * lies in the cell (analytic level sets only; see represented_region_at_point()).
+         */
+        sint get_feature_query_represented_region( uint aGeometryIndex, uint aPointIndex, const Matrix< DDRMat >& aCorners );
+
+        /**
+         * Side of a geometry that an integration cell represents: the region of its first vertex that is not on the
+         * interface (+1 / -1), 0 if every vertex lies on the interface (as get_element_phase_index() decides).
+         */
+        sint get_cell_geometric_region( uint aGeometryIndex, const mtk::Cell& aCell );
+
+        /**
          * Returns if the element is intersected by the given geometry, testing its nodes and additionally the given
          * interior points (the vertices the decomposition will create inside the element). The interior points are only
          * evaluated for geometries that can change region inside a cell (see can_change_region_inside_cell()).

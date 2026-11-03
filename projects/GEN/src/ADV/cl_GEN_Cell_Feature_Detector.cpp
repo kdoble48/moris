@@ -11,8 +11,11 @@
 #include "cl_GEN_Cell_Feature_Detector.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <vector>
 
 #include "cl_Vector.hpp"
@@ -850,6 +853,522 @@ namespace moris::gen
         tFlags |= aReport.mXTKSeesCut ? CELL_FEATURE_XTK_CUT : 0;
         tFlags |= aReport.mNumInsignificant > 0 ? CELL_FEATURE_INSIGNIFICANT : 0;
         return tFlags;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+    // Geometry-aware query points
+    //--------------------------------------------------------------------------------------------------------------
+
+    namespace
+    {
+        std::string
+        trim_blanks( const std::string& aString )
+        {
+            std::string tOut;
+            for ( char iChar : aString )
+            {
+                if ( not std::isspace( static_cast< unsigned char >( iChar ) ) )
+                {
+                    tOut.push_back( iChar );
+                }
+            }
+            return tOut;
+        }
+
+        std::vector< std::string >
+        split( const std::string& aString, char aSeparator )
+        {
+            std::vector< std::string > tParts;
+            std::string                tPart;
+            for ( char iChar : aString )
+            {
+                if ( iChar == aSeparator )
+                {
+                    tParts.push_back( tPart );
+                    tPart.clear();
+                }
+                else
+                {
+                    tPart.push_back( iChar );
+                }
+            }
+            tParts.push_back( tPart );
+            return tParts;
+        }
+
+        real
+        to_real( const std::string& aString, const std::string& aItem )
+        {
+            std::size_t tUsed  = 0;
+            real        tValue = 0.0;
+            try
+            {
+                tValue = std::stod( aString, &tUsed );
+            } catch ( ... )
+            {
+                tUsed = 0;
+            }
+            MORIS_ERROR( tUsed > 0 and tUsed == aString.size(), "feature_query_points: cannot read '%s' in '%s'.", aString.c_str(), aItem.c_str() );
+            return tValue;
+        }
+
+        void
+        check_query_point( const Feature_Query_Point& aPoint, const std::string& aItem )
+        {
+            MORIS_ERROR( aPoint.mCoordinates.numel() == 2 or aPoint.mCoordinates.numel() == 3,
+                    "feature_query_points: point '%s' needs 2 or 3 coordinates.",
+                    aItem.c_str() );
+            MORIS_ERROR( aPoint.mPhase >= -1 and aPoint.mPhase <= 1,
+                    "feature_query_points: phase of point '%s' must be +1, -1 or 0.",
+                    aItem.c_str() );
+            MORIS_ERROR( aPoint.mRadius >= 0.0, "feature_query_points: radius of point '%s' must not be negative.", aItem.c_str() );
+        }
+
+        // determinant of the leading d x d block of aRows (d = 2, 3)
+        real
+        small_det( const real aRows[ 3 ][ 3 ], uint aDim )
+        {
+            if ( aDim == 2 )
+            {
+                return aRows[ 0 ][ 0 ] * aRows[ 1 ][ 1 ] - aRows[ 0 ][ 1 ] * aRows[ 1 ][ 0 ];
+            }
+            return aRows[ 0 ][ 0 ] * ( aRows[ 1 ][ 1 ] * aRows[ 2 ][ 2 ] - aRows[ 1 ][ 2 ] * aRows[ 2 ][ 1 ] )
+                 - aRows[ 0 ][ 1 ] * ( aRows[ 1 ][ 0 ] * aRows[ 2 ][ 2 ] - aRows[ 1 ][ 2 ] * aRows[ 2 ][ 0 ] )
+                 + aRows[ 0 ][ 2 ] * ( aRows[ 1 ][ 0 ] * aRows[ 2 ][ 1 ] - aRows[ 1 ][ 1 ] * aRows[ 2 ][ 0 ] );
+        }
+
+        using Point3 = std::array< real, 3 >;
+
+        // whether aPoint lies in the simplex aVertices (d + 1 vertices), barycentric coordinates by Cramer's rule
+        bool
+        simplex_contains( const std::vector< Point3 >& aVertices, const Point3& aPoint, uint aDim )
+        {
+            real tEdges[ 3 ][ 3 ] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
+            for ( uint iEdge = 0; iEdge < aDim; iEdge++ )
+            {
+                for ( uint iDim = 0; iDim < aDim; iDim++ )
+                {
+                    tEdges[ iDim ][ iEdge ] = aVertices[ iEdge + 1 ][ iDim ] - aVertices[ 0 ][ iDim ];
+                }
+            }
+            real tDet = small_det( tEdges, aDim );
+            if ( std::abs( tDet ) <= std::numeric_limits< real >::min() )
+            {
+                return false;    // collapsed piece
+            }
+            real tSum = 0.0;
+            for ( uint iEdge = 0; iEdge < aDim; iEdge++ )
+            {
+                real tReplaced[ 3 ][ 3 ];
+                for ( uint iRow = 0; iRow < 3; iRow++ )
+                {
+                    for ( uint iCol = 0; iCol < 3; iCol++ )
+                    {
+                        tReplaced[ iRow ][ iCol ] = tEdges[ iRow ][ iCol ];
+                    }
+                }
+                for ( uint iDim = 0; iDim < aDim; iDim++ )
+                {
+                    tReplaced[ iDim ][ iEdge ] = aPoint[ iDim ] - aVertices[ 0 ][ iDim ];
+                }
+                real tLambda = small_det( tReplaced, aDim ) / tDet;
+                if ( tLambda < -1.0e-10 )
+                {
+                    return false;
+                }
+                tSum += tLambda;
+            }
+            return tSum <= 1.0 + 1.0e-10;
+        }
+
+        struct Template_Vertex
+        {
+            Point3      mX      = { 0.0, 0.0, 0.0 };
+            real        mValue  = 0.0;
+            signed char mRegion = 0;
+        };
+
+        // side of the level set that the cut of one template simplex represents at a point
+        class Represented_Region
+        {
+          public:
+            Represented_Region(
+                    const Point_Field_Function& aPhi,
+                    uint                        aDim,
+                    real                        aTolerance,
+                    bool                        aExactRoots )
+                    : mPhi( aPhi )
+                    , mDim( aDim )
+                    , mTolerance( aTolerance )
+                    , mExactRoots( aExactRoots )
+            {
+            }
+
+            Template_Vertex
+            vertex( const Point3& aX ) const
+            {
+                Template_Vertex tVertex;
+                tVertex.mX      = aX;
+                tVertex.mValue  = this->value( aX );
+                tVertex.mRegion = std::abs( tVertex.mValue ) <= mTolerance ? 0 : ( tVertex.mValue < 0.0 ? -1 : 1 );
+                return tVertex;
+            }
+
+            sint
+            region_in_simplex( const std::vector< Template_Vertex >& aSimplex, const Point3& aPoint ) const
+            {
+                std::vector< uint > tPositive;
+                std::vector< uint > tNegative;
+                std::vector< uint > tZero;
+                for ( uint iVertex = 0; iVertex < aSimplex.size(); iVertex++ )
+                {
+                    signed char tRegion = aSimplex[ iVertex ].mRegion;
+                    if ( tRegion > 0 )
+                    {
+                        tPositive.push_back( iVertex );
+                    }
+                    else if ( tRegion < 0 )
+                    {
+                        tNegative.push_back( iVertex );
+                    }
+                    else
+                    {
+                        tZero.push_back( iVertex );
+                    }
+                }
+                if ( tPositive.empty() and tNegative.empty() )
+                {
+                    return 0;
+                }
+                if ( tNegative.empty() )
+                {
+                    return 1;
+                }
+                if ( tPositive.empty() )
+                {
+                    return -1;
+                }
+
+                // the side with fewer vertices
+                bool                       tLonePositive = tPositive.size() <= tNegative.size();
+                const std::vector< uint >& tLone         = tLonePositive ? tPositive : tNegative;
+                const std::vector< uint >& tOther        = tLonePositive ? tNegative : tPositive;
+                sint                       tLoneRegion   = tLonePositive ? 1 : -1;
+
+                if ( tLone.size() == 1 )
+                {
+                    // the lone vertex, the intersections of its edges to the other side, and the interface vertices
+                    std::vector< Point3 > tPiece = { aSimplex[ tLone[ 0 ] ].mX };
+                    for ( uint iOther : tOther )
+                    {
+                        tPiece.push_back( this->root( aSimplex[ tLone[ 0 ] ], aSimplex[ iOther ] ) );
+                    }
+                    for ( uint iZero : tZero )
+                    {
+                        tPiece.push_back( aSimplex[ iZero ].mX );
+                    }
+                    return simplex_contains( tPiece, aPoint, mDim ) ? tLoneRegion : -tLoneRegion;
+                }
+
+                // 3D, two vertices on each side: the prism (a0, a1, a2 | b0, b1, b2) of the positive side in three tets
+                const Template_Vertex&               tA    = aSimplex[ tPositive[ 0 ] ];
+                const Template_Vertex&               tB    = aSimplex[ tPositive[ 1 ] ];
+                const Template_Vertex&               tN0   = aSimplex[ tNegative[ 0 ] ];
+                const Template_Vertex&               tN1   = aSimplex[ tNegative[ 1 ] ];
+                Point3                               tA0   = tA.mX;
+                Point3                               tA1   = this->root( tA, tN0 );
+                Point3                               tA2   = this->root( tA, tN1 );
+                Point3                               tB0   = tB.mX;
+                Point3                               tB1   = this->root( tB, tN0 );
+                Point3                               tB2   = this->root( tB, tN1 );
+                std::vector< std::vector< Point3 > > tTets = { { tA0, tA1, tA2, tB0 }, { tA1, tA2, tB0, tB1 }, { tA2, tB0, tB1, tB2 } };
+                for ( const std::vector< Point3 >& iTet : tTets )
+                {
+                    if ( simplex_contains( iTet, aPoint, mDim ) )
+                    {
+                        return 1;
+                    }
+                }
+                return -1;
+            }
+
+          private:
+            const Point_Field_Function& mPhi;
+            uint                        mDim;
+            real                        mTolerance;
+            bool                        mExactRoots;
+
+            real
+            value( const Point3& aX ) const
+            {
+                Matrix< DDRMat > tX( 1, mDim );
+                for ( uint iDim = 0; iDim < mDim; iDim++ )
+                {
+                    tX( iDim ) = aX[ iDim ];
+                }
+                return mPhi( tX );
+            }
+
+            Point3
+            along( const Point3& aA, const Point3& aB, real aT ) const
+            {
+                Point3 tX = { 0.0, 0.0, 0.0 };
+                for ( uint iDim = 0; iDim < mDim; iDim++ )
+                {
+                    tX[ iDim ] = aA[ iDim ] + aT * ( aB[ iDim ] - aA[ iDim ] );
+                }
+                return tX;
+            }
+
+            // intersection on the edge between two vertices on opposite sides: exact root (bisection) or linear crossing
+            Point3
+            root( const Template_Vertex& aA, const Template_Vertex& aB ) const
+            {
+                real tT = aA.mValue / ( aA.mValue - aB.mValue );
+                if ( mExactRoots )
+                {
+                    real tLow           = 0.0;
+                    real tHigh          = 1.0;
+                    bool tLowIsNegative = aA.mValue < 0.0;
+                    for ( uint iIteration = 0; iIteration < 100 and tHigh - tLow > 1.0e-15; iIteration++ )
+                    {
+                        real tMid      = 0.5 * ( tLow + tHigh );
+                        real tMidValue = this->value( this->along( aA.mX, aB.mX, tMid ) );
+                        if ( ( tMidValue < 0.0 ) == tLowIsNegative )
+                        {
+                            tLow = tMid;
+                        }
+                        else
+                        {
+                            tHigh = tMid;
+                        }
+                    }
+                    tT = 0.5 * ( tLow + tHigh );
+                }
+                return this->along( aA.mX, aB.mX, tT );
+            }
+        };
+
+        // lower / upper bound of the corners in one direction
+        void
+        corner_bounds( const Matrix< DDRMat >& aCorners, uint aDim, real& aLower, real& aUpper )
+        {
+            aLower = std::numeric_limits< real >::max();
+            aUpper = -std::numeric_limits< real >::max();
+            for ( uint iCorner = 0; iCorner < aCorners.n_rows(); iCorner++ )
+            {
+                aLower = std::min( aLower, aCorners( iCorner, aDim ) );
+                aUpper = std::max( aUpper, aCorners( iCorner, aDim ) );
+            }
+        }
+    }    // namespace
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< Feature_Query_Point >
+    parse_feature_query_points( const std::string& aString )
+    {
+        Vector< Feature_Query_Point > tPoints;
+        for ( const std::string& iItem : split( trim_blanks( aString ), ';' ) )
+        {
+            if ( iItem.empty() )
+            {
+                continue;
+            }
+            std::vector< std::string > tFields = split( iItem, ':' );
+            MORIS_ERROR( tFields.size() <= 3, "feature_query_points: point '%s' has more fields than coordinates, phase and radius.", iItem.c_str() );
+
+            std::vector< std::string > tCoordinates = split( tFields[ 0 ], ',' );
+            Feature_Query_Point        tPoint;
+            tPoint.mCoordinates.set_size( 1, tCoordinates.size() );
+            for ( uint iDim = 0; iDim < tCoordinates.size(); iDim++ )
+            {
+                tPoint.mCoordinates( iDim ) = to_real( tCoordinates[ iDim ], iItem );
+            }
+            if ( tFields.size() > 1 and not tFields[ 1 ].empty() )
+            {
+                real tPhase   = to_real( tFields[ 1 ], iItem );
+                tPoint.mPhase = sint( std::lround( tPhase ) );
+                MORIS_ERROR( real( tPoint.mPhase ) == tPhase, "feature_query_points: phase of point '%s' must be +1, -1 or 0.", iItem.c_str() );
+            }
+            if ( tFields.size() > 2 and not tFields[ 2 ].empty() )
+            {
+                tPoint.mRadius = to_real( tFields[ 2 ], iItem );
+            }
+            check_query_point( tPoint, iItem );
+            tPoints.push_back( tPoint );
+        }
+        return tPoints;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< Feature_Query_Point >
+    feature_query_points_from_rows( const Matrix< DDRMat >& aRows )
+    {
+        Vector< Feature_Query_Point > tPoints;
+        if ( aRows.n_rows() == 0 )
+        {
+            return tPoints;
+        }
+        MORIS_ERROR( aRows.n_cols() == 4 or aRows.n_cols() == 5,
+                "feature_query_function: rows need x, y[, z], phase, radius (4 or 5 columns), got %u.",
+                uint( aRows.n_cols() ) );
+        uint tNumDims = aRows.n_cols() - 2;
+        for ( uint iRow = 0; iRow < aRows.n_rows(); iRow++ )
+        {
+            Feature_Query_Point tPoint;
+            tPoint.mCoordinates.set_size( 1, tNumDims );
+            for ( uint iDim = 0; iDim < tNumDims; iDim++ )
+            {
+                tPoint.mCoordinates( iDim ) = aRows( iRow, iDim );
+            }
+            tPoint.mPhase  = sint( std::lround( aRows( iRow, tNumDims ) ) );
+            tPoint.mRadius = aRows( iRow, tNumDims + 1 );
+            check_query_point( tPoint, "row " + std::to_string( iRow ) + " of feature_query_function" );
+            tPoints.push_back( tPoint );
+        }
+        return tPoints;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    sint
+    represented_region_at_point(
+            const Point_Field_Function& aPhi,
+            const Matrix< DDRMat >&     aCorners,
+            real                        aInterfaceTolerance,
+            const Matrix< DDRMat >&     aPoint,
+            bool                        aExactRoots )
+    {
+        uint tNumDims = aCorners.n_cols();
+        MORIS_ERROR( tNumDims == 2 or tNumDims == 3, "represented_region_at_point() - 2D or 3D cells only." );
+        MORIS_ERROR( aPoint.numel() == tNumDims, "represented_region_at_point() - point and cell dimensions differ." );
+
+        Represented_Region tRegion( aPhi, tNumDims, aInterfaceTolerance, aExactRoots );
+
+        // the point, clamped into the cell's box (a point on the cell boundary rounds into it)
+        Point3 tPoint = { 0.0, 0.0, 0.0 };
+        for ( uint iDim = 0; iDim < tNumDims; iDim++ )
+        {
+            real tLower = 0.0;
+            real tUpper = 0.0;
+            corner_bounds( aCorners, iDim, tLower, tUpper );
+            tPoint[ iDim ] = std::min( std::max( aPoint( iDim ), tLower ), tUpper );
+        }
+
+        // template vertices: corners, cell centre (and face centres in 3D)
+        uint                           tNumCorners = 1u << tNumDims;
+        std::vector< Template_Vertex > tCorners( tNumCorners );
+        Point3                         tCentre = { 0.0, 0.0, 0.0 };
+        for ( uint iCorner = 0; iCorner < tNumCorners; iCorner++ )
+        {
+            Point3 tX = { 0.0, 0.0, 0.0 };
+            for ( uint iDim = 0; iDim < tNumDims; iDim++ )
+            {
+                tX[ iDim ] = aCorners( iCorner, iDim );
+                tCentre[ iDim ] += aCorners( iCorner, iDim ) / real( tNumCorners );
+            }
+            tCorners[ iCorner ] = tRegion.vertex( tX );
+        }
+        Template_Vertex tCentreVertex = tRegion.vertex( tCentre );
+
+        if ( tNumDims == 2 )
+        {
+            for ( uint iEdge = 0; iEdge < 4; iEdge++ )
+            {
+                std::vector< Template_Vertex > tTriangle = { tCorners[ iEdge ], tCorners[ ( iEdge + 1 ) % 4 ], tCentreVertex };
+                if ( simplex_contains( { tTriangle[ 0 ].mX, tTriangle[ 1 ].mX, tTriangle[ 2 ].mX }, tPoint, 2 ) )
+                {
+                    return tRegion.region_in_simplex( tTriangle, tPoint );
+                }
+            }
+        }
+        else
+        {
+            // HEX8 faces (exodus), corners in cyclic order
+            static const uint tFaces[ 6 ][ 4 ] = { { 0, 1, 5, 4 }, { 1, 2, 6, 5 }, { 2, 3, 7, 6 }, { 0, 4, 7, 3 }, { 0, 3, 2, 1 }, { 4, 5, 6, 7 } };
+            for ( uint iFaceIndex = 0; iFaceIndex < 6; iFaceIndex++ )
+            {
+                const uint* iFace       = tFaces[ iFaceIndex ];
+                Point3      tFaceCentre = { 0.0, 0.0, 0.0 };
+                for ( uint iCorner = 0; iCorner < 4; iCorner++ )
+                {
+                    for ( uint iDim = 0; iDim < 3; iDim++ )
+                    {
+                        tFaceCentre[ iDim ] += 0.25 * tCorners[ iFace[ iCorner ] ].mX[ iDim ];
+                    }
+                }
+                Template_Vertex tFaceVertex = tRegion.vertex( tFaceCentre );
+                for ( uint iEdge = 0; iEdge < 4; iEdge++ )
+                {
+                    std::vector< Template_Vertex > tTet = { tCentreVertex, tFaceVertex, tCorners[ iFace[ iEdge ] ], tCorners[ iFace[ ( iEdge + 1 ) % 4 ] ] };
+                    if ( simplex_contains( { tTet[ 0 ].mX, tTet[ 1 ].mX, tTet[ 2 ].mX, tTet[ 3 ].mX }, tPoint, 3 ) )
+                    {
+                        return tRegion.region_in_simplex( tTet, tPoint );
+                    }
+                }
+            }
+        }
+
+        MORIS_ERROR( false, "represented_region_at_point() - the point lies in no piece of the cell's subdivision." );
+        return 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    simplex_contains_point( const Matrix< DDRMat >& aVertexCoordinates, const Matrix< DDRMat >& aPoint )
+    {
+        uint tNumDims = aVertexCoordinates.n_cols();
+        MORIS_ERROR( aVertexCoordinates.n_rows() > tNumDims, "simplex_contains_point() - need d + 1 vertices." );
+        std::vector< Point3 > tVertices( tNumDims + 1, Point3{ 0.0, 0.0, 0.0 } );
+        Point3                tPoint = { 0.0, 0.0, 0.0 };
+        for ( uint iDim = 0; iDim < tNumDims; iDim++ )
+        {
+            for ( uint iVertex = 0; iVertex <= tNumDims; iVertex++ )
+            {
+                tVertices[ iVertex ][ iDim ] = aVertexCoordinates( iVertex, iDim );
+            }
+            tPoint[ iDim ] = aPoint( iDim );
+        }
+        return simplex_contains( tVertices, tPoint, tNumDims );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    bool
+    cell_contains_point( const Matrix< DDRMat >& aCorners, const Matrix< DDRMat >& aPoint )
+    {
+        for ( uint iDim = 0; iDim < aCorners.n_cols(); iDim++ )
+        {
+            real tLower = 0.0;
+            real tUpper = 0.0;
+            corner_bounds( aCorners, iDim, tLower, tUpper );
+            real tTolerance = 1.0e-12 * ( tUpper - tLower );
+            if ( aPoint( iDim ) < tLower - tTolerance or aPoint( iDim ) > tUpper + tTolerance )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    real
+    cell_distance_to_point( const Matrix< DDRMat >& aCorners, const Matrix< DDRMat >& aPoint )
+    {
+        real tSquared = 0.0;
+        for ( uint iDim = 0; iDim < aCorners.n_cols(); iDim++ )
+        {
+            real tLower = 0.0;
+            real tUpper = 0.0;
+            corner_bounds( aCorners, iDim, tLower, tUpper );
+            real tGap = std::max( { tLower - aPoint( iDim ), 0.0, aPoint( iDim ) - tUpper } );
+            tSquared += tGap * tGap;
+        }
+        return std::sqrt( tSquared );
     }
 
 }    // namespace moris::gen
