@@ -47,6 +47,9 @@ namespace moris::gen
 
     //--------------------------------------------------------------------------------------------------------------
 
+    // internal linkage: GEN-test links several files with a helper type of this name (-Werror=odr under LTO)
+    namespace
+    {
     /**
      * Statistics of the edge intersections an XTK regular subdivision queries on every cell of a mesh: the cell edges
      * (4 in 2D, 12 in 3D) and the spokes from each corner to the cell center (a derived node).
@@ -57,6 +60,7 @@ namespace moris::gen
         uint           mNumIntersections = 0;      // number of intersected edges
         Vector< real > mLocalCoordinates;          // all intersection local coordinates, in query order
     };
+    }    // namespace
 
     //--------------------------------------------------------------------------------------------------------------
 
