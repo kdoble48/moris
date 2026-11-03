@@ -603,19 +603,18 @@ namespace moris::xtk
             mtk::EntityRank aEntityRank,
             moris_index     aDiscretizationIndex ) const
     {
-        // NOTE: this returns the local INDEX as the "global id" (get_index(), not get_id()),
-        // while the inverse query get_loc_entity_ind_from_entity_glb_id() is keyed by the
-        // REAL ids (mIntegrationVertexIdToIndexMap / mIntegrationCellIdToIndexMap), so the
-        // round trip is inconsistent and the answer collides across processors in parallel.
-        // See share/doc/Dev_XTK_Ids_And_Indices.dox; audit callers before changing to get_id().
+        // return the parallel-global id, the inverse of get_loc_entity_ind_from_entity_glb_id() (keyed by
+        // mIntegrationVertexIdToIndexMap / mIntegrationCellIdToIndexMap); the local index collides across
+        // processors (exodus id maps, get_max_entity_id(), ghost cell id allocation), see
+        // share/doc/Dev_XTK_Ids_And_Indices.dox
         MORIS_ERROR( aEntityRank == mtk::EntityRank::NODE || aEntityRank == mtk::EntityRank::ELEMENT, "Only supported for nodes and cells" );
         if ( aEntityRank == mtk::EntityRank::NODE )
         {
-            return mIntegrationVertices( aEntityIndex )->get_index();
+            return mIntegrationVertices( aEntityIndex )->get_id();
         }
         else if ( aEntityRank == mtk::EntityRank::ELEMENT )
         {
-            return mIntegrationCells( aEntityIndex )->get_index();
+            return mIntegrationCells( aEntityIndex )->get_id();
         }
 
         else
@@ -985,6 +984,13 @@ namespace moris::xtk
             const std::shared_ptr< xtk::Cell_XTK_No_CM >& aNewCell )
     {
         MORIS_ERROR( (uint)aCellIndex >= mIntegrationCells.size(), "Index mismatch between adding cell and current data." );
+
+        // register the id, so that get_loc_entity_ind_from_entity_glb_id() finds the cell (the ghost transition cells)
+        MORIS_ERROR( mIntegrationCellIdToIndexMap.find( aNewCell->get_id() ) == mIntegrationCellIdToIndexMap.end(),
+                "Cut_Integration_Mesh::add_integration_cell() - Cell id %d is already in use on process %d",
+                aNewCell->get_id(),
+                par_rank() );
+        mIntegrationCellIdToIndexMap[ aNewCell->get_id() ] = (moris_index)mIntegrationCells.size();
 
         mControlledIgCells.push_back( aNewCell );
         mIntegrationCells.push_back( aNewCell.get() );
