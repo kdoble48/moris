@@ -223,6 +223,15 @@ namespace moris::prm
         tParameterList.insert( "move_adapt_min", 1.0e-4 );     // floor of m_i (fraction of range)
         tParameterList.insert( "move_adapt_max", -1.0 );       // cap of m_i (fraction of range); < 0 => step_size
         tParameterList.insert( "move_adapt_init", -1.0 );      // initial m_i (e.g. on a warm restart); < 0 => step_size
+        // Oscillation shrink (off by default; needs move_adapt and move_adapt_gate = true). The gated rule never adapts an
+        // ADV whose steps stay inside its move box, so a period-2 cycle inside the box (e.g. with the asymptotes on their
+        // 0.01 * range floor, which caps the step at 0.009 * range before the box does) is never damped. With
+        // move_adapt_oscillation, each ADV the gate leaves out is adapted when both of its last two increments are
+        // significant, |d| >= move_adapt_oscillation_tol * m_i * range_i: a sign flip sets m_i = move_adapt_shrink * m_i,
+        // two increments of the same sign m_i = move_adapt_grow * m_i, then the clamp. Smaller increments (round-off, a
+        // converged ADV) leave m_i unchanged. With restart_keep_state the last increment is kept across restarts.
+        tParameterList.insert( "move_adapt_oscillation", false );      // also adapt ADVs that oscillate inside the box
+        tParameterList.insert( "move_adapt_oscillation_tol", 0.1 );    // significant increment, fraction of m_i * range
 
         // Rise guard (off by default): when the current design is feasible (every constraint <= move_guard_feas) and
         // a trial step raises the objective by more than move_guard_rise * |f0|, the step is rejected and the move
