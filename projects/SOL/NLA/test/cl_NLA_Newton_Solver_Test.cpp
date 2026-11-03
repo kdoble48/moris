@@ -18,6 +18,7 @@
 #include "cl_DLA_Solver_Factory.hpp"
 #include "cl_DLA_Linear_Solver_Aztec.hpp"
 #include "cl_DLA_Linear_Solver.hpp"
+#include "cl_DLA_Linear_Problem.hpp"
 #include "cl_SOL_Dist_Vector.hpp"
 
 #include "fn_PRM_SOL_Parameters.hpp"
@@ -29,6 +30,7 @@
 #include "cl_NLA_Newton_Solver.hpp"
 #include "cl_NLA_Nonlinear_Problem.hpp"
 #include "cl_NLA_Solver_Interface_Proxy.hpp"
+#include "cl_NLA_Convergence.hpp"
 #undef protected
 #undef private
 
@@ -787,6 +789,65 @@ namespace moris
                     CHECK( equal_to( tMyValues( 0 )( 4, 0 ), 0.000600491, 1.0e+08 ) );
                     CHECK( equal_to( tMyValues( 0 )( 5, 0 ), 0.0, 1.0e+08 ) );
                 }
+            }
+        }
+
+        //------------------------------------------------------------------------------
+
+        TEST_CASE( "Convergence check residual cap forward vs sensitivity (MB-032)", "[NLA],[MB-032]" )
+        {
+            if ( par_size() == 1 )
+            {
+                // residual cap of the forward solve must not abort the linear sensitivity solve,
+                // whose residual norm is set by the magnitude of the criteria (MB-032)
+                Solver_Interface* tSolverInput = new NLA_Solver_Interface_Proxy( 2, 1, 1, 1, test_residual1, test_jacobian1, test_topo1 );
+
+                Nonlinear_Solver tNonLinSolManager;
+                tNonLinSolManager.set_solver_interface( tSolverInput );
+
+                Nonlinear_Problem* tNonlinearProblem = new Nonlinear_Problem( tSolverInput );
+
+                Parameter_List tNonlinearSolverParameterList = prm::create_nonlinear_algorithm_parameter_list();
+                tNonlinearSolverParameterList.set( "NLA_max_iter", 10 );
+
+                Nonlinear_Solver_Factory               tNonlinFactory;
+                std::shared_ptr< Nonlinear_Algorithm > tNonlLinSolverAlgorithm = tNonlinFactory.create_nonlinear_solver( tNonlinearSolverParameterList );
+                tNonlLinSolverAlgorithm->set_nonlinear_solver_manager( &tNonLinSolManager );
+                tNonlLinSolverAlgorithm->mNonlinearProblem = tNonlinearProblem;
+
+                // assemble the residual at the initial guess (norm 0.43) and scale it above the cap of 1e20
+                tNonlinearProblem->build_linearized_problem( true, false, 1 );
+                tNonlinearProblem->get_linearized_problem()->get_solver_RHS()->scale_vector( 1.0e25 );
+
+                real tResNorm = tNonlinearProblem->get_linearized_problem()->get_solver_RHS()->vec_norm2()( 0 );
+                REQUIRE( tResNorm > 1.0e20 );
+                REQUIRE( not std::isinf( tResNorm ) );
+
+                bool tHardBreak = false;
+
+                // forward analysis: the residual cap aborts (unchanged behavior)
+                {
+                    Convergence tConvergence( 1 );
+                    CHECK_THROWS( tConvergence.check_for_convergence( tNonlLinSolverAlgorithm.get(), 1, 10, tHardBreak ) );
+
+                    tNonLinSolManager.set_residual_norm( tResNorm );
+                    tNonLinSolManager.set_ref_norm( tResNorm );
+                    CHECK_THROWS( tConvergence.check_for_convergence( tNonlLinSolverAlgorithm.get(), 1, tHardBreak ) );
+                }
+
+                // sensitivity analysis: no abort; the linear system is solved as usual
+                tSolverInput->set_sensitivity_analysis_type( true );
+                {
+                    Convergence tConvergence( 1 );
+                    CHECK_NOTHROW( tConvergence.check_for_convergence( tNonlLinSolverAlgorithm.get(), 1, 10, tHardBreak ) );
+                    CHECK( tNonLinSolManager.get_residual_norm() == tResNorm );
+
+                    CHECK_NOTHROW( tConvergence.check_for_convergence( tNonlLinSolverAlgorithm.get(), 1, tHardBreak ) );
+                }
+                tSolverInput->set_is_forward_analysis();
+
+                delete ( tNonlinearProblem );
+                delete ( tSolverInput );
             }
         }
     }    // namespace NLA
