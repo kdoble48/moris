@@ -187,14 +187,17 @@ namespace moris::hmr
         void init_lagrange_coefficients();
 
         /**
-         * Initializes the modified lagrange parameter coordinates
+         * Initializes the modified Lagrange parameter coordinates: the parameter coordinates of the Lagrange nodes of a
+         * background element in the (extended) parameter space of a B-spline element. The two elements may be on
+         * different levels.
          *
-         * @param aLagrangeElement Lagrange element
-         * @param aBSplineElement B-spline element
+         * @param aLagrangeBackgroundElement background element carrying the Lagrange nodes; in the extended T-matrix
+         *        this is the ancestor of the Lagrange element that is active on the B-spline pattern
+         * @param aBSplineElement B-spline element whose basis is extended
          */
         virtual void init_modified_lagrange_parameter_coordinates(
-                Element* aLagrangeElement,
-                Element* aBSplineElement ) = 0;
+                const Background_Element_Base* aLagrangeBackgroundElement,
+                const Element*                 aBSplineElement ) = 0;
 
         /**
          * Recompute the Lagrange matrix for extended T-matrices
