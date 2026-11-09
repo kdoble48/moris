@@ -732,6 +732,10 @@ namespace moris::hmr
         // update database
         this->update_database();
 
+        // drop the queue flags of elements that are already refined on this pattern (e.g. refined candidates of
+        // field-based refinement), so they do not trigger refinement of the next pattern (MB-106)
+        this->clear_refinement_queue_of_refined_elements( aPattern );
+
         // return flag
         return aFlag;
     }
@@ -2478,6 +2482,32 @@ namespace moris::hmr
             {
                 // reset the value
                 tElement->remove_from_refinement_queue();
+            }
+        }
+    }
+
+    //-------------------------------------------------------------------------------
+
+    void
+    Background_Mesh_Base::clear_refinement_queue_of_refined_elements( const uint aPattern )
+    {
+        // loop over all levels
+        for ( uint iLevel = 0; iLevel <= mMaxLevel; ++iLevel )
+        {
+            // collect elements from this level
+            Vector< Background_Element_Base* > tElements;
+
+            this->collect_elements_on_level_including_aura( iLevel, tElements );
+
+            // a flag on an element refined on this pattern has nothing left to do here; flags of active elements
+            // (children queued for their minimum refinement level) and of elements that do not exist on this pattern
+            // yet (queued before a pattern reset, refined once their parent is) are kept for the next calls
+            for ( Background_Element_Base* tElement : tElements )
+            {
+                if ( tElement->is_queued_for_refinement() && tElement->is_refined( aPattern ) )
+                {
+                    tElement->remove_from_refinement_queue();
+                }
             }
         }
     }
