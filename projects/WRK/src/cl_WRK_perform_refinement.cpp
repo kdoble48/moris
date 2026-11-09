@@ -187,15 +187,15 @@ namespace moris::wrk
 
         uint tWorkingPattern = aHMR->get_parameters()->get_working_pattern();    // mParameters->get_working_pattern();
 
-        // create a map with ids
-        std::unordered_map< moris_index, luint > tMap;
+        // create a map with ids (keyed by the 64-bit HMR id, MB-105)
+        std::unordered_map< luint, luint > tMap;
 
         Vector< hmr::Background_Element_Base* > tBGElements;
         aHMR->get_database()->get_background_mesh()->collect_all_elements( tBGElements );
 
         for ( uint Ib = 0; Ib < tBGElements.size(); Ib++ )
         {
-            auto tHMRId_2 = tBGElements( Ib )->get_hmr_id();
+            luint tHMRId_2 = tBGElements( Ib )->get_hmr_id();
 
             tMap[ tHMRId_2 ] = Ib;
         }
