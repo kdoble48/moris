@@ -100,7 +100,12 @@ Linear_Solver_ML::solve_linear_system(
     ML_Set_MaxIterations(tMLObject, mParameterList.get<sint>("Max_Iter"));
     ML_Iterate(tMLObject, (*tLHSepetra)[0], (*tRHSepetra)[0]);
 
-    return 0; 
+    // ML_Iterate always returns 0: judge convergence by the true relative residual ||b - A x|| / ||b|| (MB-101)
+    Matrix< DDRMat > tRelativeResidualNorm = mLinearSystem->compute_residual_of_linear_system();
+
+    MORIS_LOG_SPEC( "LinearResidualNorm", tRelativeResidualNorm( 0 ) );
+
+    return tRelativeResidualNorm( 0 ) <= mParameterList.get< real >( "Convergence_Tolerance" ) ? 0 : 1;
 }
 
 //----------------------------------------------------------------------------------------
