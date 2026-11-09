@@ -254,11 +254,23 @@ namespace moris::xtk
         // ----------------------------------------------------------------------------------
 
         /**
-         * @brief construct cell aggregation method
+         * @brief construct cell aggregation method: give every SPG without a root the root of its nearest neighbour that has one
          *
+         * The search stops when every SPG has a root, when a pass finds no new root on any processor, or after a fixed
+         * number of passes. SPGs that are still without a root keep gNoID. Collective in parallel.
+         *
+         * @return number of search passes
          */
-        void
+        uint
         construct_cell_aggregates( moris_index aMeshIndex );
+
+        // ----------------------------------------------------------------------------------
+
+        /**
+         * @brief count the SPGs owned by this processor that have no root SPG (local count)
+         */
+        uint
+        count_owned_spgs_without_root( moris_index aMeshIndex );
 
         // ----------------------------------------------------------------------------------
 
