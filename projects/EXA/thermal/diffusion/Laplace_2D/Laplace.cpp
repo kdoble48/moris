@@ -1172,8 +1172,9 @@ namespace moris
                 // Allowable Aztec solver iterations
                 aParameterLists.set( "AZ_max_iter", 500 );
 
-                // Allowable Aztec iterative residual
-                aParameterLists.set( "rel_residual", 1e-16 );
+                // Allowable Aztec iterative residual: 1e-16 is below round-off, so Aztec reported a loss of
+                // precision (status -3) for a solve converged to machine accuracy; 1e-14 keeps the same iterates
+                aParameterLists.set( "rel_residual", 1e-14 );
 
                 // set Az_conv -convergence criteria
                 // options are AZ_r0, AZ_rhs, AZ_Anorm, AZ_noscaled, AZ_sol
