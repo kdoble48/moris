@@ -33,9 +33,10 @@ namespace moris
         class Preconditioner_PETSc : public Preconditioner
         {
           private:
-            PC                mpc;
+            PC mpc;
+
+            // block inverse applied by the "mat" preconditioner; owned here, replaced on every build
             sol::Dist_Matrix* mPreconMat = nullptr;
-            sol::Dist_Map*    mMapFree   = nullptr;
 
             dla::Geometric_Multigrid* mGeoMultigrid = nullptr;
 
@@ -50,6 +51,19 @@ namespace moris
              */
             Preconditioner_PETSc(
                     const Parameter_List& aParameterlist );
+
+            //-----------------------------------------------------------------------------------
+
+            /**
+             * Destructor: releases the block inverse of the "mat" preconditioner
+             */
+            ~Preconditioner_PETSc() override;
+
+            //-----------------------------------------------------------------------------------
+
+            // the block inverse is owned by this object
+            Preconditioner_PETSc( const Preconditioner_PETSc& )            = delete;
+            Preconditioner_PETSc& operator=( const Preconditioner_PETSc& ) = delete;
 
             //-----------------------------------------------------------------------------------
 

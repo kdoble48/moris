@@ -35,6 +35,14 @@ Preconditioner_PETSc::Preconditioner_PETSc(
 
 //----------------------------------------------------------------------------------------
 
+Preconditioner_PETSc::~Preconditioner_PETSc()
+{
+    delete mPreconMat;
+    mPreconMat = nullptr;
+}
+
+//----------------------------------------------------------------------------------------
+
 void Preconditioner_PETSc::build_ilu_preconditioner( Linear_Problem *aLinearSystem )
 {
     // check for serail run; this preconditioner does not work in parallel
@@ -497,12 +505,11 @@ void Preconditioner_PETSc::build_schwarz_preconditioner( Linear_Problem *aLinear
 
     sol::Matrix_Vector_Factory tMatFactory( sol::MapType::Petsc );
 
-    mMapFree = tMatFactory.create_map(
-            aLinearSystem->get_solver_input()->get_my_local_global_map(),
-            aLinearSystem->get_solver_input()->get_constrained_Ids() );
+    // release the block inverse of the previous build; a KSP that still uses it keeps its own reference
+    delete mPreconMat;
 
-    // Build matrix
-    mPreconMat = tMatFactory.create_matrix( aLinearSystem->get_solver_input(), mMapFree );
+    // build the block inverse on the row layout of the system matrix, which the PC requires of its Pmat
+    mPreconMat = tMatFactory.create_matrix( aLinearSystem->get_solver_input(), aLinearSystem->get_matrix()->get_map() );
 
     for ( uint Ik = 0; Ik < tCriteriaIds.size(); Ik++ )
     {
@@ -515,7 +522,8 @@ void Preconditioner_PETSc::build_schwarz_preconditioner( Linear_Problem *aLinear
 
         if ( tValues.numel() == 1 )
         {
-            tValuesInv = { { 1.0 / std::sqrt( std::abs( tValues( 0 ) ) ) } };
+            // inverse of a one-dof block; an empty row (zero diagonal) gets the identity
+            tValuesInv = { { tValues( 0 ) == 0.0 ? 1.0 : 1.0 / tValues( 0 ) } };
         }
         else
         {
@@ -529,6 +537,12 @@ void Preconditioner_PETSc::build_schwarz_preconditioner( Linear_Problem *aLinear
     }
 
     mPreconMat->matrix_global_assembly();
+
+    // PCMAT applies the PC's Pmat: make the block inverse the Pmat, keeping the system matrix as Amat (MB-103)
+    PCSetOperators(
+            mpc,
+            aLinearSystem->get_matrix()->get_petsc_matrix(),
+            mPreconMat->get_petsc_matrix() );
 }
 
 //----------------------------------------------------------------------------------------

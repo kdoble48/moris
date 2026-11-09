@@ -145,37 +145,42 @@ namespace moris::prm
 
         aParameterlist.insert( "schwarz: reordering type", "rcm" );
 
-        // Sparskit parameters
-        aParameterlist.insert( "fact: sparskit: lfil", 0.0 );
+        // Sparskit parameters: types and values as in Ifpack_SPARSKIT (fill and block size are integers)
+        aParameterlist.insert( "fact: sparskit: lfil", 0 );
 
         aParameterlist.insert( "fact: sparskit: tol", 0.0 );
 
         aParameterlist.insert( "fact: sparskit: droptol", 0.0 );
 
-        aParameterlist.insert( "fact: sparskit: permtol", 0.0 );
+        aParameterlist.insert( "fact: sparskit: permtol", 0.1 );
 
         aParameterlist.insert( "fact: sparskit: alph", 0.0 );
 
-        aParameterlist.insert( "fact: sparskit: mbloc", 0.0 );
+        // -1: permute within the whole matrix
+        aParameterlist.insert( "fact: sparskit: mbloc", -1 );
 
-        aParameterlist.insert( "fact: sparskit: type", "" );
+        // ILUT, ILUTP, ILUD, ILUDP, ILUK, ILU0
+        aParameterlist.insert( "fact: sparskit: type", "ILUT" );
 
-        // Krylov parameters
-        aParameterlist.insert( "krylov: iterations", 0 );
+        // Krylov parameters: types and values as in Ifpack_Krylov, except one relaxation sweep (Ifpack's 0 sweeps
+        // makes the inner Jacobi preconditioner zero)
+        aParameterlist.insert( "krylov: iterations", 5 );
 
-        aParameterlist.insert( "krylov: tolerance", 0.0 );
+        aParameterlist.insert( "krylov: tolerance", 1e-6 );
 
-        aParameterlist.insert( "krylov: solver", 0 );
+        // 0: CG, 1: GMRES
+        aParameterlist.insert( "krylov: solver", 1 );
 
-        aParameterlist.insert( "krylov: preconditioner", 0 );
+        // 0: none, 1: Jacobi, 2: Gauss-Seidel, 3: symmetric Gauss-Seidel
+        aParameterlist.insert( "krylov: preconditioner", 1 );
 
-        aParameterlist.insert( "krylov: number of sweeps", 0 );
+        aParameterlist.insert( "krylov: number of sweeps", 1 );
 
-        aParameterlist.insert( "krylov: block size", 0 );
+        aParameterlist.insert( "krylov: block size", 1 );
 
-        aParameterlist.insert( "krylov: damping parameter", 0.0 );
+        aParameterlist.insert( "krylov: damping parameter", 1.0 );
 
-        aParameterlist.insert( "krylov: zero starting solution", 0 );
+        aParameterlist.insert( "krylov: zero starting solution", true );
 
         // Reuse of preconditioner
         aParameterlist.insert( "prec_reuse", false );

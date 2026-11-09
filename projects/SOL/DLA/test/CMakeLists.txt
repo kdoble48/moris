@@ -19,6 +19,7 @@ set(TEST_SOURCES
     UT_convert_epetra_to_matrix.cpp
     cl_Sparse_Matrix_Test.cpp
     cl_DLA_Multigrid_Test.cpp
+    cl_DLA_Preconditioner_Test.cpp
     DLA_Test_Proxy/cl_Solver_Interface_Proxy.cpp
     map.mtx
     matrix.mtx
