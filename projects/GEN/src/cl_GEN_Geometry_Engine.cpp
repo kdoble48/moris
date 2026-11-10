@@ -19,6 +19,7 @@
 
 // GEN
 #include "cl_GEN_Geometry_Engine.hpp"
+#include "cl_GEN_Level_Set_Geometry.hpp"
 #include "GEN_Data_Types.hpp"
 #include "cl_GEN_Design_Factory.hpp"
 #include "cl_GEN_BSpline_Field.hpp"
@@ -649,6 +650,32 @@ namespace moris::gen
     Geometry_Engine::can_change_region_inside_cell( uint aGeometryIndex )
     {
         return mGeometries( aGeometryIndex )->can_change_region_inside_cell();
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    uint
+    Geometry_Engine::get_feature_refinement_samples( uint aGeometryIndex )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        return tLevelSet ? tLevelSet->get_feature_refinement_samples() : 0;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    Cell_Feature_Report
+    Geometry_Engine::detect_cell_features(
+            uint                    aGeometryIndex,
+            const Matrix< DDRMat >& aCorners,
+            uint                    aLagrangeOrder,
+            uint                    aSamples )
+    {
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        if ( not tLevelSet or not tLevelSet->can_change_region_inside_cell() )
+        {
+            return {};
+        }
+        return tLevelSet->detect_cell_features( aCorners, aLagrangeOrder, aSamples );
     }
 
     //--------------------------------------------------------------------------------------------------------------

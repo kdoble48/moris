@@ -17,6 +17,7 @@
 #include "cl_HMR_Factory.hpp" //HMR/src
 #include "cl_HMR_Field.hpp"
 #include "cl_HMR_Lagrange_Mesh_Base.hpp" //HMR/src
+#include "cl_HMR_Lagrange_Mesh.hpp"      //HMR/src
 #include "cl_HMR_Parameters.hpp" //HMR/src
 #include "cl_HMR_Mesh.hpp"
 #include "cl_HMR_Mesh_Interpolation.hpp"
@@ -1509,6 +1510,75 @@ namespace moris::hmr
             {
                 REQUIRE( tCells_3( Ik )->get_index() == tRef_3( Ik ) );
             }
+        }
+    }
+
+    //-------------------------------------------------------------------------------
+
+    namespace
+    {
+        /**
+         * Lagrange mesh that exposes Mesh_Base::get_reference_element_of_basis() to the test
+         */
+        class Lagrange_Mesh_Reference_Element_Test : public Lagrange_Mesh< 2, 1 >
+        {
+          public:
+            using Lagrange_Mesh< 2, 1 >::Lagrange_Mesh;
+            using Mesh_Base::get_reference_element_of_basis;
+        };
+    }    // namespace
+
+    //-------------------------------------------------------------------------------
+
+    // MB-105: get_reference_element_of_basis() stored the 64-bit basis id in a 32-bit uint. Above 2^32 no basis of the
+    // reference element matched and the not-found index (number of bases per element) was returned.
+    TEST_CASE( "HMR reference element of a basis with a 64-bit id", "[moris],[mesh],[hmr],[hmr_lagrange_mesh],[hmr_large_basis_id]" )
+    {
+        if ( par_size() == 1 )
+        {
+            Parameters* tParameters = new Parameters;
+            tParameters->set_number_of_elements_per_dimension( 3, 3 );
+            tParameters->set_refinement_buffer( 0 );
+            tParameters->set_staircase_buffer( 1 );
+
+            Factory               tFactory( tParameters );
+            Background_Mesh_Base* tBackgroundMesh = tFactory.create_background_mesh();
+
+            Vector< BSpline_Mesh_Base* >          tBSplineMeshes;
+            Lagrange_Mesh_Reference_Element_Test* tMesh = new Lagrange_Mesh_Reference_Element_Test(
+                    tParameters,
+                    tBackgroundMesh,
+                    tBSplineMeshes,
+                    0,
+                    0 );
+
+            luint tNumberOfNodes = tMesh->get_number_of_all_basis_on_proc();
+            REQUIRE( tNumberOfNodes == 16 );
+
+            // move every node id above 2^32, keeping the ids unique
+            luint tOffset = luint( 1 ) << 32;
+            for ( luint iNode = 0; iNode < tNumberOfNodes; iNode++ )
+            {
+                Basis* tNode = tMesh->get_basis_by_memory_index( iNode );
+                tNode->set_domain_id( tNode->get_hmr_id() + tOffset );
+            }
+
+            // every node is found in its reference element
+            for ( luint iNode = 0; iNode < tNumberOfNodes; iNode++ )
+            {
+                Basis* tNode = tMesh->get_basis_by_memory_index( iNode );
+
+                luint tElementMemoryIndex     = 0;
+                uint  tElementLocalBasisIndex = 0;
+                tMesh->get_reference_element_of_basis( tNode, tElementMemoryIndex, tElementLocalBasisIndex );
+
+                REQUIRE( tElementLocalBasisIndex < tMesh->get_number_of_bases_per_element() );
+                CHECK( tMesh->get_element_by_memory_index( tElementMemoryIndex )->get_basis( tElementLocalBasisIndex ) == tNode );
+            }
+
+            delete tMesh;
+            delete tBackgroundMesh;
+            delete tParameters;
         }
     }
 }

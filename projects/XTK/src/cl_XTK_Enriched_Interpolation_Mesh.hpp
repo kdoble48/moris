@@ -276,7 +276,22 @@ namespace moris::xtk
         get_enriched_interpolation_cells();
 
         //------------------------------------------------------------------------------
-        
+
+        /**
+         * @brief Allocates a contiguous range of new entity ids on every processor (collective)
+         *
+         * @param aNumReqs number of ids requested by this processor
+         * @param aEntityRank node or element
+         * @param aStartFresh true: ids start at 1; false: ids start after the largest id in use (get_max_entity_id())
+         * @return first id of this processor's range
+         */
+        moris_id allocate_entity_ids(
+                moris::size_t   aNumReqs,
+                mtk::EntityRank aEntityRank,
+                bool            aStartFresh );
+
+        //------------------------------------------------------------------------------
+
         /**
          * @brief Using a background vertex id, and a enriched interpolation cell id
          * find the corresponding enriched interpolation vertex
@@ -645,15 +660,6 @@ namespace moris::xtk
 
         // not owned vertex functions
         void setup_not_owned_vertices();
-
-        //------------------------------------------------------------------------------
-        // Parallel functions
-        //------------------------------------------------------------------------------
-
-        moris_id allocate_entity_ids(
-                moris::size_t   aNumReqs,
-                mtk::EntityRank aEntityRank,
-                bool            aStartFresh );
 
         //------------------------------------------------------------------------------
         //------------------------------------------------------------------------------
