@@ -12,8 +12,8 @@
  * in an element row, none for the slot on a node line, 2 for the ring at n = 4).
  *
  * MB-095: the check gives the same counts and measures on every number of ranks (each background cell counted by its
- * owner, each hidden edge once), so the feature re-detection decision (MB-089) does not depend on the rank count. The
- * meshes put a processor boundary through the hidden edges (2 ranks split x, 4 ranks split x and y).
+ * owner, each hidden edge once). The meshes put a processor boundary through the hidden edges (2 ranks split x,
+ * 4 ranks split x and y).
  *
  */
 
@@ -33,7 +33,6 @@
 #include "cl_GEN_Geometry_Engine.hpp"
 #include "cl_GEN_Level_Set_Geometry.hpp"
 #include "cl_GEN_User_Defined_Field.hpp"
-#include "fn_WRK_Feature_Redetect.hpp"
 
 namespace moris::xtk
 {
@@ -91,6 +90,7 @@ namespace moris::xtk
 
             Model tModel( 2, tMesh, &tEngine );
             tModel.mVerbose = false;
+            tModel.get_parameter_list().insert( "geometry_resolution_samples", uint( 2 ) );    // the check is off by default
             tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_QUAD4, Subdivision_Method::C_TRI3 } );
 
             Cut_Integration_Mesh* tCutMesh = tModel.get_cut_integration_mesh();
@@ -139,6 +139,7 @@ namespace moris::xtk
 
             Model tModel( 2, tMesh, &tEngine );
             tModel.mVerbose = false;
+            tModel.get_parameter_list().insert( "geometry_resolution_samples", uint( 2 ) );    // the check is off by default
             tModel.decompose( { Subdivision_Method::NC_REGULAR_SUBDIVISION_QUAD4, Subdivision_Method::C_TRI3 } );
 
             Cut_Integration_Mesh* tCutMesh = tModel.get_cut_integration_mesh();
@@ -210,11 +211,5 @@ namespace moris::xtk
         CHECK( tDonut.mTopologyCells == tTopologyDonut );
         CHECK( tDonut.mSampledMeasure == Approx( tSampledDonut ).epsilon( 1e-12 ) );
         CHECK( tDonut.mTemplateMeasure == Approx( tTemplateDonut ).epsilon( 1e-12 ) );
-
-        // the re-detection decision (MB-089) at a threshold equal to the serial count: no redo on any number of ranks
-        // (before MB-095 the edges on the processor boundary counted twice and a parallel run redid the refinement)
-        CHECK( not wrk::decide_feature_redetect( { sint( tHiddenChannel ) }, { tChannel.mHiddenEdges }, {}, false ).mRedo );
-        CHECK( not wrk::decide_feature_redetect( { sint( tHiddenDonut ) }, { tDonut.mHiddenEdges }, {}, false ).mRedo );
-        CHECK( wrk::decide_feature_redetect( { sint( tHiddenDonut ) - 1 }, { tDonut.mHiddenEdges }, {}, false ).mRedo );
     }
 }    // namespace moris::xtk

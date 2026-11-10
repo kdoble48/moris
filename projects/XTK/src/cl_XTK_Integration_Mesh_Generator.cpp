@@ -662,7 +662,7 @@ namespace moris::xtk
 
         // MB-084: resolution check of analytic geometries on a sub-cell lattice
         const Parameter_List* tXTKParameters      = &mXTKModel->get_parameter_list();
-        uint                  tResolutionSamples  = tXTKParameters->exists( "geometry_resolution_samples" ) ? tXTKParameters->get< uint >( "geometry_resolution_samples" ) : 4;
+        uint                  tResolutionSamples  = tXTKParameters->exists( "geometry_resolution_samples" ) ? tXTKParameters->get< uint >( "geometry_resolution_samples" ) : 0;
         bool                  tResolutionError    = tXTKParameters->exists( "geometry_resolution_error" ) and tXTKParameters->get< bool >( "geometry_resolution_error" );
         Vector< bool >        tCheckGeometry( tNumGeometries, false );
         bool                  tCheckResolution    = false;
