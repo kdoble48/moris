@@ -17,14 +17,38 @@
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 
 #include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_Communication_Tools.hpp"
+#include "HDF5_Tools.hpp"
 #include "cl_Logger.hpp"
 #include "cl_Tracer.hpp"
 
 namespace moris::opt
 {
+    //------------------------------------------------------------------------------
+
+    namespace
+    {
+        /** integers separated by commas or whitespace (restart_state_row_map); aWhat names the source in errors */
+        std::vector< sint >
+        parse_row_map( std::string aText, const std::string& aWhat )
+        {
+            std::replace( aText.begin(), aText.end(), ',', ' ' );
+            std::istringstream  tStream( aText );
+            std::vector< sint > tMap;
+            sint                tIndex = 0;
+            while ( tStream >> tIndex )
+            {
+                tMap.push_back( tIndex );
+            }
+            MORIS_ERROR( tStream.eof(), "Native MMA: the row map in %s holds a non-integer entry.", aWhat.c_str() );
+            return tMap;
+        }
+    }    // namespace
+
     //------------------------------------------------------------------------------
 
     Algorithm_MMA::Algorithm_MMA( const Parameter_List& aParameterList )
@@ -84,6 +108,37 @@ namespace moris::opt
                 mReinitHook && mReinitOnAcceptOnly ? ", redistance on accepted iterates only" : "",
                 mDebugInnerTrials ? ", inner-trial diagnostics ON" : "" );
         MORIS_ERROR( !mReinitOnAcceptOnly || mReinitHook, "Native MMA: reinit_on_accept_only needs reinit_in_place = true." );
+
+        // warm restart: keep the optimizer state across restarts (restart_keep_state)
+        mKeepState     = aParameterList.get< bool >( "restart_keep_state" );
+        mMovedFraction = aParameterList.get< real >( "restart_keep_state_moved_fraction" );
+        mStateFile     = aParameterList.get< std::string >( "restart_state_file" );
+
+        const std::string tRowMap     = aParameterList.get< std::string >( "restart_state_row_map" );
+        const std::string tRowMapFile = aParameterList.get< std::string >( "restart_state_row_map_file" );
+        MORIS_ERROR( tRowMap.empty() || tRowMapFile.empty(),
+                "Native MMA: set restart_state_row_map or restart_state_row_map_file, not both." );
+        if ( !tRowMap.empty() )
+        {
+            mStateRowMap = parse_row_map( tRowMap, "restart_state_row_map" );
+        }
+        if ( !tRowMapFile.empty() )
+        {
+            std::ifstream tFile( tRowMapFile );
+            MORIS_ERROR( tFile.good(), "Native MMA: cannot read restart_state_row_map_file '%s'.", tRowMapFile.c_str() );
+            std::stringstream tContent;
+            tContent << tFile.rdbuf();
+            mStateRowMap = parse_row_map( tContent.str(), tRowMapFile );
+        }
+        MORIS_ERROR( mKeepState || mStateFile.empty(), "Native MMA: restart_state_file needs restart_keep_state = true." );
+        MORIS_ERROR( !mStateFile.empty() || mStateRowMap.empty(), "Native MMA: restart_state_row_map needs restart_state_file." );
+        if ( mKeepState )
+        {
+            MORIS_LOG_INFO( "Native MMA: restarts keep the optimizer state (restart_keep_state; moved fraction %.3g%s%s)",
+                    mMovedFraction,
+                    mStateFile.empty() ? "" : ", initial state from ",
+                    mStateFile.c_str() );
+        }
     }
 
     //------------------------------------------------------------------------------
@@ -163,6 +218,7 @@ namespace moris::opt
         // Capture the index first: compute_design_criteria() advances the optimization iteration (MB-021)
         const uint tOptIter = gLogger.get_opt_iteration();
         this->write_advs_to_file( tADVs, tOptIter );
+        mLastFuncOptIter = tOptIter;
 
         this->compute_design_criteria( tADVs );
 
@@ -222,8 +278,9 @@ namespace moris::opt
                     tNewScale, tRawMax );
             f0val    *= tNewScale / mObjScale;
             // in-place redistance mode: keep the conservatism weight consistent with the objective's scale,
-            // so a scale change does not jump the approximation's curvature (raa0 is in objective units)
-            if ( mReinitHook )
+            // so a scale change does not jump the approximation's curvature (raa0 is in objective units); likewise
+            // for the raa0 a warm solve kept from before the restart
+            if ( mReinitHook || mWarmSolve )
             {
                 raa0 *= tNewScale / mObjScale;
             }
@@ -558,8 +615,40 @@ namespace moris::opt
     //------------------------------------------------------------------------------
 
     void
-    Algorithm_MMA::asymp( int iter )
+    Algorithm_MMA::history_asymptote( double aX, double aXOld1, double aXOld2, double aLow, double aUpp, double aXMin, double aXMax, double aShrink, double aExpand, double& aLowOut, double& aUppOut )
     {
+        double factor = 1.0;
+        double xxx    = ( aX - aXOld1 ) * ( aXOld1 - aXOld2 );
+
+        if ( xxx > 0 ) factor = aExpand;
+        if ( xxx < 0 ) factor = aShrink;
+
+        double tLow = aX - factor * ( aXOld1 - aLow );
+        double tUpp = aX + factor * ( aUpp - aXOld1 );
+
+        double lowmin = aX - 10.0 * ( aXMax - aXMin );
+        double lowmax = aX - 0.01 * ( aXMax - aXMin );
+        double uppmin = aX + 0.01 * ( aXMax - aXMin );
+        double uppmax = aX + 10.0 * ( aXMax - aXMin );
+
+        tLow = mx( tLow, lowmin );
+        tLow = mn( tLow, lowmax );
+        tUpp = mn( tUpp, uppmax );
+        tUpp = mx( tUpp, uppmin );
+
+        aLowOut = tLow;
+        aUppOut = tUpp;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Algorithm_MMA::asymp( int aIter )
+    {
+        // warm solve (restart_keep_state): the kept asymptotes continue their history from the first iteration (with
+        // xold1 = xold2 = x the factor is 1, so the kept widths are used as they are), and raa0/raa keep shrinking
+        const int iter = mWarmSolve ? aIter + 2 : aIter;
+
         if ( iter > 1.5 )
         {
             raa0 = mx( raa0eps, 0.1 * raa0 );
@@ -578,24 +667,7 @@ namespace moris::opt
         {
             for ( int i = 0; i < mNumVar; ++i )
             {
-                double factor = 1.0;
-                double xxx    = ( xval[ i ] - xold1[ i ] ) * ( xold1[ i ] - xold2[ i ] );
-
-                if ( xxx > 0 ) factor = mAsympExpand;
-                if ( xxx < 0 ) factor = mAsympShrink;
-
-                low[ i ] = xval[ i ] - factor * ( xold1[ i ] - low[ i ] );
-                upp[ i ] = xval[ i ] + factor * ( upp[ i ] - xold1[ i ] );
-
-                double lowmin = xval[ i ] - 10.0 * ( xmax[ i ] - xmin[ i ] );
-                double lowmax = xval[ i ] - 0.01 * ( xmax[ i ] - xmin[ i ] );
-                double uppmin = xval[ i ] + 0.01 * ( xmax[ i ] - xmin[ i ] );
-                double uppmax = xval[ i ] + 10.0 * ( xmax[ i ] - xmin[ i ] );
-
-                low[ i ] = mx( low[ i ], lowmin );
-                low[ i ] = mn( low[ i ], lowmax );
-                upp[ i ] = mn( upp[ i ], uppmax );
-                upp[ i ] = mx( upp[ i ], uppmin );
+                history_asymptote( xval[ i ], xold1[ i ], xold2[ i ], low[ i ], upp[ i ], xmin[ i ], xmax[ i ], mAsympShrink, mAsympExpand, low[ i ], upp[ i ] );
             }
         }
 
@@ -615,7 +687,12 @@ namespace moris::opt
             }
             mNumLocked = tLocked;
             MORIS_LOG_INFO( "MMA asymptote spread iter %d: min=%.4f mean=%.4f max=%.4f | %d/%d vars at floor (locked)",
-                    iter, tMinSp, tSumSp / (real)mNumVar, tMaxSp, tLocked, mNumVar );
+                    aIter,
+                    tMinSp,
+                    tSumSp / (real)mNumVar,
+                    tMaxSp,
+                    tLocked,
+                    mNumVar );
         }
     }
 
@@ -1177,9 +1254,6 @@ namespace moris::opt
     {
         this->mma_initialize();
 
-        // fresh solve (possibly after a restart): objective scale re-derives from the first grad()
-        mObjScale = 1.0;
-
         int iter  = 0;
         int istop = 0;
         int nfunc = 0;
@@ -1195,6 +1269,15 @@ namespace moris::opt
         }
         MORIS_ERROR( error1 == 0, "Native MMA: upper and lower bounds of some variables are numerically identical." );
         MORIS_ERROR( error2 == 0, "Native MMA: upper bound is smaller or equal to lower bound for some variables." );
+
+        // restart_keep_state: continue from the kept state (re-centred on the design the problem provides). Otherwise a
+        // fresh solve (possibly after a restart): the objective scale re-derives from the first grad()
+        mWarmSolve = mKeepState && this->begin_warm_solve();
+        if ( !mWarmSolve )
+        {
+            mObjScale = 1.0;
+            mKKTRef   = -1.0;
+        }
 
         // the suppression flag lives in the shared interface: never leave it set when this solve returns (restart, end)
         struct Reinit_Suppression_Reset
@@ -1230,29 +1313,30 @@ namespace moris::opt
         this->grad( xval.data() );
         nfunc++; nsens++;
 
-        // initialize raa0 and raa
-        if ( mMaxInnerIter )
+        // initialize raa0, raa and the constraint penalties c_j (a warm solve keeps them from the kept state)
+        if ( !mWarmSolve )
         {
-            raa0 = 1.0;
-            for ( int j = 0; j < mNumCon; ++j ) raa[ j ] = 1.0;
-        }
-        else
-        {
-            raa0 = 1.0e-5;
-            for ( int j = 0; j < mNumCon; ++j ) raa[ j ] = 1.0e-5;
-        }
-        double sclraa = 0.1 / mNumVar;
-        for ( int i = 0; i < mNumVar; ++i )
-        {
-            raa0 += sclraa * std::abs( df0dx[ i ] ) / ( xmax[ i ] - xmin[ i ] );
-            for ( int j = 0; j < mNumCon; ++j ) raa[ j ] += sclraa * std::abs( dfdx[ j ][ i ] ) / ( xmax[ i ] - xmin[ i ] );
-        }
+            if ( mMaxInnerIter )
+            {
+                raa0 = 1.0;
+                for ( int j = 0; j < mNumCon; ++j ) raa[ j ] = 1.0;
+            }
+            else
+            {
+                raa0 = 1.0e-5;
+                for ( int j = 0; j < mNumCon; ++j ) raa[ j ] = 1.0e-5;
+            }
+            double sclraa = 0.1 / mNumVar;
+            for ( int i = 0; i < mNumVar; ++i )
+            {
+                raa0 += sclraa * std::abs( df0dx[ i ] ) / ( xmax[ i ] - xmin[ i ] );
+                for ( int j = 0; j < mNumCon; ++j ) raa[ j ] += sclraa * std::abs( dfdx[ j ][ i ] ) / ( xmax[ i ] - xmin[ i ] );
+            }
 
-        // constraint penalty c_j
-        double penFac = ( mPenalty < 0 ) ? std::abs( f0val ) : mPenalty;
-        for ( int j = 0; j < mNumCon; ++j ) c[ j ] = penFac;
-
-        real tKKTrefres = -1.0;
+            // constraint penalty c_j
+            double penFac = ( mPenalty < 0 ) ? std::abs( f0val ) : mPenalty;
+            for ( int j = 0; j < mNumCon; ++j ) c[ j ] = penFac;
+        }
 
         while ( iter < mMaxIterations && istop == 0 )
         {
@@ -1526,9 +1610,321 @@ namespace moris::opt
                 }
             }
 
-            istop = this->kktcheck( tKKTrefres );
+            istop = this->kktcheck( mKKTRef );
+
+            // restart_keep_state: the state a restart from this committed design continues with, in memory and next to
+            // the design's ADV file (same iteration index)
+            if ( mKeepState )
+            {
+                mKeptState = this->capture_restart_state();
+                write_restart_state( restart_state_file_name( mCurrentOptAlgInd, mLastFuncOptIter ), mKeptState, mLastFuncOptIter );
+            }
         }
 
         return ( iter < mMaxIterations ) ? 0 : 1;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Algorithm_MMA::Restart_State
+    Algorithm_MMA::capture_restart_state()
+    {
+        // called after a completed outer iteration: xval is the committed design, low/upp are the asymptotes of this
+        // iteration (centred on xold1). The kept widths are those of the next iteration's asymptotes, i.e. what asymp()
+        // will compute for xval, so a restart from xval continues exactly where the next iteration would have started
+        Restart_State tState;
+        tState.mValid  = true;
+        tState.mCentre = xval;
+        tState.mLowWidth.resize( mNumVar );
+        tState.mUppWidth.resize( mNumVar );
+        tState.mMoveStep.resize( mNumVar );
+        for ( int i = 0; i < mNumVar; ++i )
+        {
+            double tLow = 0.0;
+            double tUpp = 0.0;
+            history_asymptote( xval[ i ], xold1[ i ], xold2[ i ], low[ i ], upp[ i ], xmin[ i ], xmax[ i ], mAsympShrink, mAsympExpand, tLow, tUpp );
+            tState.mLowWidth[ i ] = xval[ i ] - tLow;
+            tState.mUppWidth[ i ] = tUpp - xval[ i ];
+            tState.mMoveStep[ i ] = mMove[ i ] * ( xmax[ i ] - xmin[ i ] );
+        }
+        tState.mLowerBounds = xmin;
+        tState.mUpperBounds = xmax;
+        tState.mRaa         = raa;
+        tState.mPenalty     = c;
+        tState.mRaa0        = raa0;
+        tState.mObjScale    = mObjScale;
+        tState.mKKTRef      = mKKTRef;
+        return tState;
+    }
+
+    //------------------------------------------------------------------------------
+
+    bool
+    Algorithm_MMA::begin_warm_solve()
+    {
+        // the first solve of a run starts from the state file of a previous run, if one is given
+        std::vector< sint > tRowMap;
+        bool                tFromFile = false;
+        if ( !mStateFileRead )
+        {
+            mStateFileRead = true;
+            if ( !mStateFile.empty() )
+            {
+                mKeptState = read_restart_state( mStateFile );
+                tRowMap    = mStateRowMap;
+                tFromFile  = true;
+                MORIS_ERROR( tRowMap.empty() ? (int)mKeptState.mCentre.size() == mNumVar : (int)tRowMap.size() == mNumVar,
+                        "Native MMA: restart_state_file '%s' holds %zu ADVs and the row map %zu entries; the problem has %d ADVs "
+                        "(without a row map the numbers must agree).",
+                        mStateFile.c_str(),
+                        mKeptState.mCentre.size(),
+                        tRowMap.size(),
+                        mNumVar );
+                MORIS_ERROR( (int)mKeptState.mRaa.size() == mNumCon,
+                        "Native MMA: restart_state_file '%s' holds %zu constraints, the problem has %d.",
+                        mStateFile.c_str(),
+                        mKeptState.mRaa.size(),
+                        mNumCon );
+            }
+        }
+
+        // no state yet: the first solve, or a restart before the first completed iteration of the run
+        if ( !mKeptState.mValid )
+        {
+            return false;
+        }
+
+        // an in-process restart that changed the number of ADVs (e.g. a remeshed B-spline design) has no map to the kept
+        // state, nor one that changed the number of constraints
+        if ( ( tRowMap.empty() && (int)mKeptState.mCentre.size() != mNumVar ) || (int)mKeptState.mRaa.size() != mNumCon )
+        {
+            MORIS_LOG_WARNING(
+                    "Native MMA: restart_keep_state: the restarted problem has %d ADVs and %d constraints, the kept "
+                    "state %zu and %zu; restarting with a fresh optimizer state.",
+                    mNumVar,
+                    mNumCon,
+                    mKeptState.mCentre.size(),
+                    mKeptState.mRaa.size() );
+            mKeptState = Restart_State();
+            return false;
+        }
+
+        const real tFreshMove = mMoveAdapt ? mn( mx( mMoveInit, mMoveMin ), mMoveMax ) : mStepSize;
+
+        mWarmStartCounts = apply_restart_state( mKeptState, tRowMap, xval, xmin, xmax, mMovedFraction, mAsympAdapt0, mMoveAdapt, tFreshMove, mMoveMin, mMoveMax, low, upp, mMove );
+
+        raa0      = mKeptState.mRaa0;
+        raa       = mKeptState.mRaa;
+        c         = mKeptState.mPenalty;
+        mObjScale = mKeptState.mObjScale;
+        mKKTRef   = mKeptState.mKKTRef;
+
+        // xold1 = xold2 = x (mma_initialize): the first asymptote updates use the kept widths with factor 1. Until the
+        // next completed iteration, the kept state is the applied one, centred on this design
+        Restart_State tApplied;
+        tApplied.mValid  = true;
+        tApplied.mCentre = xval;
+        tApplied.mLowWidth.resize( mNumVar );
+        tApplied.mUppWidth.resize( mNumVar );
+        tApplied.mMoveStep.resize( mNumVar );
+        for ( int i = 0; i < mNumVar; ++i )
+        {
+            tApplied.mLowWidth[ i ] = xval[ i ] - low[ i ];
+            tApplied.mUppWidth[ i ] = upp[ i ] - xval[ i ];
+            tApplied.mMoveStep[ i ] = mMove[ i ] * ( xmax[ i ] - xmin[ i ] );
+        }
+        tApplied.mLowerBounds = xmin;
+        tApplied.mUpperBounds = xmax;
+        tApplied.mRaa         = raa;
+        tApplied.mPenalty     = c;
+        tApplied.mRaa0        = raa0;
+        tApplied.mObjScale    = mObjScale;
+        tApplied.mKKTRef      = mKKTRef;
+
+        mKeptState      = tApplied;
+        mWarmStartState = tApplied;
+        mNumWarmSolves++;
+
+        // one summary line: what was kept, and the kept move limits and asymptote spreads
+        std::vector< double > tSorted( mMove );
+        std::nth_element( tSorted.begin(), tSorted.begin() + mNumVar / 2, tSorted.end() );
+        real tMinSp = 1.0e30, tMaxSp = 0.0, tSumSp = 0.0;
+        for ( int i = 0; i < mNumVar; ++i )
+        {
+            real tSp = ( upp[ i ] - low[ i ] ) / ( xmax[ i ] - xmin[ i ] );
+            tMinSp   = mn( tMinSp, tSp );
+            tMaxSp   = mx( tMaxSp, tSp );
+            tSumSp += tSp;
+        }
+        MORIS_LOG_INFO(
+                "Native MMA: warm restart %d (%s): %d kept, %d moved (|dx| > %.3g range), %d fresh (row map) of %d ADVs | "
+                "move min=%.4e median=%.4e max=%.4e | asymptote spread min=%.4f mean=%.4f max=%.4f | raa0=%.4e "
+                "objective scale %.1e",
+                mNumWarmSolves,
+                tFromFile ? "from the state file" : "in-process",
+                mWarmStartCounts.mKept,
+                mWarmStartCounts.mMoved,
+                mMovedFraction,
+                mWarmStartCounts.mFresh,
+                mNumVar,
+                *std::min_element( mMove.begin(), mMove.end() ),
+                tSorted[ mNumVar / 2 ],
+                *std::max_element( mMove.begin(), mMove.end() ),
+                tMinSp,
+                tSumSp / (real)mNumVar,
+                tMaxSp,
+                raa0,
+                mObjScale );
+
+        return true;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Algorithm_MMA::Restart_Counts
+    Algorithm_MMA::apply_restart_state(
+            const Restart_State&         aState,
+            const std::vector< sint >&   aRowMap,
+            const std::vector< double >& aX,
+            const std::vector< double >& aXMin,
+            const std::vector< double >& aXMax,
+            real                         aMovedFraction,
+            real                         aAsympAdapt0,
+            bool                         aKeepMove,
+            real                         aFreshMove,
+            real                         aMoveMin,
+            real                         aMoveMax,
+            std::vector< double >&       aLow,
+            std::vector< double >&       aUpp,
+            std::vector< double >&       aMove )
+    {
+        const std::size_t tNumVar = aX.size();
+        const std::size_t tNumOld = aState.mCentre.size();
+        MORIS_ERROR( aRowMap.empty() ? tNumOld == tNumVar : aRowMap.size() == tNumVar,
+                "Native MMA: apply_restart_state() - %zu ADVs, %zu kept, row map of %zu entries.",
+                tNumVar,
+                tNumOld,
+                aRowMap.size() );
+
+        aLow.resize( tNumVar );
+        aUpp.resize( tNumVar );
+        if ( aKeepMove )
+        {
+            aMove.resize( tNumVar );
+        }
+
+        Restart_Counts tCounts;
+        for ( std::size_t i = 0; i < tNumVar; ++i )
+        {
+            const double tRange = aXMax[ i ] - aXMin[ i ];
+            const sint   tOld   = aRowMap.empty() ? (sint)i : aRowMap[ i ];
+            MORIS_ERROR( tOld >= -1 && tOld < (sint)tNumOld,
+                    "Native MMA: restart row map entry %d of ADV %zu is outside [-1, %zu).",
+                    (int)tOld,
+                    i,
+                    tNumOld );
+
+            const bool tFresh = tOld < 0;
+            const bool tMoved = !tFresh && aMovedFraction > 0.0
+                             && std::abs( aX[ i ] - aState.mCentre[ tOld ] ) > aMovedFraction * tRange;
+
+            if ( tFresh || tMoved )
+            {
+                // as a fresh solve: asymptotes at x -+ asymp_adapt0 * range, the initial move limit
+                aLow[ i ] = aX[ i ] - aAsympAdapt0 * tRange;
+                aUpp[ i ] = aX[ i ] + aAsympAdapt0 * tRange;
+                if ( aKeepMove )
+                {
+                    aMove[ i ] = aFreshMove;
+                }
+                if ( tFresh )
+                {
+                    tCounts.mFresh++;
+                }
+                else
+                {
+                    tCounts.mMoved++;
+                }
+            }
+            else
+            {
+                const double tLowWidth = mn( mx( aState.mLowWidth[ tOld ], 0.01 * tRange ), 10.0 * tRange );
+                const double tUppWidth = mn( mx( aState.mUppWidth[ tOld ], 0.01 * tRange ), 10.0 * tRange );
+                aLow[ i ]              = aX[ i ] - tLowWidth;
+                aUpp[ i ]              = aX[ i ] + tUppWidth;
+                if ( aKeepMove )
+                {
+                    aMove[ i ] = mn( mx( aState.mMoveStep[ tOld ] / tRange, aMoveMin ), aMoveMax );
+                }
+                tCounts.mKept++;
+            }
+        }
+        return tCounts;
+    }
+
+    //------------------------------------------------------------------------------
+
+    std::string
+    Algorithm_MMA::restart_state_file_name( uint aAlgIndex, uint aOptIter )
+    {
+        return "MMA_State_Alg_" + std::to_string( aAlgIndex ) + "_Iter_" + std::to_string( aOptIter ) + ".hdf5";
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Algorithm_MMA::write_restart_state( const std::string& aFileName, const Restart_State& aState, uint aOptIter )
+    {
+        hid_t  tFileID = create_hdf5_file( aFileName, false );
+        herr_t tStatus = 0;
+
+        save_vector_to_hdf5_file( tFileID, "Centre", aState.mCentre, tStatus );
+        save_vector_to_hdf5_file( tFileID, "LowWidth", aState.mLowWidth, tStatus );
+        save_vector_to_hdf5_file( tFileID, "UppWidth", aState.mUppWidth, tStatus );
+        save_vector_to_hdf5_file( tFileID, "MoveStep", aState.mMoveStep, tStatus );
+        save_vector_to_hdf5_file( tFileID, "LowerBounds", aState.mLowerBounds, tStatus );
+        save_vector_to_hdf5_file( tFileID, "UpperBounds", aState.mUpperBounds, tStatus );
+        save_vector_to_hdf5_file( tFileID, "Raa", aState.mRaa, tStatus );
+        save_vector_to_hdf5_file( tFileID, "Penalty", aState.mPenalty, tStatus );
+        save_scalar_to_hdf5_file( tFileID, "Raa0", aState.mRaa0, tStatus );
+        save_scalar_to_hdf5_file( tFileID, "ObjScale", aState.mObjScale, tStatus );
+        save_scalar_to_hdf5_file( tFileID, "KKTRef", aState.mKKTRef, tStatus );
+        save_scalar_to_hdf5_file( tFileID, "OptIteration", (sint)aOptIter, tStatus );
+
+        close_hdf5_file( tFileID );
+    }
+
+    //------------------------------------------------------------------------------
+
+    Algorithm_MMA::Restart_State
+    Algorithm_MMA::read_restart_state( const std::string& aFileName )
+    {
+        MORIS_LOG_INFO( "Native MMA: reading the optimizer state from %s", aFileName.c_str() );
+
+        hid_t  tFileID = open_hdf5_file( aFileName, false, true );
+        herr_t tStatus = 0;
+
+        Restart_State tState;
+        load_vector_from_hdf5_file( tFileID, "Centre", tState.mCentre, tStatus );
+        load_vector_from_hdf5_file( tFileID, "LowWidth", tState.mLowWidth, tStatus );
+        load_vector_from_hdf5_file( tFileID, "UppWidth", tState.mUppWidth, tStatus );
+        load_vector_from_hdf5_file( tFileID, "MoveStep", tState.mMoveStep, tStatus );
+        load_vector_from_hdf5_file( tFileID, "LowerBounds", tState.mLowerBounds, tStatus );
+        load_vector_from_hdf5_file( tFileID, "UpperBounds", tState.mUpperBounds, tStatus );
+        load_vector_from_hdf5_file( tFileID, "Raa", tState.mRaa, tStatus );
+        load_vector_from_hdf5_file( tFileID, "Penalty", tState.mPenalty, tStatus );
+        load_scalar_from_hdf5_file( tFileID, "Raa0", tState.mRaa0, tStatus );
+        load_scalar_from_hdf5_file( tFileID, "ObjScale", tState.mObjScale, tStatus );
+        load_scalar_from_hdf5_file( tFileID, "KKTRef", tState.mKKTRef, tStatus );
+
+        close_hdf5_file( tFileID );
+
+        const std::size_t tNumVar = tState.mCentre.size();
+        MORIS_ERROR( tState.mLowWidth.size() == tNumVar && tState.mUppWidth.size() == tNumVar && tState.mMoveStep.size() == tNumVar
+                             && tState.mPenalty.size() == tState.mRaa.size(),
+                "Native MMA: inconsistent optimizer state file %s.",
+                aFileName.c_str() );
+        tState.mValid = true;
+        return tState;
     }
 }    // namespace moris::opt
