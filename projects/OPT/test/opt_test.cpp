@@ -2148,7 +2148,9 @@ namespace moris::opt
 
     TEST_CASE( "Native MMA keeps its state across an in-process restart", "[optimization][restart_keep_state]" )
     {
-        if ( par_rank() != 0 )
+        // one processor only: the test drives solve() and its restarts on a single rank, without the other ranks'
+        // Algorithm::dummy_solve partner (MB-091)
+        if ( par_size() > 1 )
         {
             return;
         }
@@ -2232,7 +2234,9 @@ namespace moris::opt
 
     TEST_CASE( "Native MMA warm restart: key off is unchanged, and the restarted run converges", "[optimization][restart_keep_state]" )
     {
-        if ( par_rank() != 0 )
+        // one processor only: the test drives solve() and its restarts on a single rank, without the other ranks'
+        // Algorithm::dummy_solve partner (MB-091)
+        if ( par_size() > 1 )
         {
             return;
         }
@@ -2288,7 +2292,9 @@ namespace moris::opt
 
     TEST_CASE( "Native MMA restarts a new run from a state file with a row map", "[optimization][restart_keep_state]" )
     {
-        if ( par_rank() != 0 )
+        // one processor only: the test drives solve() and its restarts on a single rank, without the other ranks'
+        // Algorithm::dummy_solve partner (MB-091)
+        if ( par_size() > 1 )
         {
             return;
         }
@@ -2593,7 +2599,9 @@ namespace moris::opt
 
     TEST_CASE( "Native MMA oscillation shrink damps an interior limit cycle", "[optimization][move_adapt_oscillation]" )
     {
-        if ( par_rank() != 0 )
+        // one processor only: the test drives solve() and its restarts on a single rank, without the other ranks'
+        // Algorithm::dummy_solve partner (MB-091)
+        if ( par_size() > 1 )
         {
             return;
         }
@@ -2633,7 +2641,9 @@ namespace moris::opt
 
     TEST_CASE( "Native MMA oscillation shrink does not slow a monotone approach", "[optimization][move_adapt_oscillation]" )
     {
-        if ( par_rank() != 0 )
+        // one processor only: the test drives solve() and its restarts on a single rank, without the other ranks'
+        // Algorithm::dummy_solve partner (MB-091)
+        if ( par_size() > 1 )
         {
             return;
         }
@@ -2661,7 +2671,9 @@ namespace moris::opt
 
     TEST_CASE( "Native MMA oscillation shrink keeps the last increment across restarts", "[optimization][move_adapt_oscillation][restart_keep_state]" )
     {
-        if ( par_rank() != 0 )
+        // one processor only: the test drives solve() and its restarts on a single rank, without the other ranks'
+        // Algorithm::dummy_solve partner (MB-091)
+        if ( par_size() > 1 )
         {
             return;
         }
