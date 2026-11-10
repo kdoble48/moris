@@ -380,8 +380,8 @@ namespace moris::hmr
 
         void
         init_modified_lagrange_parameter_coordinates(
-                Element* aLagrangeElement,
-                Element* aBSplineElement ) override
+                const Background_Element_Base* aLagrangeBackgroundElement,
+                const Element*                 aBSplineElement ) override
         {
             // number of nodes per direction
             uint tNodesPerDirection = mLagrangeMesh->get_order() + 1;
@@ -398,13 +398,16 @@ namespace moris::hmr
             // assign memory for parameter coordinates
             mLagrangeParamModified.set_size( mLagrangeParam.n_rows(), mLagrangeParam.n_cols() );
 
-            // scaling factor
+            // node spacing in element units
             real tScale = 1.0 / ( (real)mLagrangeMesh->get_order() );
+
+            // size of an element on the Lagrange level in units of B-spline elements: 2^( level B-spline - level Lagrange )
+            real tLevelScale = std::pow( 2.0, (real)aBSplineElement->get_level() - (real)aLagrangeBackgroundElement->get_level() );
 
             // container for ijk position of basis
             luint        tIJK[ 3 ];
             const luint* tIJKBSpline  = aBSplineElement->get_ijk();
-            const luint* tIJKLagrange = aLagrangeElement->get_ijk();
+            const luint* tIJKLagrange = aLagrangeBackgroundElement->get_ijk();
 
             for ( uint iNodeIndex = 0; iNodeIndex < mNumberOfNodes; iNodeIndex++ )
             {
@@ -414,13 +417,19 @@ namespace moris::hmr
                 // save coordinate into memory
                 for ( uint iDimension = 0; iDimension < N; iDimension++ )
                 {
-                    // Get modified ijk value based on difference between Lagrange and B-spline element ijk
-                    moris_index tIJKValue = tIJK[ iDimension ] + tIJKLagrange[ iDimension ] - tIJKBSpline[ iDimension ];
+                    // node position in units of B-spline elements, relative to the B-spline element's lower corner;
+                    // the element shift counts whole elements, the node index fractions 1/P of an element (MB-104)
+                    real tPosition = ( (real)tIJKLagrange[ iDimension ] + tScale * tIJK[ iDimension ] ) * tLevelScale
+                                   - (real)tIJKBSpline[ iDimension ];
 
-                    // fill in node ijk positions in element
-                    mLagrangeParamModified( iDimension, iNodeIndex ) = 2 * tScale * tIJKValue - 1.0;
+                    // map [0,1] of the B-spline element to the parameter space [-1,1]
+                    mLagrangeParamModified( iDimension, iNodeIndex ) = 2.0 * tPosition - 1.0;
                 }
             }
+
+            // tidy up
+            delete tReferenceElement;
+            delete tBackElement;
 
         }    // end function: hmr::T_Matrix::init_modified_lagrange_parameter_coordinates()
 

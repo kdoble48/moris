@@ -540,8 +540,8 @@ namespace moris::hmr
             // set the activation pattern to that of the B-spline mesh
             mBackgroundMesh->set_activation_pattern( tBSplinePattern );
 
-            // get pointer to b-spline and background elements
-            Element* tBsplineElement = mBSplineMeshes( 0 )->get_element_including_aura( aBSplineCellIndex );
+            // get pointer to b-spline and background elements (the cell index refers to the requested B-spline mesh)
+            Element* tBsplineElement = mBSplineMeshes( aDiscretizationMeshIndex )->get_element_including_aura( aBSplineCellIndex );
 
             // Evaluate extended T-matrix
             mTMatrix( aDiscretizationMeshIndex )->evaluate_extended_t_matrix( tBsplineElement, &aLagrangeCell, aBsplineBasis, aWeights );
