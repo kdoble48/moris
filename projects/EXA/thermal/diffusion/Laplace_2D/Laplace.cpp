@@ -35,6 +35,84 @@ namespace moris
     // funciton declarations forward
     void create_trilinos_solver_parameter_list( Module_Parameter_Lists& );
     void create_petsc_solver_parameter_list( Module_Parameter_Lists& );
+    void create_belos_linear_algorithm_parameter_list( Module_Parameter_Lists& );
+    void create_ifpack_preconditioner_parameter_list( Module_Parameter_Lists& );
+
+    /* ------------------------------------------------------------------------ */
+    // Linear solver cases for the temperature problem, selected by gTestIndex (see example_test_case.cpp)
+    //
+    //   0  Aztec GMRES          + ML (one level on this mesh: direct)      Laplace_Anasazi
+    //   1  PETSc FGMRES         + no preconditioner                        Laplace_Slepc
+    //   2  Belos GMRES          + Ifpack ILU(0), the comparison case       Laplace_Belos_Ifpack_ILU
+    //   3  Belos GMRES          + Ifpack point relaxation, Jacobi          Laplace_Belos_Ifpack_Jacobi
+    //   4  Belos GMRES          + Ifpack point relaxation, symmetric GS    Laplace_Belos_Ifpack_Symmetric_Gauss_Seidel
+    //   5  Belos Flexible GMRES + Ifpack Krylov (5 GMRES steps + Jacobi)   Laplace_Belos_Ifpack_Krylov
+    //   6  PETSc FGMRES         + block inverse (PCType "mat"), serial     Laplace_Petsc_Block_Inverse
+    //
+    // Cases 3 to 6 use preconditioners that could not be used before: the Ifpack types "point relaxation" and "Krylov"
+    // threw std::bad_variant_access when built (MB-102), and PCType "mat" applied the system matrix instead of the
+    // block inverse (MB-103). The Ifpack type "SPARSKIT" has no case: Ifpack creates it only if Trilinos is built with
+    // HAVE_IFPACK_SPARSKIT, and otherwise MORIS stops with an error that names the type.
+    //
+    // When to use them. Linear iterations of the temperature solve (relative residual 1e-12 for Belos, 1e-10 for
+    // PETSc), on 1 processor -> on 4 processors, for the mesh of this example and for the same deck with 27, 52 and
+    // 102 elements per direction (measured 2026-11, Release build):
+    //
+    //   elements per direction        4          27          52          102
+    //   temperature dofs              24         464         1566        5720
+    //   2  ILU(0)                     7 -> 7     15 -> 16    25 -> 26    44 -> 46
+    //   3  Jacobi                     13 -> 13   61 -> 61    86 -> 86    154 -> 154
+    //   4  symmetric Gauss-Seidel     21 -> 21   27 -> 28    35 -> 47    62 -> 68
+    //   5  Krylov (outer iterations)  10 -> 10   16 -> 16    21 -> 21    37 -> 37
+    //   1  PETSc, none                13         71          99          175
+    //   6  PETSc, block inverse       24         89          133         259
+    //
+    // - ILU(0) is the default choice here: the shortest solve time (10.7 ms at 5720 dofs on 1 processor; Jacobi
+    //   33.4 ms, symmetric Gauss-Seidel 15.7 ms, Krylov 15.0 ms; single runs on a shared machine), and fewer
+    //   iterations than the two relaxations on every mesh. With Ifpack's overlap of one layer it lost at most two
+    //   iterations on 4 processors.
+    // - Jacobi needs no factorization and no storage beyond the diagonal, and its iteration count does not depend on
+    //   the partition (identical on 1 and 4 processors). It pays for this with 3.5 to 4 times the iterations of ILU(0).
+    //   Use it when setup cost or memory rules out a factorization, or when a run must behave the same on any
+    //   number of processors; "relaxation: min diagonal value" guards against zero diagonal entries.
+    // - Symmetric Gauss-Seidel needs no factorization either and less than half the iterations of Jacobi on the
+    //   refined meshes (more than Jacobi on the 24-dof mesh). The sweep is local to each processor, so it lost more
+    //   on 4 processors than ILU(0) did.
+    // - Krylov runs a few inner iterations per application. On the two finest meshes it needed the fewest outer
+    //   iterations, so the smallest outer Krylov basis, and the count did not depend on the partition; each outer
+    //   iteration costs up to 5 inner ones. It is not a fixed linear operator: use Flexible GMRES, or solve the
+    //   inner problem to round-off ("krylov: iterations", "krylov: tolerance") if the outer solver is not flexible.
+    // - The block inverse inverts the dense block of each cluster with a volume fraction below
+    //   "ASM_volume_fraction_threshold" and the diagonal entry of all other dofs; overlapping blocks are added.
+    //   Choosing the blocks by volume fraction targets systems that small cut elements make ill-conditioned. This
+    //   problem is not one (shrinking the cut elements to a volume fraction of 1e-6 left every iteration count
+    //   unchanged), and the block inverse needed more iterations than no preconditioner on every mesh, while the
+    //   same code with threshold 0 (diagonal only) needed fewer (58, 79 and 139 on the refined meshes). The case
+    //   is here to exercise the code path, not as a recommendation. It needs the IQI "IQIBulkVolumeFraction" on
+    //   the bulk sets and works on one processor only.
+    // - The iteration counts of all of these one-level preconditioners grow with the mesh; the multigrid case 0
+    //   stayed at 26 to 27 iterations on the three refined meshes.
+
+    // test case uses the PETSc solver interface; all others use Trilinos
+    bool
+    uses_petsc_solver()
+    {
+        return gTestIndex == 1 || gTestIndex == 6;
+    }
+
+    // test case solves the temperature problem with Belos and an Ifpack preconditioner
+    bool
+    uses_belos_with_ifpack()
+    {
+        return gTestIndex >= 2 && gTestIndex <= 5;
+    }
+
+    // test case preconditions the PETSc solve with the block inverse (PCType "mat")
+    bool
+    uses_petsc_block_inverse()
+    {
+        return gTestIndex == 6;
+    }
 
     /* ------------------------------------------------------------------------ */
     // function to convert real value into string
@@ -679,6 +757,15 @@ namespace moris
         aParameterLists.set( "function_parameters", "0.05" );
         aParameterLists.set( "leader_properties", "PropConductivity,Material" );
 
+        if ( uses_petsc_block_inverse() )
+        {
+            // reciprocal of the total cluster volume, for the volume fraction IQI below
+            aParameterLists( FEM::STABILIZATION ).add_parameter_list();
+            aParameterLists.set( "stabilization_name", "SPReciprocalTotalVolume" );
+            aParameterLists.set( "leader_phase_name", "PhaseSolid" );
+            aParameterLists.set( "stabilization_type", fem::Stabilization_Type::RECIPROCAL_TOTAL_VOLUME );
+        }
+
         //------------------------------------------------------------------------------
         // fill the IWG part of the parameter list
 
@@ -899,7 +986,18 @@ namespace moris
         aParameterLists.set( "leader_phase_name", "PhaseSolid" );
         aParameterLists.set( "vectorial_field_index", 0 );
 
-        if ( gTestIndex == 1 )
+        if ( uses_petsc_block_inverse() )
+        {
+            // volume fraction of each cluster; the PETSc "mat" preconditioner looks this IQI up by exactly this name
+            // to find the clusters whose degrees of freedom form one block
+            aParameterLists( FEM::IQI ).add_parameter_list();
+            aParameterLists.set( "IQI_name", "IQIBulkVolumeFraction" );
+            aParameterLists.set( "IQI_type", fem::IQI_Type::VOLUME_FRACTION );
+            aParameterLists.set( "leader_phase_name", "PhaseSolid" );
+            aParameterLists.set( "stabilization_parameters", "SPReciprocalTotalVolume,Reciprocal_total_vol" );
+        }
+
+        if ( uses_petsc_solver() )
         {
             aParameterLists( FEM::IQI ).add_parameter_list();
             aParameterLists.set( "IQI_name", "IQIBulkEigenVal" );
@@ -923,14 +1021,14 @@ namespace moris
     SOLParameterList( Module_Parameter_Lists& aParameterLists )
     {
         std::cout << "gTestIndex_" + std::to_string( par_rank() ) + ": " << gTestIndex << '\n';
-        gTestIndex == 0 ? create_trilinos_solver_parameter_list( aParameterLists ) : create_petsc_solver_parameter_list( aParameterLists );
+        uses_petsc_solver() ? create_petsc_solver_parameter_list( aParameterLists ) : create_trilinos_solver_parameter_list( aParameterLists );
     }
 
     void
     MSIParameterList( Module_Parameter_Lists& aParameterLists )
     {
         aParameterLists.set( "TEMP", 0 );
-        aParameterLists.set( "number_eigen_vectors", gTestIndex == 0 ? 5 : 1 );
+        aParameterLists.set( "number_eigen_vectors", uses_petsc_solver() ? 1 : 5 );
         aParameterLists.set( "order_adofs_by_host", true );
     }
 
@@ -962,7 +1060,7 @@ namespace moris
         // 2 slpec solver and the associated linear solver object
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::PETSC );
         aParameterLists.set( "KSPType", "fgmres" );
-        aParameterLists.set( "preconditioners", "0" );    // 10 shift_invert
+        aParameterLists.set( "preconditioners", uses_petsc_block_inverse() ? "2" : "0" );    // 10 shift_invert
 
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::PETSC );
         aParameterLists.set( "KSPType", "preonly" );
@@ -998,6 +1096,15 @@ namespace moris
         // Ifpack precondioner for the eigen solve
         aParameterLists( SOL::PRECONDITIONERS ).add_parameter_list(  sol::PreconditionerType::PETSC );
         aParameterLists.set( "PCType", "mumps" );
+
+        if ( uses_petsc_block_inverse() )
+        {
+            // block inverse: the inverse of the dense block of each cluster with a volume fraction below the
+            // threshold, and of the diagonal entry of every other degree of freedom
+            aParameterLists( SOL::PRECONDITIONERS ).add_parameter_list( sol::PreconditionerType::PETSC );
+            aParameterLists.set( "PCType", "mat" );
+            aParameterLists.set( "ASM_volume_fraction_threshold", 0.1 );
+        }
 
         // **
         aParameterLists( SOL::LINEAR_SOLVERS ).add_parameter_list();    // linear problem index 0
@@ -1100,7 +1207,10 @@ namespace moris
 
         sint tVerbosity = Belos::Errors + Belos::Warnings + Belos::IterationDetails + Belos::TimingDetails + Belos::StatusTestDetails + Belos::FinalSummary;
 
-        switch ( tSolverType )
+        // the Belos cases replace the linear algorithm of the temperature problem
+        uint tLinearSolverType = uses_belos_with_ifpack() ? 4 : tSolverType;
+
+        switch ( tLinearSolverType )
         {
             case 0:    // Amesos - Pardiso
                 aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AMESOS_IMPL );
@@ -1261,6 +1371,10 @@ namespace moris
                 // aParameterLists.set( "fact: drop tolerance",  1.0e-2 );
                 // aParameterLists.set( "prec_reuse"          ,  false );
                 break;
+
+            case 4:    // Belos with the Ifpack preconditioner of the test case
+                create_belos_linear_algorithm_parameter_list( aParameterLists );
+                break;
         }
 
         // eigenvalue problem to find the largest eigenvalues
@@ -1307,6 +1421,12 @@ namespace moris
         aParameterLists.set( "fact: level-of-fill", 2 );
         aParameterLists.set( "fact: drop tolerance", 1.0e-2 );
         aParameterLists.set( "prec_reuse", false );
+
+        // Ifpack preconditioner of the Belos cases (preconditioner index 2)
+        if ( uses_belos_with_ifpack() )
+        {
+            create_ifpack_preconditioner_parameter_list( aParameterLists );
+        }
 
         //------------------------------------------------------------------------------
 
@@ -1385,6 +1505,74 @@ namespace moris
         //------------------------------------------------------------------------------
 
         aParameterLists( SOL::SOLVER_WAREHOUSE ).set( "SOL_save_operator_to_matlab", "heat" );
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    create_belos_linear_algorithm_parameter_list( Module_Parameter_Lists& aParameterLists )
+    {
+        aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::BELOS_IMPL );
+
+        // the Krylov preconditioner is an inner iteration that changes from one application to the next, which only
+        // the flexible variant of GMRES allows; the other preconditioners are fixed linear operators
+        aParameterLists.set( "Solver Type", gTestIndex == 5 ? "Flexible GMRES" : "GMRES" );
+
+        aParameterLists.set( "Verbosity", Belos::Errors + Belos::Warnings + Belos::FinalSummary );
+        aParameterLists.set( "Num Blocks", 250 );
+        aParameterLists.set( "Block Size", 1 );
+        aParameterLists.set( "Maximum Iterations", 500 );
+        aParameterLists.set( "Convergence Tolerance", 1e-12 );
+
+        // flexible GMRES needs the preconditioner on the right
+        aParameterLists.set( "Left-right Preconditioner", "right" );
+
+        // preconditioner index 2: see create_ifpack_preconditioner_parameter_list
+        aParameterLists.set( "preconditioners", "2" );
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    create_ifpack_preconditioner_parameter_list( Module_Parameter_Lists& aParameterLists )
+    {
+        aParameterLists( SOL::PRECONDITIONERS ).add_parameter_list( sol::PreconditionerType::IFPACK );
+
+        switch ( gTestIndex )
+        {
+            case 2:    // incomplete LU factorization without fill: the comparison case
+                aParameterLists.set( "ifpack_prec_type", "ILU" );
+                aParameterLists.set( "fact: level-of-fill", 0 );
+                break;
+
+            case 3:    // point relaxation: one damped Jacobi sweep
+                aParameterLists.set( "ifpack_prec_type", "point relaxation" );
+                aParameterLists.set( "relaxation: type", "Jacobi" );
+                aParameterLists.set( "relaxation: sweeps", 1 );
+                aParameterLists.set( "relaxation: damping factor", 1.0 );
+                aParameterLists.set( "relaxation: min diagonal value", 1.0e-12 );
+                break;
+
+            case 4:    // point relaxation: one symmetric Gauss-Seidel sweep
+                aParameterLists.set( "ifpack_prec_type", "point relaxation" );
+                aParameterLists.set( "relaxation: type", "symmetric Gauss-Seidel" );
+                aParameterLists.set( "relaxation: sweeps", 1 );
+                aParameterLists.set( "relaxation: damping factor", 1.0 );
+                aParameterLists.set( "relaxation: min diagonal value", 1.0e-12 );
+                break;
+
+            case 5:    // Krylov: a few inner GMRES iterations, themselves preconditioned with one Jacobi sweep
+                aParameterLists.set( "ifpack_prec_type", "Krylov" );
+                aParameterLists.set( "krylov: iterations", 5 );
+                aParameterLists.set( "krylov: tolerance", 1.0e-6 );
+                aParameterLists.set( "krylov: solver", 1 );            // 0: CG, 1: GMRES
+                aParameterLists.set( "krylov: preconditioner", 1 );    // 0: none, 1: Jacobi, 2: Gauss-Seidel, 3: symmetric Gauss-Seidel
+                aParameterLists.set( "krylov: number of sweeps", 1 );
+                break;
+
+            default:
+                MORIS_ERROR( false, "Laplace: test case %d does not use an Ifpack preconditioner.", gTestIndex );
+        }
     }
 
     //------------------------------------------------------------------------------

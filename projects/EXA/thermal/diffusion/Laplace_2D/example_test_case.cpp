@@ -234,4 +234,112 @@ TEST_CASE( "Laplace_Slepc",
 }
 #endif
 
+//---------------------------------------------------------------
+// Preconditioner cases: the same temperature problem as above, solved with the preconditioners that could not be
+// used before MB-102 (Ifpack point relaxation and Krylov) and MB-103 (PETSc block inverse, PCType "mat"), and with
+// Ifpack ILU for comparison. Laplace.cpp describes the cases and when each preconditioner is the right choice.
+
+// check the solution against the direct solve of the same problem, from both sides
+void check_matches_direct_solve( const std::string &aExoFileName )
+{
+    moris::mtk::Exodus_IO_Helper tExoIO( aExoFileName.c_str(), 0, false, true );
+
+    real tL2ErrorActual       = tExoIO.get_global_variable( 0, 0 );
+    real tDiffusiveFluxActual = tExoIO.get_global_variable( 1, 0 );
+
+    // values of the Laplace_Anasazi case, whose one-level ML preconditioner is a direct solve (same on 1 and 4 processors)
+    real tL2ErrorReference       = 6.65582452961e-07;
+    real tDiffusiveFluxReference = 5.04292797169e-02;
+
+    real tRelL2Difference   = std::abs( tL2ErrorActual - tL2ErrorReference ) / tL2ErrorReference;
+    real tRelFluxDifference = std::abs( tDiffusiveFluxActual - tDiffusiveFluxReference ) / tDiffusiveFluxReference;
+
+    MORIS_LOG_INFO( "Check L2 error against direct solve:       reference %19.12e, actual %19.12e, relative difference %12.5e.",
+            tL2ErrorReference,
+            tL2ErrorActual,
+            tRelL2Difference );
+    MORIS_LOG_INFO( "Check diffusive flux against direct solve: reference %19.12e, actual %19.12e, relative difference %12.5e.",
+            tDiffusiveFluxReference,
+            tDiffusiveFluxActual,
+            tRelFluxDifference );
+
+    CHECK( tRelL2Difference < 1.0e-6 );
+    CHECK( tRelFluxDifference < 1.0e-6 );
+}
+
+// run the deck with the linear solver case aTestIndex and check the results
+void run_preconditioner_case(
+        uint aTestIndex,
+        bool aSolvewithPetsc )
+{
+    // define command line call
+    int argc = 2;
+
+    // set all globals this test case or its deck consumes (rule R4)
+    gTestIndex            = aTestIndex;
+    gInterpolationOrder   = 1;
+    gPrintReferenceValues = false;
+
+    char tString1[] = "";
+    char tString2[] = "./Laplace.so";
+
+    char *argv[ 2 ] = { tString1, tString2 };
+
+    // call to performance manager main interface
+    int tRet = fn_WRK_Workflow_Main_Interface( argc, argv );
+
+    // check
+    REQUIRE( tRet == 0 );
+
+    MORIS_LOG_INFO( " " );
+    MORIS_LOG_INFO( "Executing HeatConduction: linear solver case %i - %i Processors.", aTestIndex, par_size() );
+    MORIS_LOG_INFO( " " );
+
+    check_results_serial_parallel( aSolvewithPetsc );
+
+    // the output is written and read by the same processor as in check_results_serial_parallel
+    if ( par_size() == 1 or par_rank() == 1 )
+    {
+        check_matches_direct_solve( "Laplace.exo.e-s.0000" );
+    }
+}
+
+TEST_CASE( "Laplace_Belos_Ifpack_ILU",
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Preconditioners],[EXA_Laplace_2D]" )
+{
+    run_preconditioner_case( 2, false );
+}
+
+TEST_CASE( "Laplace_Belos_Ifpack_Jacobi",
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Preconditioners],[EXA_Laplace_2D]" )
+{
+    run_preconditioner_case( 3, false );
+}
+
+TEST_CASE( "Laplace_Belos_Ifpack_Symmetric_Gauss_Seidel",
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Preconditioners],[EXA_Laplace_2D]" )
+{
+    run_preconditioner_case( 4, false );
+}
+
+TEST_CASE( "Laplace_Belos_Ifpack_Krylov",
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Preconditioners],[EXA_Laplace_2D]" )
+{
+    run_preconditioner_case( 5, false );
+}
+
+#ifdef MORIS_HAVE_SLEPC
+// the PETSc deck also sets up the SLEPc eigenvalue solves, hence the same guard as Laplace_Slepc
+TEST_CASE( "Laplace_Petsc_Block_Inverse",
+        "[moris],[example],[thermal],[Laplace_2D],[Laplace_Preconditioners],[EXA_Laplace_2D]" )
+{
+    // serial only: the preconditioner reads the rows of every block from the system matrix, and in parallel a block
+    // can contain rows of another processor
+    if ( par_size() == 1 )
+    {
+        run_preconditioner_case( 6, true );
+    }
+}
+#endif
+
 }    // namespace exa_laplace_2d
