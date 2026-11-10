@@ -96,10 +96,10 @@ namespace moris::wrk
              * @param aSamples Lattice sub-intervals per direction (2: XTK's own samples only)
              */
             virtual uint detect_cell_features(
-                    uint                  aFieldIndex,
-                    const Matrix<DDRMat>& aCorners,
-                    uint                  aLagrangeOrder,
-                    uint                  aSamples )
+                    uint                    aFieldIndex,
+                    const Matrix< DDRMat >& aCorners,
+                    uint                    aLagrangeOrder,
+                    uint                    aSamples )
             {
                 return 0;
             }

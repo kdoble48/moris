@@ -74,7 +74,7 @@ namespace moris
             Refinement_Parameters mParameters;
 
             // fields with sub-cell feature refinement whose features are all represented (MB-084): no more passes
-            std::set< std::pair< const Performer*, uint > > mResolvedFeatureFields;
+            std::set< std::pair< const Performer *, uint > > mResolvedFeatureFields;
 
             std::shared_ptr< Library_IO > mLibrary = nullptr;
 

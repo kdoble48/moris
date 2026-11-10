@@ -91,8 +91,8 @@ namespace moris::gen
         tSettings.mLipschitz      = mParameters.mFeatureRefinementLipschitz;
         tSettings.mDepthTolerance = mParameters.mFeatureRefinementDepthTolerance;
 
-        real tThreshold = mParameters.mIsocontourThreshold;
-        Point_Field_Function tPhi = [ this, tThreshold ]( const Matrix< DDRMat >& aPoint ) -> real {
+        real                 tThreshold = mParameters.mIsocontourThreshold;
+        Point_Field_Function tPhi       = [ this, tThreshold ]( const Matrix< DDRMat >& aPoint ) -> real {
             return mField->get_field_value_at_point( aPoint ) - tThreshold;
         };
 

@@ -66,7 +66,7 @@ namespace moris::wrk
             for ( uint iCorner = 0; iCorner < tNumCorners; iCorner++ )
             {
                 // exodus order: (0,0), (1,0), (1,1), (0,1) in x-y, bottom face before top face
-                uint tInFace = iCorner % 4;
+                uint tInFace    = iCorner % 4;
                 bool tHigh[ 3 ] = { tInFace == 1 or tInFace == 2, tInFace == 2 or tInFace == 3, iCorner >= 4 };
                 for ( uint iDim = 0; iDim < tNumDims; iDim++ )
                 {
@@ -881,30 +881,46 @@ namespace moris::wrk
         {
             if ( mResolvedFeatureFields.count( { aPerformer.get(), aFieldIndex } ) > 0 or tNumHidden == 0 )
             {
-                MORIS_LOG_INFO( "GEN feature refinement - geometry %u: all sub-cell features represented on the final mesh "
-                                "(%u cut cells on levels %u to %u).",
-                        aFieldIndex, tNumCrossing, tNumCrossing ? tMinLevel : 0, tMaxLevel );
+                MORIS_LOG_INFO(
+                        "GEN feature refinement - geometry %u: all sub-cell features represented on the final mesh "
+                        "(%u cut cells on levels %u to %u).",
+                        aFieldIndex,
+                        tNumCrossing,
+                        tNumCrossing ? tMinLevel : 0,
+                        tMaxLevel );
                 if ( tNumInsignificant > 0 )
                 {
-                    MORIS_LOG_WARNING( "GEN feature refinement - geometry %u: %u cells hold features shallower than the depth "
-                                       "tolerance (feature_refinement_depth_tolerance x cell size). They are UNRESOLVED: not "
-                                       "refined and not represented by the cut (below the stated resolution, not certified).",
-                            aFieldIndex, tNumInsignificant );
+                    MORIS_LOG_WARNING(
+                            "GEN feature refinement - geometry %u: %u cells hold features shallower than the depth "
+                            "tolerance (feature_refinement_depth_tolerance x cell size). They are UNRESOLVED: not "
+                            "refined and not represented by the cut (below the stated resolution, not certified).",
+                            aFieldIndex,
+                            tNumInsignificant );
                 }
             }
             else
             {
-                MORIS_LOG_WARNING( "GEN feature refinement - geometry %u: UNRESOLVED. %u cells still hide sub-cell features after "
-                                   "%u refinement passes (number_of_refinements reached; MB-084). The cut does not represent "
-                                   "the geometry in these cells.",
-                        aFieldIndex, tNumHidden, aPass );
+                MORIS_LOG_WARNING(
+                        "GEN feature refinement - geometry %u: UNRESOLVED. %u cells still hide sub-cell features after "
+                        "%u refinement passes (number_of_refinements reached; MB-084). The cut does not represent "
+                        "the geometry in these cells.",
+                        aFieldIndex,
+                        tNumHidden,
+                        aPass );
             }
             return tNumHidden;
         }
 
-        MORIS_LOG_INFO( "GEN feature refinement - geometry %u, pass %u: %u cells with a crossing (levels %u to %u), %u hide a "
-                        "feature the cut misses, %u hold only features below the depth tolerance.",
-                aFieldIndex, aPass, tNumCrossing, tNumCrossing ? tMinLevel : 0, tMaxLevel, tNumHidden, tNumInsignificant );
+        MORIS_LOG_INFO(
+                "GEN feature refinement - geometry %u, pass %u: %u cells with a crossing (levels %u to %u), %u hide a "
+                "feature the cut misses, %u hold only features below the depth tolerance.",
+                aFieldIndex,
+                aPass,
+                tNumCrossing,
+                tNumCrossing ? tMinLevel : 0,
+                tMaxLevel,
+                tNumHidden,
+                tNumInsignificant );
 
         if ( tNumHidden == 0 )
         {
@@ -959,7 +975,7 @@ namespace moris::wrk
             for ( uint iField = 0; iField < aPerformers( iPerformer )->get_num_refinement_fields(); iField++ )
             {
                 bool tListed = false;
-                for ( const auto& iListed : tFields )
+                for ( const std::pair< uint, uint >& iListed : tFields )
                 {
                     tListed = tListed or ( iListed.first == iPerformer and iListed.second == iField );
                 }
@@ -986,7 +1002,7 @@ namespace moris::wrk
             {
                 uint             tOrder   = 1;
                 Matrix< DDRMat > tCorners = element_corners( iElement, tOrder );
-                for ( const auto& iField : tFields )
+                for ( const std::pair< uint, uint >& iField : tFields )
                 {
                     if ( aPerformers( iField.first )->detect_cell_features( iField.second, tCorners, tOrder, 2 ) & gen::CELL_FEATURE_XTK_CUT )
                     {
@@ -1010,13 +1026,18 @@ namespace moris::wrk
             if ( tNumBelow == 0 )
             {
                 MORIS_LOG_INFO( "GEN refinement: %u cells that XTK will see as cut, all on level %d (%u geometries tested).",
-                        sum_all( uint( tCutCells.size() ) ), tMaxLevel, uint( tFields.size() ) );
+                        sum_all( uint( tCutCells.size() ) ),
+                        tMaxLevel,
+                        uint( tFields.size() ) );
                 return;
             }
 
-            MORIS_LOG_INFO( "GEN refinement: %u cells that XTK sees as cut lie below level %d; refining them so that all cut "
-                            "cells share one level (%s).",
-                    tNumBelow, tMaxLevel, tAnyFeature ? "sub-cell feature refinement" : "D-205, analytic field cut inside cells" );
+            MORIS_LOG_INFO(
+                    "GEN refinement: %u cells that XTK sees as cut lie below level %d; refining them so that all cut "
+                    "cells share one level (%s).",
+                    tNumBelow,
+                    tMaxLevel,
+                    tAnyFeature ? "sub-cell feature refinement" : "D-205, analytic field cut inside cells" );
 
             aHMR->put_elements_on_refinement_queue( tBelow );
             aHMR->perform_refinement( tLagrangeMeshPattern );
@@ -1026,8 +1047,9 @@ namespace moris::wrk
             aHMR->get_database()->update_lagrange_meshes();
         }
 
-        MORIS_LOG_WARNING( "GEN refinement: cut cells still lie on different levels after %u equalisation steps; XTK will "
-                           "refuse the decomposition.",
+        MORIS_LOG_WARNING(
+                "GEN refinement: cut cells still lie on different levels after %u equalisation steps; XTK will "
+                "refuse the decomposition.",
                 tMaxSteps );
     }
 

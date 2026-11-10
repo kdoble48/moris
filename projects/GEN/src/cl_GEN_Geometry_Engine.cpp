@@ -657,7 +657,7 @@ namespace moris::gen
     uint
     Geometry_Engine::get_feature_refinement_samples( uint aGeometryIndex )
     {
-        auto tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
         return tLevelSet ? tLevelSet->get_feature_refinement_samples() : 0;
     }
 
@@ -670,7 +670,7 @@ namespace moris::gen
             uint                    aLagrangeOrder,
             uint                    aSamples )
     {
-        auto tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
+        std::shared_ptr< Level_Set_Geometry > tLevelSet = std::dynamic_pointer_cast< Level_Set_Geometry >( mGeometries( aGeometryIndex ) );
         if ( not tLevelSet or not tLevelSet->can_change_region_inside_cell() )
         {
             return {};

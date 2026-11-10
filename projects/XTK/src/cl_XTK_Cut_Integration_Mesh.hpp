@@ -770,7 +770,6 @@ namespace moris::xtk
         Vector< real > mResolutionTemplateMeasure;
 
       protected:
-
         // integration cells
         moris_index                                      mFirstControlledCellIndex;
         Vector< moris::mtk::Cell* >                      mIntegrationCells;

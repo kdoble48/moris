@@ -39,13 +39,13 @@ namespace moris::gen
      */
     struct Cell_Feature_Settings
     {
-        uint mSamples        = 4;      // sub-intervals per cell direction (rounded up to an even number >= 2)
-        uint mLagrangeOrder  = 1;      // 1: XTK samples corners and subdivision vertices; 2: all 3^d nodes
-        real mLipschitz      = 0.0;    // bound on |grad phi| for certified gaps; 0 = no certificate
-        real mDepthTolerance = 0.0;    // hidden features shallower than this times the cell size are not significant
-        bool mCheckTopology  = true;   // compare the lattice sign components with the template's
-        uint mMaxEdgeBisections = 10;  // bisection depth of an uncertified lattice segment (Lipschitz only)
-        uint mMaxCellBisections = 0;   // bisection depth of an uncertified lattice sub-cell (0: 3 in 2D, 2 in 3D)
+        uint mSamples           = 4;       // sub-intervals per cell direction (rounded up to an even number >= 2)
+        uint mLagrangeOrder     = 1;       // 1: XTK samples corners and subdivision vertices; 2: all 3^d nodes
+        real mLipschitz         = 0.0;     // bound on |grad phi| for certified gaps; 0 = no certificate
+        real mDepthTolerance    = 0.0;     // hidden features shallower than this times the cell size are not significant
+        bool mCheckTopology     = true;    // compare the lattice sign components with the template's
+        uint mMaxEdgeBisections = 10;      // bisection depth of an uncertified lattice segment (Lipschitz only)
+        uint mMaxCellBisections = 0;       // bisection depth of an uncertified lattice sub-cell (0: 3 in 2D, 2 in 3D)
     };
 
     /**
@@ -53,18 +53,18 @@ namespace moris::gen
      */
     struct Cell_Feature_Report
     {
-        bool mContainsCrossing  = false;    // the lattice (and the certificate) find a zero crossing in the cell
-        bool mXTKSeesCut        = false;    // XTK's own samples (corners + subdivision vertices) differ in region
-        uint mHiddenEdgeMask    = 0;        // bit e: edge e (exodus order) has significant crossings the cut misses
-        bool mUnseenCrossing    = false;    // significant crossing that XTK's samples do not see
-        bool mTopologyMismatch  = false;    // significant difference in sign components between lattice and template
-        uint mNumInsignificant  = 0;        // hidden features found below the depth tolerance
-        uint mNumUncertified    = 0;        // lattice segments / sub-cells the Lipschitz bound could not certify
-        real mMaxHiddenDepth    = 0.0;      // largest depth of a significant hidden feature, relative to the cell size
-        real mCellMeasure       = 0.0;      // area / volume of the cell
-        real mCellSize          = 0.0;      // measure^(1/d)
-        real mSampledPositive   = 0.0;      // trapezoidal estimate of the positive-region measure from the lattice
-        real mTemplatePositive  = 0.0;      // the same for the piecewise-linear template of XTK's samples
+        bool mContainsCrossing = false;    // the lattice (and the certificate) find a zero crossing in the cell
+        bool mXTKSeesCut       = false;    // XTK's own samples (corners + subdivision vertices) differ in region
+        uint mHiddenEdgeMask   = 0;        // bit e: edge e (exodus order) has significant crossings the cut misses
+        bool mUnseenCrossing   = false;    // significant crossing that XTK's samples do not see
+        bool mTopologyMismatch = false;    // significant difference in sign components between lattice and template
+        uint mNumInsignificant = 0;        // hidden features found below the depth tolerance
+        uint mNumUncertified   = 0;        // lattice segments / sub-cells the Lipschitz bound could not certify
+        real mMaxHiddenDepth   = 0.0;      // largest depth of a significant hidden feature, relative to the cell size
+        real mCellMeasure      = 0.0;      // area / volume of the cell
+        real mCellSize         = 0.0;      // measure^(1/d)
+        real mSampledPositive  = 0.0;      // trapezoidal estimate of the positive-region measure from the lattice
+        real mTemplatePositive = 0.0;      // the same for the piecewise-linear template of XTK's samples
 
         uint num_hidden_edges() const;
 
@@ -104,10 +104,10 @@ namespace moris::gen
     // bit flags of a detection, as passed through the WRK refinement interface
     enum Cell_Feature_Flag : uint
     {
-        CELL_FEATURE_CROSSING   = 1,    // mContainsCrossing
-        CELL_FEATURE_HIDDEN     = 2,    // hides_feature()
-        CELL_FEATURE_XTK_CUT    = 4,    // mXTKSeesCut
-        CELL_FEATURE_INSIGNIFICANT = 8  // mNumInsignificant > 0
+        CELL_FEATURE_CROSSING      = 1,    // mContainsCrossing
+        CELL_FEATURE_HIDDEN        = 2,    // hides_feature()
+        CELL_FEATURE_XTK_CUT       = 4,    // mXTKSeesCut
+        CELL_FEATURE_INSIGNIFICANT = 8     // mNumInsignificant > 0
     };
 
     /**

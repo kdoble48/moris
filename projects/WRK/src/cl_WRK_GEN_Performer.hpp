@@ -68,7 +68,7 @@ namespace moris::wrk
                 uint aRefinementIndex ) override;
 
         //------------------------------------------------------------------------------------------------------------------
-            //------------------------------------------------------------------------------------------------------------------
+        //------------------------------------------------------------------------------------------------------------------
 
         uint get_feature_refinement_samples( uint aFieldIndex ) override;
 
@@ -79,6 +79,5 @@ namespace moris::wrk
                 const Matrix< DDRMat >& aCorners,
                 uint                    aLagrangeOrder,
                 uint                    aSamples ) override;
-
-};
+    };
 }

@@ -594,8 +594,8 @@ namespace moris::xtk
         if ( not aCutIntegrationMesh->mSameLevelChildMeshes )
         {
             // name the coarsest cut cell, so that the mismatch can be traced
-            uint tNumBelow = 0;
-            moris_index tExample = -1;
+            uint        tNumBelow = 0;
+            moris_index tExample  = -1;
             for ( moris_index iBgCellIndex : aMeshGenerationData.mAllIntersectedBgCellInds )
             {
                 if ( moris_index( aBackgroundMesh->get_mtk_cell( iBgCellIndex ).get_level() ) < tGlobalMaxLevel )
@@ -606,7 +606,13 @@ namespace moris::xtk
             }
             Matrix< DDRMat > tCoords = tExample >= 0 ? aBackgroundMesh->get_mtk_cell( tExample ).get_vertex_coords() : Matrix< DDRMat >( 1, 3, 0.0 );
             MORIS_LOG_INFO( "XTK - cut cells on refinement levels %d to %d; %u cells below level %d, e.g. cell %d at (%g, %g, %g)",
-                    tGlobalMinLevel, tGlobalMaxLevel, tNumBelow, tGlobalMaxLevel, tExample, tCoords( 0, 0 ), tCoords( 0, 1 ),
+                    tGlobalMinLevel,
+                    tGlobalMaxLevel,
+                    tNumBelow,
+                    tGlobalMaxLevel,
+                    tExample,
+                    tCoords( 0, 0 ),
+                    tCoords( 0, 1 ),
                     tCoords.n_cols() > 2 ? tCoords( 0, 2 ) : 0.0 );
         }
     }
@@ -661,26 +667,26 @@ namespace moris::xtk
         uint                       tNumInteriorOnly = 0;
 
         // MB-084: resolution check of analytic geometries on a sub-cell lattice
-        const Parameter_List* tXTKParameters      = &mXTKModel->get_parameter_list();
-        uint                  tResolutionSamples  = tXTKParameters->exists( "geometry_resolution_samples" ) ? tXTKParameters->get< uint >( "geometry_resolution_samples" ) : 0;
-        bool                  tResolutionError    = tXTKParameters->exists( "geometry_resolution_error" ) and tXTKParameters->get< bool >( "geometry_resolution_error" );
+        const Parameter_List* tXTKParameters     = &mXTKModel->get_parameter_list();
+        uint                  tResolutionSamples = tXTKParameters->exists( "geometry_resolution_samples" ) ? tXTKParameters->get< uint >( "geometry_resolution_samples" ) : 0;
+        bool                  tResolutionError   = tXTKParameters->exists( "geometry_resolution_error" ) and tXTKParameters->get< bool >( "geometry_resolution_error" );
         Vector< bool >        tCheckGeometry( tNumGeometries, false );
-        bool                  tCheckResolution    = false;
+        bool                  tCheckResolution = false;
         for ( moris::size_t iGeom = 0; iGeom < tNumGeometries and tResolutionSamples > 0; iGeom++ )
         {
             tCheckGeometry( iGeom ) = mXTKModel->get_geom_engine()->can_change_region_inside_cell( iGeom );
             tCheckResolution        = tCheckResolution or tCheckGeometry( iGeom );
         }
-        uint                  tNumDims            = aBackgroundMesh->get_spatial_dim();
+        uint tNumDims = aBackgroundMesh->get_spatial_dim();
         // MB-095: hidden edges are keyed by global vertex ids, so that the edge sets of all processors can be merged
         Vector< std::set< std::pair< moris_id, moris_id > > > tHiddenEdges( tNumGeometries );
-        Vector< uint >        tUnseenCells( tNumGeometries, 0 );
-        Vector< uint >        tTopologyCells( tNumGeometries, 0 );
-        Vector< uint >        tInsignificant( tNumGeometries, 0 );
-        Vector< real >        tMaxDepth( tNumGeometries, 0.0 );
-        Vector< real >        tSampledMeasure( tNumGeometries, 0.0 );
-        Vector< real >        tTemplateMeasure( tNumGeometries, 0.0 );
-        const Vector< std::pair< uint, uint > >& tCellEdges = gen::cell_feature_edges( tNumDims );
+        Vector< uint >                                        tUnseenCells( tNumGeometries, 0 );
+        Vector< uint >                                        tTopologyCells( tNumGeometries, 0 );
+        Vector< uint >                                        tInsignificant( tNumGeometries, 0 );
+        Vector< real >                                        tMaxDepth( tNumGeometries, 0.0 );
+        Vector< real >                                        tSampledMeasure( tNumGeometries, 0.0 );
+        Vector< real >                                        tTemplateMeasure( tNumGeometries, 0.0 );
+        const Vector< std::pair< uint, uint > >&              tCellEdges = gen::cell_feature_edges( tNumDims );
 
         // iterate through all cells
         for ( uint iCell = 0; iCell < tNumCells; iCell++ )
@@ -689,12 +695,12 @@ namespace moris::xtk
             // so that the sums over all processors count every cell once (aura cells are owned elsewhere)
             if ( tCheckResolution and aBackgroundMesh->get_mtk_cell( (moris_index)iCell ).get_owner() == (moris_id)par_rank() )
             {
-                const mtk::Cell&   tCell        = aBackgroundMesh->get_mtk_cell( (moris_index)iCell );
-                Matrix< DDRMat >   tCoords      = tCell.get_vertex_coords();
-                Matrix< IdMat >    tVertexIds   = tCell.get_vertex_ids();
-                uint               tNumCorners  = 1u << tNumDims;
-                uint               tOrder       = tCoords.n_rows() == tNumCorners ? 1 : 2;
-                Matrix< DDRMat >   tCorners( tNumCorners, tNumDims );
+                const mtk::Cell& tCell       = aBackgroundMesh->get_mtk_cell( (moris_index)iCell );
+                Matrix< DDRMat > tCoords     = tCell.get_vertex_coords();
+                Matrix< IdMat >  tVertexIds  = tCell.get_vertex_ids();
+                uint             tNumCorners = 1u << tNumDims;
+                uint             tOrder      = tCoords.n_rows() == tNumCorners ? 1 : 2;
+                Matrix< DDRMat > tCorners( tNumCorners, tNumDims );
                 for ( uint iCorner = 0; iCorner < tNumCorners; iCorner++ )
                 {
                     for ( uint iDim = 0; iDim < tNumDims; iDim++ )
@@ -808,23 +814,41 @@ namespace moris::xtk
 
                 if ( tEdges + tUnseen + tTopology > 0 )
                 {
-                    MORIS_LOG_WARNING( "XTK - Geometry %u under-represented (MB-084, %u lattice sub-intervals per cell edge): %u background "
-                                       "edges cross the interface more often than the cut, %u cells hold crossings the cut does not see, "
-                                       "%u cells where the cut changes the local topology (deepest hidden feature %.3g cell sizes). "
-                                       "Positive-region measure sampled %.6e, cut template %.6e (%+.2f %%). The cut does not represent "
-                                       "features thinner than the cell there: refine the Lagrange mesh (GEN feature_refinement_samples).",
-                            (uint)iGeom, tResolutionSamples, tEdges, tUnseen, tTopology, tDepth, tSampled, tTemplate, tRelative );
+                    MORIS_LOG_WARNING(
+                            "XTK - Geometry %u under-represented (MB-084, %u lattice sub-intervals per cell edge): %u background "
+                            "edges cross the interface more often than the cut, %u cells hold crossings the cut does not see, "
+                            "%u cells where the cut changes the local topology (deepest hidden feature %.3g cell sizes). "
+                            "Positive-region measure sampled %.6e, cut template %.6e (%+.2f %%). The cut does not represent "
+                            "features thinner than the cell there: refine the Lagrange mesh (GEN feature_refinement_samples).",
+                            (uint)iGeom,
+                            tResolutionSamples,
+                            tEdges,
+                            tUnseen,
+                            tTopology,
+                            tDepth,
+                            tSampled,
+                            tTemplate,
+                            tRelative );
                     MORIS_ERROR( not tResolutionError,
                             "XTK - Geometry %u under-represented (MB-084): %u hidden edge crossings, %u unseen cells, %u topology "
                             "changes (geometry_resolution_error = true).",
-                            (uint)iGeom, tEdges, tUnseen, tTopology );
+                            (uint)iGeom,
+                            tEdges,
+                            tUnseen,
+                            tTopology );
                 }
                 else
                 {
-                    MORIS_LOG_INFO( "XTK - Geometry %u resolution check (MB-084, %u lattice sub-intervals per cell edge): no hidden "
-                                    "features; positive-region measure sampled %.6e, cut template %.6e (%+.2f %%); %u features "
-                                    "shallower than the depth tolerance are not represented.",
-                            (uint)iGeom, tResolutionSamples, tSampled, tTemplate, tRelative, tShallow );
+                    MORIS_LOG_INFO(
+                            "XTK - Geometry %u resolution check (MB-084, %u lattice sub-intervals per cell edge): no hidden "
+                            "features; positive-region measure sampled %.6e, cut template %.6e (%+.2f %%); %u features "
+                            "shallower than the depth tolerance are not represented.",
+                            (uint)iGeom,
+                            tResolutionSamples,
+                            tSampled,
+                            tTemplate,
+                            tRelative,
+                            tShallow );
                 }
             }
         }

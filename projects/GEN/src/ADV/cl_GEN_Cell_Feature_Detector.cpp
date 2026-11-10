@@ -78,8 +78,8 @@ namespace moris::gen
                 MORIS_ERROR( mNumDims == 2 or mNumDims == 3, "detect_cell_features() - 2D or 3D cells only." );
                 MORIS_ERROR( aCorners.n_rows() >= ( 1u << mNumDims ), "detect_cell_features() - need 2^d corner coordinates." );
 
-                mM = std::max< uint >( 2, aSettings.mSamples + aSettings.mSamples % 2 );
-                mN = mM + 1;
+                mM                 = std::max< uint >( 2, aSettings.mSamples + aSettings.mSamples % 2 );
+                mN                 = mM + 1;
                 mMaxCellBisections = aSettings.mMaxCellBisections > 0 ? aSettings.mMaxCellBisections : ( mNumDims == 2 ? 3 : 2 );
             }
 
@@ -114,9 +114,9 @@ namespace moris::gen
             uint                         mN                 = 3;
             uint                         mMaxCellBisections = 3;
             std::vector< Sample >        mLattice;
-            std::vector< real >          mTemplate;          // template value at each lattice point
-            std::vector< Sample >        mFoundPoints;       // crossings found by the sub-cell search
-            signed char                  mXTKRegion = 0;     // region of XTK's samples if uniform
+            std::vector< real >          mTemplate;         // template value at each lattice point
+            std::vector< Sample >        mFoundPoints;      // crossings found by the sub-cell search
+            signed char                  mXTKRegion = 0;    // region of XTK's samples if uniform
             Cell_Feature_Report          mReport;
 
             signed char
@@ -397,8 +397,8 @@ namespace moris::gen
                     }
 
                     // runs of equal non-interface regions along the edge
-                    std::vector< signed char >          tRunRegion;
-                    std::vector< std::vector< uint > >  tRunSamples;
+                    std::vector< signed char >         tRunRegion;
+                    std::vector< std::vector< uint > > tRunSamples;
                     for ( uint iSample = 0; iSample < tLine.size(); iSample++ )
                     {
                         signed char tRegion = tLine[ iSample ].mRegion;
@@ -415,8 +415,8 @@ namespace moris::gen
                     }
 
                     // runs the cut misses: the cut puts at most one crossing on the edge, between its end regions
-                    signed char tEndA = tLine.front().mRegion;
-                    signed char tEndB = tLine.back().mRegion;
+                    signed char         tEndA = tLine.front().mRegion;
+                    signed char         tEndB = tLine.back().mRegion;
                     std::vector< uint > tHiddenRuns;
                     for ( uint iRun = 0; iRun < tRunRegion.size(); iRun++ )
                     {
@@ -467,15 +467,15 @@ namespace moris::gen
             void
             search_box( const real* aLower, const real* aUpper, signed char aRegion, uint aDepth )
             {
-                real tCentre[ 3 ] = { 0.0, 0.0, 0.0 };
+                real tCentre[ 3 ]  = { 0.0, 0.0, 0.0 };
                 real tHalfDiagonal = 0.0;
                 for ( uint iDim = 0; iDim < mNumDims; iDim++ )
                 {
-                    tCentre[ iDim ] = 0.5 * ( aLower[ iDim ] + aUpper[ iDim ] );
+                    tCentre[ iDim ]  = 0.5 * ( aLower[ iDim ] + aUpper[ iDim ] );
                     real tHalfExtent = 0.25 * ( aUpper[ iDim ] - aLower[ iDim ] ) * mReport.mCellSize;
                     tHalfDiagonal += tHalfExtent * tHalfExtent;
                 }
-                tHalfDiagonal = std::sqrt( tHalfDiagonal );
+                tHalfDiagonal  = std::sqrt( tHalfDiagonal );
                 Sample tSample = this->evaluate( tCentre );
                 if ( tSample.mRegion != aRegion )
                 {
@@ -497,7 +497,7 @@ namespace moris::gen
                     real tUpper[ 3 ] = { 0.0, 0.0, 0.0 };
                     for ( uint iDim = 0; iDim < mNumDims; iDim++ )
                     {
-                        bool tHigh      = ( iChild >> iDim ) & 1;
+                        bool tHigh     = ( iChild >> iDim ) & 1;
                         tLower[ iDim ] = tHigh ? tCentre[ iDim ] : aLower[ iDim ];
                         tUpper[ iDim ] = tHigh ? aUpper[ iDim ] : tCentre[ iDim ];
                     }
@@ -586,6 +586,18 @@ namespace moris::gen
                 }
             }
 
+            // field value at the lattice point nearest to a parametric point (an XTK sample: corner, face or cell centre)
+            real
+            lattice_value_at( const real* aPointXi ) const
+            {
+                uint tIJK[ 3 ] = { 0, 0, 0 };
+                for ( uint iDim = 0; iDim < mNumDims; iDim++ )
+                {
+                    tIJK[ iDim ] = uint( std::lround( 0.5 * ( aPointXi[ iDim ] + 1.0 ) * mM ) );
+                }
+                return mLattice[ this->index( tIJK ) ].mValue;
+            }
+
             // value of the piecewise-linear template at a parametric point: the P1 interpolant of the XTK samples on
             // the regular subdivision (4 triangles around the centre in 2D, 24 tets around face and cell centres in 3D)
             real
@@ -593,15 +605,6 @@ namespace moris::gen
             {
                 uint tCentreIJK[ 3 ] = { mM / 2, mM / 2, mM / 2 };
                 real tCentre         = mLattice[ this->index( tCentreIJK ) ].mValue;
-
-                auto tValueAt = [ & ]( const real* aPointXi ) -> real {
-                    uint tIJK[ 3 ] = { 0, 0, 0 };
-                    for ( uint iDim = 0; iDim < mNumDims; iDim++ )
-                    {
-                        tIJK[ iDim ] = uint( std::lround( 0.5 * ( aPointXi[ iDim ] + 1.0 ) * mM ) );
-                    }
-                    return mLattice[ this->index( tIJK ) ].mValue;
-                };
 
                 if ( mNumDims == 2 )
                 {
@@ -622,7 +625,7 @@ namespace moris::gen
                     real tDet = tA[ 0 ] * tB[ 1 ] - tA[ 1 ] * tB[ 0 ];
                     real tWa  = ( aXi[ 0 ] * tB[ 1 ] - aXi[ 1 ] * tB[ 0 ] ) / tDet;
                     real tWb  = ( tA[ 0 ] * aXi[ 1 ] - tA[ 1 ] * aXi[ 0 ] ) / tDet;
-                    return tCentre + tWa * ( tValueAt( tA ) - tCentre ) + tWb * ( tValueAt( tB ) - tCentre );
+                    return tCentre + tWa * ( this->lattice_value_at( tA ) - tCentre ) + tWb * ( this->lattice_value_at( tB ) - tCentre );
                 }
 
                 // 3D: face of the dominant direction, then the edge of that face the point faces
@@ -634,9 +637,9 @@ namespace moris::gen
                         tK = iDim;
                     }
                 }
-                real tS  = aXi[ tK ] >= 0.0 ? 1.0 : -1.0;
-                uint tI  = ( tK + 1 ) % 3;
-                uint tJ  = ( tK + 2 ) % 3;
+                real tS      = aXi[ tK ] >= 0.0 ? 1.0 : -1.0;
+                uint tI      = ( tK + 1 ) % 3;
+                uint tJ      = ( tK + 2 ) % 3;
                 real tF[ 3 ] = { 0.0, 0.0, 0.0 };
                 tF[ tK ]     = tS;
                 real tA[ 3 ] = { 0.0, 0.0, 0.0 };
@@ -644,12 +647,12 @@ namespace moris::gen
                 tA[ tK ] = tS, tB[ tK ] = tS;
                 if ( std::abs( aXi[ tI ] ) >= std::abs( aXi[ tJ ] ) )
                 {
-                    real tU = aXi[ tI ] >= 0.0 ? 1.0 : -1.0;
+                    real tU  = aXi[ tI ] >= 0.0 ? 1.0 : -1.0;
                     tA[ tI ] = tU, tA[ tJ ] = -1.0, tB[ tI ] = tU, tB[ tJ ] = 1.0;
                 }
                 else
                 {
-                    real tV = aXi[ tJ ] >= 0.0 ? 1.0 : -1.0;
+                    real tV  = aXi[ tJ ] >= 0.0 ? 1.0 : -1.0;
                     tA[ tJ ] = tV, tA[ tI ] = -1.0, tB[ tJ ] = tV, tB[ tI ] = 1.0;
                 }
                 // aXi = f F + a A + b B (cell centre at the origin)
@@ -666,8 +669,8 @@ namespace moris::gen
                     tRhs( iDim ) = aXi[ iDim ];
                 }
                 Matrix< DDRMat > tWeights = inv( tMatrix ) * tRhs;
-                return tCentre + tWeights( 0 ) * ( tValueAt( tF ) - tCentre ) + tWeights( 1 ) * ( tValueAt( tA ) - tCentre )
-                     + tWeights( 2 ) * ( tValueAt( tB ) - tCentre );
+                return tCentre + tWeights( 0 ) * ( this->lattice_value_at( tF ) - tCentre ) + tWeights( 1 ) * ( this->lattice_value_at( tA ) - tCentre )
+                     + tWeights( 2 ) * ( this->lattice_value_at( tB ) - tCentre );
             }
 
             void
@@ -821,8 +824,7 @@ namespace moris::gen
     cell_feature_edges( uint aNumDimensions )
     {
         static const Vector< std::pair< uint, uint > > tQuadEdges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 } };
-        static const Vector< std::pair< uint, uint > > tHexEdges  = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 },
-             { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+        static const Vector< std::pair< uint, uint > > tHexEdges  = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
         return aNumDimensions == 2 ? tQuadEdges : tHexEdges;
     }
 

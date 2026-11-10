@@ -31,7 +31,7 @@ namespace moris::gen
             Matrix< DDRMat > tCorners( 1u << tNumDims, tNumDims );
             for ( uint iCorner = 0; iCorner < ( 1u << tNumDims ); iCorner++ )
             {
-                uint tInFace = iCorner % 4;
+                uint tInFace           = iCorner % 4;
                 tCorners( iCorner, 0 ) = aX0 + ( ( tInFace == 1 or tInFace == 2 ) ? aH : 0.0 );
                 tCorners( iCorner, 1 ) = aY0 + ( ( tInFace == 2 or tInFace == 3 ) ? aH : 0.0 );
                 if ( tNumDims == 3 )
@@ -201,8 +201,8 @@ namespace moris::gen
         CHECK( tReport.hides_feature() );
 
         // a straight interface: no hidden feature, template and samples agree on the positive measure
-        Point_Field_Function tLine         = []( const Matrix< DDRMat >& aX ) { return aX( 1 ) - 0.3 - 0.2 * aX( 0 ); };
-        Cell_Feature_Report  tLineReport   = detect_cell_features( tLine, box_corners( 0.0, 0.0, 1.0 ), gTol, settings( 8 ) );
+        Point_Field_Function tLine       = []( const Matrix< DDRMat >& aX ) { return aX( 1 ) - 0.3 - 0.2 * aX( 0 ); };
+        Cell_Feature_Report  tLineReport = detect_cell_features( tLine, box_corners( 0.0, 0.0, 1.0 ), gTol, settings( 8 ) );
         CHECK( not tLineReport.hides_feature() );
         CHECK( tLineReport.mSampledPositive == Approx( tLineReport.mTemplatePositive ).epsilon( 1e-12 ) );
     }
