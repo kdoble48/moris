@@ -68,5 +68,16 @@ namespace moris::wrk
                 uint aRefinementIndex ) override;
 
         //------------------------------------------------------------------------------------------------------------------
+        //------------------------------------------------------------------------------------------------------------------
+
+        uint get_feature_refinement_samples( uint aFieldIndex ) override;
+
+        bool can_change_region_inside_cell( uint aFieldIndex ) override;
+
+        uint detect_cell_features(
+                uint                    aFieldIndex,
+                const Matrix< DDRMat >& aCorners,
+                uint                    aLagrangeOrder,
+                uint                    aSamples ) override;
     };
 }
