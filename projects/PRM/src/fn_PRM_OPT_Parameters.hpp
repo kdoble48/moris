@@ -239,6 +239,13 @@ namespace moris::prm
         // In-process restarts (reinitialization schedule, user_function re-fit, failed decomposition) keep the state
         // in memory. Every completed iteration also writes MMA_State_Alg_<a>_Iter_<N>.hdf5, N = the iteration of the
         // committed design's ADV_Alg_<a>_Iter_<N>.hdf5; restart_state_file loads one at the start of a new run.
+        // Limitations:
+        // - An in-process restart maps kept state slot i to ADV slot i (restart_state_row_map applies to
+        //   restart_state_file only). When the restart replaces the design and reuses a slot for a different variable
+        //   (e.g. a re-fit that re-assigns ADVs), that variable inherits the slot's asymptote widths and move limit,
+        //   unless it lies further than restart_keep_state_moved_fraction of its range from the slot's kept design.
+        // - The convergence reference (the KKT residual the norm drop is measured against) stays that of the first
+        //   design of the run, or of the run that wrote restart_state_file; it is not re-derived at the restart design.
         tParameterList.insert( "restart_keep_state", false );
         tParameterList.insert( "restart_keep_state_moved_fraction", 0.25 );    // <= 0: no ADV counts as moved
         tParameterList.insert( "restart_state_file", "" );                     // MMA_State_*.hdf5 of a previous run
