@@ -369,28 +369,65 @@ namespace moris::wrk
 
         MORIS_ERROR( mReinitMode == ReinitMode::USER_FUNCTION, "Reinitialize_Performer::apply_user_function() - not in user_function mode." );
 
-        // the ADV vector and bounds of GEN are complete on a single processor only
-        MORIS_ERROR( par_size() == 1, "Reinitialize_Performer: sdf_reinit_mode = \"user_function\" runs on one processor only." );
+        // Collective. The optimizer's ADV vector and its bounds are complete on processor 0 only (get_advs() assembles
+        // them there and returns an empty vector elsewhere), so the deck function is called once, on processor 0, on the
+        // whole design; set_advs() then distributes the result to every processor, as it does for the optimizer's ADVs.
+        Vector< real > tADVs     = aGENPerformer( 0 )->get_advs();
+        Vector< sint > tLocalIds = aGENPerformer( 0 )->get_design_determining_adv_ids( mADVFiledName );
 
-        Vector< real > tADVs      = aGENPerformer( 0 )->get_advs();
-        Vector< real > tLower     = aGENPerformer( 0 )->get_lower_bounds();
-        Vector< real > tUpper     = aGENPerformer( 0 )->get_upper_bounds();
-        Vector< sint > tPositions = aGENPerformer( 0 )->get_design_adv_positions( mADVFiledName );
+        if ( par_size() > 1 )
+        {
+            // The function gets the design's ADVs in the design's own order. That order must not depend on the partition:
+            // every processor has to know the same ADV IDs in the same order (the variables of an analytic or
+            // Gaussian-splat geometry). A B-spline discretized design holds on each processor only the coefficients of
+            // its part of the mesh; its coefficient order changes with the number of processors.
+            uint tNumIds = tLocalIds.size();
+            broadcast( tNumIds );
+            Vector< sint > tIdsOnProc0 = tLocalIds;
+            tIdsOnProc0.resize( tNumIds, -1 );
+            if ( tNumIds > 0 )
+            {
+                MPI_Bcast( tIdsOnProc0.memptr(), (int)tNumIds, MPI_INT, 0, get_comm() );
+            }
+            uint tSame = tLocalIds.size() == tNumIds ? 1 : 0;
+            for ( uint iADV = 0; iADV < tNumIds && tSame == 1; iADV++ )
+            {
+                tSame = tLocalIds( iADV ) == tIdsOnProc0( iADV ) ? 1 : 0;
+            }
+            MORIS_ERROR( min_all( tSame ) == 1,
+                    "Reinitialize_Performer: sdf_reinit_mode = \"user_function\" on several processors needs a design whose ADVs "
+                    "every processor holds in the same order (analytic or Gaussian-splat geometry variables). Design '%s' "
+                    "is distributed over the processors (a B-spline discretized field): run it on one processor.",
+                    mADVFiledName.c_str() );
+        }
 
-        MORIS_ERROR( tPositions.size() > 0,
-                "Reinitialize_Performer: GEN has no design named '%s' with ADVs (the mapping sublist's adv_field).",
-                mADVFiledName.c_str() );
+        User_Reinit_Report tReport;
+        if ( par_rank() == 0 )
+        {
+            Vector< real > tLower     = aGENPerformer( 0 )->get_lower_bounds();
+            Vector< real > tUpper     = aGENPerformer( 0 )->get_upper_bounds();
+            Vector< sint > tPositions = aGENPerformer( 0 )->get_design_adv_positions( mADVFiledName );
 
-        MORIS_LOG_INFO(
-                "Reinitialization (user_function '%s') at optimization iteration %u: calling it on the %zu ADVs of design "
-                "'%s' (the last evaluated design)",
-                mUserFunctionName.c_str(),
-                aIteration,
-                tPositions.size(),
-                mADVFiledName.c_str() );
+            MORIS_ERROR( tPositions.size() > 0,
+                    "Reinitialize_Performer: GEN has no design named '%s' with ADVs (the mapping sublist's adv_field).",
+                    mADVFiledName.c_str() );
 
-        User_Reinit_Report tReport = apply_user_reinitialization(
-                tADVs, tPositions, tLower, tUpper, mUserFunction, aIteration, mUserFunctionName );
+            MORIS_LOG_INFO(
+                    "Reinitialization (user_function '%s') at optimization iteration %u: calling it on the %zu ADVs of design "
+                    "'%s' (the last evaluated design)",
+                    mUserFunctionName.c_str(),
+                    aIteration,
+                    tPositions.size(),
+                    mADVFiledName.c_str() );
+
+            tReport = apply_user_reinitialization(
+                    tADVs, tPositions, tLower, tUpper, mUserFunction, aIteration, mUserFunctionName );
+        }
+        else
+        {
+            // as the optimizer hands them to set_advs(): complete on processor 0, empty elsewhere
+            tADVs.clear();
+        }
 
         aGENPerformer( 0 )->set_advs( tADVs );
 

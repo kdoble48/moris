@@ -434,7 +434,11 @@ namespace moris
              * sdf_reinit_mode = "user_function": replace the ADVs of the adv_field design in GEN by the deck function's
              * result (apply_user_reinitialization on GEN's current ADVs, i.e. those of the last evaluated design) and log
              * the change. Called by Workflow_HMR_XTK::initialize() on the optimizer restart that the reinitialization
-             * schedule (OPT reinitialize_interface_iter / first_reinitialize_interface_iter) requested. Serial only.
+             * schedule (OPT reinitialize_interface_iter / first_reinitialize_interface_iter) requested.
+             * Collective: on several processors the deck function is called once, on processor 0 (which holds the
+             * optimizer's whole ADV vector), and set_advs() distributes its result. The design's ADV IDs must be the same,
+             * in the same order, on every processor (analytic and Gaussian-splat geometry variables); a design that is
+             * distributed over the processors (B-spline coefficients) stops with an error.
              */
             void
             apply_user_function(

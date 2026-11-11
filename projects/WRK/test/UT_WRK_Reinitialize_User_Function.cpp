@@ -10,7 +10,8 @@
  * OPT reinitialization schedule (reinitialize_interface_iter) requests.
  *  - the pure core Reinitialize_Performer::apply_user_reinitialization(): slice, clipping, failure handling;
  *  - an optimization (WRK_Input_2.so, native MMA): the function sees the last evaluated design, the next evaluation is
- *    exactly the function's result, and the run continues to its iteration limit.
+ *    exactly the function's result, and the run continues to its iteration limit. On several processors the function is
+ *    called once, on processor 0, and every evaluated design equals the one of the 1-processor run.
  *
  */
 
@@ -18,6 +19,8 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <iomanip>
+#include <iostream>
 
 #include "cl_Communication_Tools.hpp"
 #include "paths.hpp"
@@ -117,7 +120,7 @@ namespace moris::wrk
     namespace
     {
         void
-        check_optimization_with_user_reinitialization( bool aGenRefines )
+        check_optimization_with_user_reinitialization( bool aGenRefines, const Vector< Vector< real > >& aSerialDesigns )
         {
             setenv( "WRK_INPUT_2_GEN_REFINE", aGenRefines ? "1" : "0", 1 );
 
@@ -140,6 +143,15 @@ namespace moris::wrk
 
             opt::Manager tManager( tOPTParameterList, tWorkflows, tLibrary );
             REQUIRE_NOTHROW( tManager.perform() );
+
+            // the optimizer, the objective and the deck function run on processor 0; the other processors only take part in
+            // the evaluations and must not have called the function
+            if ( par_rank() != 0 )
+            {
+                Count_Getter tNumCallsElsewhere = tLibrary->load_function< Count_Getter >( "get_num_reinit_calls" );
+                CHECK( tNumCallsElsewhere() == 0 );
+                return;
+            }
 
             Count_Getter         tNumCalls       = tLibrary->load_function< Count_Getter >( "get_num_reinit_calls" );
             Count_Getter         tNumEvaluations = tLibrary->load_function< Count_Getter >( "get_num_evaluations" );
@@ -179,24 +191,52 @@ namespace moris::wrk
 
             // the optimizer kept iterating after the last call
             CHECK( tNumEvaluations() >= tLastAfter + 1 );
+
+            // every evaluated design is the one of the 1-processor run (the serial values of this test)
+            std::cout << std::setprecision( 15 ) << "user_function reinitialization, " << ( aGenRefines ? "GEN-refined" : "fixed" )
+                      << " mesh, " << par_size() << " processor(s): " << tNumCalls() << " calls, " << tNumEvaluations()
+                      << " evaluations\n";
+            for ( uint iEvaluation = 0; iEvaluation < tNumEvaluations(); iEvaluation++ )
+            {
+                Vector< real > tDesign = tEvaluated( iEvaluation );
+                std::cout << "  evaluation " << iEvaluation << ": " << tDesign( 0 ) << " " << tDesign( 1 ) << '\n';
+            }
+            REQUIRE( tNumEvaluations() == aSerialDesigns.size() );
+            for ( uint iEvaluation = 0; iEvaluation < tNumEvaluations(); iEvaluation++ )
+            {
+                Vector< real > tDesign = tEvaluated( iEvaluation );
+                CHECK( tDesign( 0 ) == Approx( aSerialDesigns( iEvaluation )( 0 ) ).epsilon( 1.0e-7 ) );
+                CHECK( tDesign( 1 ) == Approx( aSerialDesigns( iEvaluation )( 1 ) ).epsilon( 1.0e-7 ) );
+            }
         }
     }    // namespace
 
     TEST_CASE( "user_function reinitialization: an optimization continues from the function's result",
             "[WRK],[Reinitialize_User_Function]" )
     {
-        if ( par_size() == 1 )
+        // restart path 1: GEN refines the mesh, which is rebuilt on the new design (the GS-LS decks)
+        SECTION( "GEN-refined mesh" )
         {
-            // restart path 1: GEN refines the mesh, which is rebuilt on the new design (the GS-LS decks)
-            SECTION( "GEN-refined mesh" )
-            {
-                check_optimization_with_user_reinitialization( true );
-            }
-            // restart path 2: design-independent mesh, kept; GEN rebuilt at the new ADVs
-            SECTION( "design-independent mesh" )
-            {
-                check_optimization_with_user_reinitialization( false );
-            }
+            check_optimization_with_user_reinitialization( true,
+                    { { 0.5, 0.31 },
+                            { 0.480333157041999, 0.308577965563353 },
+                            { 0.460333243298349, 0.309410936861192 },
+                            { 0.43, 0.27 },
+                            { 0.410000094139711, 0.282499984838826 },
+                            { 0.390000157920133, 0.294999969424 },
+                            { 0.43, 0.27 } } );
+        }
+        // restart path 2: design-independent mesh, kept; GEN rebuilt at the new ADVs
+        SECTION( "design-independent mesh" )
+        {
+            check_optimization_with_user_reinitialization( false,
+                    { { 0.5, 0.31 },
+                            { 0.480996891841292, 0.309900988164436 },
+                            { 0.460996963946742, 0.310897962809957 },
+                            { 0.43, 0.27 },
+                            { 0.410000142370524, 0.282499983720318 },
+                            { 0.390000220889688, 0.294999969030376 },
+                            { 0.43, 0.27 } } );
         }
     }
 }    // namespace moris::wrk
