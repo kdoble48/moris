@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 
 #include "cl_OPT_Algorithm_MMA.hpp"
 #include "cl_Communication_Tools.hpp"
@@ -1654,7 +1655,149 @@ namespace moris::opt
         tState.mRaa0        = raa0;
         tState.mObjScale    = mObjScale;
         tState.mKKTRef      = mKKTRef;
+        this->set_restart_state_order( tState );
         return tState;
+    }
+
+    //------------------------------------------------------------------------------
+
+    void
+    Algorithm_MMA::set_restart_state_order( Restart_State& aState ) const
+    {
+        // what identifies the order of the per-ADV arrays: the ADV IDs the ADV restart file stores (when every ADV has
+        // an entry), and the processor count
+        const Matrix< IdMat >& tIjklIds = mProblem->get_ijklIDs();
+        aState.mIjklIds                 = tIjklIds.numel() == (uint)mNumVar ? tIjklIds : Matrix< IdMat >();
+        aState.mNumProcs                = par_size();
+    }
+
+    //------------------------------------------------------------------------------
+
+    std::vector< sint >
+    Algorithm_MMA::restart_state_id_map(
+            const Restart_State&   aState,
+            const Matrix< IdMat >& aIjklIds,
+            uint                   aNumVar,
+            sint                   aNumProcs,
+            sint                   aDesignFileNumProcs,
+            const std::string&     aFileName )
+    {
+        const uint tNumOld = aState.mCentre.size();
+        MORIS_ERROR( tNumOld == aNumVar,
+                "Native MMA: restart_state_file '%s' holds %u ADVs, the problem has %u (set restart_state_row_map).",
+                aFileName.c_str(),
+                tNumOld,
+                aNumVar );
+
+        const bool tStateHasIds   = aNumVar > 0 && aState.mIjklIds.numel() == aNumVar;
+        const bool tProblemHasIds = aNumVar > 0 && aIjklIds.numel() == aNumVar;
+
+        if ( tStateHasIds && tProblemHasIds )
+        {
+            // same IDs at the same positions: the file order is the current order
+            bool tSameOrder = true;
+            for ( uint iADV = 0; iADV < aNumVar && tSameOrder; iADV++ )
+            {
+                tSameOrder = aState.mIjklIds( iADV ) == aIjklIds( iADV );
+            }
+            if ( tSameOrder )
+            {
+                MORIS_LOG_INFO( "Native MMA: restart_state_file '%s': its %u ADV IDs are in the current order.", aFileName.c_str(), aNumVar );
+                return {};
+            }
+
+            // position of each ID in the state
+            std::unordered_map< moris_id, sint > tIdToStatePosition;
+            tIdToStatePosition.reserve( aNumVar );
+            for ( uint iOld = 0; iOld < aNumVar; iOld++ )
+            {
+                if ( aState.mIjklIds( iOld ) != gNoID )
+                {
+                    const bool tNewId = tIdToStatePosition.emplace( aState.mIjklIds( iOld ), (sint)iOld ).second;
+                    MORIS_ERROR( tNewId,
+                            "Native MMA: restart_state_file '%s' holds the ADV ID %d more than once, so its state cannot be "
+                            "mapped to the current ADV order by ID (set restart_state_row_map).",
+                            aFileName.c_str(),
+                            (int)aState.mIjklIds( iOld ) );
+                }
+            }
+
+            std::vector< sint > tMap( aNumVar, -1 );
+            std::vector< char > tUsed( aNumVar, 0 );
+            uint                tNumElsewhere = 0;
+            for ( uint iADV = 0; iADV < aNumVar; iADV++ )
+            {
+                sint tOld = (sint)iADV;
+                if ( aIjklIds( iADV ) == gNoID )
+                {
+                    // not tied to a mesh entity: the same position in every order (as in the ADV restart file)
+                    MORIS_ERROR( aState.mIjklIds( iADV ) == gNoID,
+                            "Native MMA: ADV %u has no ID, but restart_state_file '%s' holds the ID %d at its position; the "
+                            "state cannot be mapped to the current ADV order (set restart_state_row_map).",
+                            iADV,
+                            aFileName.c_str(),
+                            (int)aState.mIjklIds( iADV ) );
+                }
+                else
+                {
+                    const std::unordered_map< moris_id, sint >::const_iterator tFound = tIdToStatePosition.find( aIjklIds( iADV ) );
+                    MORIS_ERROR( tFound != tIdToStatePosition.end(),
+                            "Native MMA: the ID %d of ADV %u is not in restart_state_file '%s'; the state belongs to another "
+                            "set of ADVs (set restart_state_row_map).",
+                            (int)aIjklIds( iADV ),
+                            iADV,
+                            aFileName.c_str() );
+                    tOld = tFound->second;
+                }
+                MORIS_ERROR( !tUsed[ tOld ],
+                        "Native MMA: the ADV ID %d appears more than once in the current design, so the state of "
+                        "restart_state_file '%s' cannot be mapped by ID (set restart_state_row_map).",
+                        (int)aIjklIds( iADV ),
+                        aFileName.c_str() );
+                tUsed[ tOld ] = 1;
+                tMap[ iADV ]  = tOld;
+                if ( tOld != (sint)iADV )
+                {
+                    tNumElsewhere++;
+                }
+            }
+
+            MORIS_LOG_INFO(
+                    "Native MMA: restart_state_file '%s' mapped by ADV ID: %u of %u ADVs are at another position than in the "
+                    "file (written on %d processors, read on %d).",
+                    aFileName.c_str(),
+                    tNumElsewhere,
+                    aNumVar,
+                    (int)aState.mNumProcs,
+                    (int)aNumProcs );
+            return tMap;
+        }
+
+        // no IDs on one side: the file order is the current order only on the processor count the file belongs to. A
+        // file written before the IDs were stored has no count; the ADV restart file read with it has
+        const bool tOldFile   = aState.mNumProcs < 0;
+        const sint tFileProcs = tOldFile ? aDesignFileNumProcs : aState.mNumProcs;
+        MORIS_ERROR( tFileProcs >= 0,
+                "Native MMA: restart_state_file '%s' has neither ADV IDs nor a processor count (written before both were "
+                "stored), and no ADV restart file with a processor count was read with it: its ADV order cannot be checked "
+                "against the current one. Restart together with the ADV restart file of the same iteration on the processor "
+                "count that wrote both, or set restart_state_row_map.",
+                aFileName.c_str() );
+        MORIS_ERROR( tFileProcs == aNumProcs,
+                "Native MMA: restart_state_file '%s' was written on %d processors%s and %s, and this run uses %d processors: "
+                "the ADV order differs and the state cannot be mapped to it. Restart on %d processors (state files written "
+                "from there on carry the IDs when the ADVs have them), or set restart_state_row_map.",
+                aFileName.c_str(),
+                (int)tFileProcs,
+                tOldFile ? " (the count of the ADV restart file)" : "",
+                tStateHasIds ? "the ADVs of this problem have no IDs" : "holds no ADV IDs",
+                (int)aNumProcs,
+                (int)tFileProcs );
+
+        MORIS_LOG_INFO( "Native MMA: restart_state_file '%s' holds no usable ADV IDs; read in file order (same processor count, %d).",
+                aFileName.c_str(),
+                (int)aNumProcs );
+        return {};
     }
 
     //------------------------------------------------------------------------------
@@ -1685,6 +1828,24 @@ namespace moris::opt
                         mStateFile.c_str(),
                         mKeptState.mRaa.size(),
                         mNumCon );
+
+                // the ADV order depends on the processor count: without a row map from the user, the state is mapped
+                // to the current order by ADV ID, or stops if its order cannot be checked (never a blind positional read)
+                if ( tRowMap.empty() )
+                {
+                    tRowMap = restart_state_id_map(
+                            mKeptState,
+                            mProblem->get_ijklIDs(),
+                            (uint)mNumVar,
+                            par_size(),
+                            mProblem->get_restart_file_num_procs(),
+                            mStateFile );
+                }
+                else
+                {
+                    MORIS_LOG_INFO( "Native MMA: restart_state_file '%s' is mapped by restart_state_row_map (positions in the file).",
+                            mStateFile.c_str() );
+                }
             }
         }
 
@@ -1740,6 +1901,7 @@ namespace moris::opt
         tApplied.mRaa0        = raa0;
         tApplied.mObjScale    = mObjScale;
         tApplied.mKKTRef      = mKKTRef;
+        this->set_restart_state_order( tApplied );
 
         mKeptState      = tApplied;
         mWarmStartState = tApplied;
@@ -1891,6 +2053,13 @@ namespace moris::opt
         save_scalar_to_hdf5_file( tFileID, "KKTRef", aState.mKKTRef, tStatus );
         save_scalar_to_hdf5_file( tFileID, "OptIteration", (sint)aOptIter, tStatus );
 
+        // the order of the per-ADV arrays: the ADV IDs (as in the ADV restart file) and the processor count
+        if ( aState.mIjklIds.numel() == aState.mCentre.size() && aState.mIjklIds.numel() > 0 )
+        {
+            save_matrix_to_hdf5_file( tFileID, "IjklIds", aState.mIjklIds, tStatus );
+        }
+        save_scalar_to_hdf5_file( tFileID, "NumProcs", aState.mNumProcs, tStatus );
+
         close_hdf5_file( tFileID );
     }
 
@@ -1917,11 +2086,22 @@ namespace moris::opt
         load_scalar_from_hdf5_file( tFileID, "ObjScale", tState.mObjScale, tStatus );
         load_scalar_from_hdf5_file( tFileID, "KKTRef", tState.mKKTRef, tStatus );
 
+        // files written before the ADV order was stored have neither
+        if ( dataset_exists( tFileID, "IjklIds" ) )
+        {
+            load_matrix_from_hdf5_file( tFileID, "IjklIds", tState.mIjklIds, tStatus );
+        }
+        if ( dataset_exists( tFileID, "NumProcs" ) )
+        {
+            load_scalar_from_hdf5_file( tFileID, "NumProcs", tState.mNumProcs, tStatus );
+        }
+
         close_hdf5_file( tFileID );
 
         const std::size_t tNumVar = tState.mCentre.size();
         MORIS_ERROR( tState.mLowWidth.size() == tNumVar && tState.mUppWidth.size() == tNumVar && tState.mMoveStep.size() == tNumVar
-                             && tState.mPenalty.size() == tState.mRaa.size(),
+                             && tState.mPenalty.size() == tState.mRaa.size()
+                             && ( tState.mIjklIds.numel() == 0 || tState.mIjklIds.numel() == tNumVar ),
                 "Native MMA: inconsistent optimizer state file %s.",
                 aFileName.c_str() );
         tState.mValid = true;
