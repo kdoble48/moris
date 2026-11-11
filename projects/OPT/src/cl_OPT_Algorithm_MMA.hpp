@@ -146,6 +146,8 @@ namespace moris::opt
             real                  mRaa0     = 0.0;
             real                  mObjScale = 1.0;
             real                  mKKTRef   = -1.0;
+            Matrix< IdMat >       mIjklIds;          ///< ADV IDs in the order of the arrays (empty: the ADVs carry none)
+            sint                  mNumProcs = -1;    ///< processor count the order belongs to (-1: unknown, old files)
         };
 
         /** what apply_restart_state() did per ADV */
@@ -180,10 +182,38 @@ namespace moris::opt
                 std::vector< double >&       aUpp,
                 std::vector< double >&       aMove );
 
-        /** write aState to an HDF5 file (datasets Centre, LowWidth, UppWidth, MoveStep, bounds, Raa, Penalty, scalars) */
+        /**
+         * Map from the current ADV order to the order of a state read from a file: entry i is the position in aState
+         * of the ADV at position i now. Empty if the two orders are the same.
+         *
+         * The ADV order depends on the processor count, so the state identifies its ADVs like the ADV restart file
+         * does, by their IDs (IjklIds). With IDs on both sides the state is mapped by ID (an ADV without an ID, gNoID,
+         * keeps its position). Without them (a state file written before the IDs were stored, or ADVs that carry
+         * none), the order can only be the same if the processor count is: that of the state, or for an old file that
+         * of the ADV restart file read with it (aDesignFileNumProcs, -1 if none was read). Anything else is an error.
+         *
+         * @param aState state as read from the file
+         * @param aIjklIds current ADV IDs (any other size than aNumVar: the ADVs carry no IDs)
+         * @param aNumVar current number of ADVs (must be that of the state)
+         * @param aNumProcs current processor count
+         * @param aDesignFileNumProcs processor count of the ADV restart file of this run, -1 if there is none
+         * @param aFileName state file name, for the messages
+         */
+        static std::vector< sint > restart_state_id_map(
+                const Restart_State&   aState,
+                const Matrix< IdMat >& aIjklIds,
+                uint                   aNumVar,
+                sint                   aNumProcs,
+                sint                   aDesignFileNumProcs,
+                const std::string&     aFileName );
+
+        /**
+         * write aState to an HDF5 file (datasets Centre, LowWidth, UppWidth, MoveStep, bounds, Raa, Penalty, scalars,
+         * NumProcs, and IjklIds if the state has them)
+         */
         static void write_restart_state( const std::string& aFileName, const Restart_State& aState, uint aOptIter );
 
-        /** read a state written by write_restart_state() */
+        /** read a state written by write_restart_state(); a file without IjklIds / NumProcs gives none / -1 */
         static Restart_State read_restart_state( const std::string& aFileName );
 
         /** file name of the state saved with the committed design of optimization iteration aOptIter */
@@ -232,6 +262,9 @@ namespace moris::opt
 
         /** snapshot of the state at the end of a completed iteration (next asymptotes, move limits, raa, scale) */
         Restart_State capture_restart_state();
+
+        /** record the order of the per-ADV arrays of aState: the problem's ADV IDs and the processor count */
+        void set_restart_state_order( Restart_State& aState ) const;
 
         /** apply the kept (or file) state at the start of a solve; returns true if this solve is warm */
         bool begin_warm_solve();

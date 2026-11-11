@@ -497,6 +497,7 @@ namespace moris::opt
         load_vector_from_hdf5_file( tFileID, "LowerBounds", tRestartLowerBounds.data(), tStatus );
 
         load_scalar_from_hdf5_file( tFileID, "NumProcs", tParSizeFile, tStatus );
+        mRestartFileNumProcs = tParSizeFile;
 
         // FIXME this function also should work if you want to restart with same number procs but new proc layout
         // in this case this if criteria should be deleted

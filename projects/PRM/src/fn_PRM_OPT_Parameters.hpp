@@ -239,6 +239,12 @@ namespace moris::prm
         // In-process restarts (reinitialization schedule, user_function re-fit, failed decomposition) keep the state
         // in memory. Every completed iteration also writes MMA_State_Alg_<a>_Iter_<N>.hdf5, N = the iteration of the
         // committed design's ADV_Alg_<a>_Iter_<N>.hdf5; restart_state_file loads one at the start of a new run.
+        // The ADV order depends on the processor count. The state file stores the ADV IDs (IjklIds, as the ADV restart
+        // file) and the processor count, and without a row map it is mapped to the current order by ID, so a state
+        // written on any processor count restarts on any other. Where there are no IDs (a file written before they
+        // were stored, or ADVs without IDs), the file is read in file order if the processor count is that of the file
+        // (for an old file: that of the ADV restart file read with it), and the run stops otherwise. With
+        // restart_state_row_map the positions are those of the file, as given; the IDs are not used.
         // Limitations:
         // - An in-process restart maps kept state slot i to ADV slot i (restart_state_row_map applies to
         //   restart_state_file only). When the restart replaces the design and reuses a slot for a different variable
