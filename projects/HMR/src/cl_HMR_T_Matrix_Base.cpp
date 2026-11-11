@@ -522,10 +522,6 @@ namespace moris::hmr
     {
         Background_Element_Base* aBSpBackgroundElement = aBsplineElement->get_background_element();
 
-        // evaluate
-        this->init_modified_lagrange_parameter_coordinates( aLagrangeElement, aBsplineElement );
-        this->recompute_lagrange_matrix();
-
         // get B-Spline pattern of this mesh
         uint tBSplinePattern = mBSplineMesh->get_activation_pattern();
 
@@ -538,15 +534,8 @@ namespace moris::hmr
         // number of nodes per element
         uint tNumberOfNodesPerElement = mLagrangeMesh->get_number_of_bases_per_element();
 
-        // unity matrix
-        Matrix< DDRMat > tEye;
-        eye( tNumberOfNodesPerElement, tNumberOfNodesPerElement, tEye );
-
-        // calculate transposed Lagrange T-Matrix
-        Matrix< DDRMat > tL( mTMatrixLagrangeModified );
-
         // get pointer to background element
-        auto tBackgroundElement = aLagrangeElement->get_background_element();
+        Background_Element_Base* tBackgroundElement = aLagrangeElement->get_background_element();
 
         // initialize refinement Matrix
         Matrix< DDRMat > tR;
@@ -571,6 +560,15 @@ namespace moris::hmr
             // jump to parent
             tBackgroundElement = tBackgroundElement->get_parent();
         }
+
+        // evaluate the extended B-spline basis at the Lagrange nodes of the ancestor that is active on the B-spline
+        // pattern; tR then interpolates them down to the Lagrange element (MB-104: coordinates were taken from the
+        // Lagrange element itself, mixing ijk of different levels and counting the child position twice)
+        this->init_modified_lagrange_parameter_coordinates( tBackgroundElement, aBsplineElement );
+        this->recompute_lagrange_matrix();
+
+        // calculate transposed Lagrange T-Matrix
+        Matrix< DDRMat > tL( mTMatrixLagrangeModified );
 
         // calculate the B-Spline T-Matrix
         Matrix< DDRMat > tB;

@@ -99,6 +99,9 @@ Linear_Solver_PETSc::solve_linear_system(
     Mat tRHSVecs = static_cast< MultiVector_PETSc* >( aLinearSystem->get_solver_RHS() )->get_petsc_vector();
     Mat tLHSVecs = static_cast< MultiVector_PETSc* >( aLinearSystem->get_free_solver_LHS() )->get_petsc_vector();
 
+    // number of right-hand sides whose solve failed or did not converge (MB-101)
+    moris::sint tErrorStatus = 0;
+
     for ( uint iNumRHS = 0; iNumRHS < mSolverInterface->get_num_rhs(); iNumRHS++ )
     {
         Vec tRHSVec, tLHSVec;
@@ -110,7 +113,19 @@ Linear_Solver_PETSc::solve_linear_system(
         VecAssemblyBegin( tLHSVec );
         VecAssemblyEnd( tLHSVec );
 
-        KSPSolve( mPetscKSPProblem,tRHSVec,tLHSVec );
+        PetscErrorCode tPetscError = KSPSolve( mPetscKSPProblem, tRHSVec, tLHSVec );
+
+        // a negative reason means KSP diverged (iteration limit, breakdown, ...)
+        KSPConvergedReason tReason = KSP_CONVERGED_ITERATING;
+        KSPGetConvergedReason( mPetscKSPProblem, &tReason );
+
+        MORIS_LOG_SPEC( "KSPConvergedReason", static_cast< moris::sint >( tReason ) );
+
+        if ( tPetscError != 0 || tReason < 0 )
+        {
+            tErrorStatus++;
+        }
+
         MatDenseRestoreColumnVec( tRHSVecs, iNumRHS, &tRHSVec );
         MatDenseRestoreColumnVec( tLHSVecs, iNumRHS, &tLHSVec );
     }
@@ -122,7 +137,7 @@ Linear_Solver_PETSc::solve_linear_system(
 
     KSPDestroy( &mPetscKSPProblem );
 
-    return 0;
+    return tErrorStatus;
 }
 
 //----------------------------------------------------------------------------------------

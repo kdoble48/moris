@@ -226,3 +226,100 @@ TEST_CASE( "WRK minimum refinement level schedule", "[WRK],[MB-034]" )
     moris::Vector< moris::uint > tBare = { 2 };
     CHECK( moris::wrk::minimum_refinement_level_at( tBare, 0 ) == 0 );
 }
+
+moris::real
+tVerticalLine(
+        const Matrix< DDRMat > &aCoords,
+        const Matrix< DDRMat > &aParameters )
+{
+    return aCoords( 0 ) - aParameters( 0 );
+}
+
+// MB-106: field-based refinement of two patterns with one field each. The pattern-0 step queues the refined coarse cells
+// cut by field A too (candidates are active or refined cells); their flags survived and the pattern-1 step refined
+// pattern 1 along field A, where only field B is meant to refine it.
+TEST_CASE( "WRK field-based refinement of two patterns refines each pattern by its own field", "[WRK],[MB-106]" )
+{
+    if ( par_size() <= 1 )
+    {
+        Module_Parameter_Lists tParameters( Module_Type::HMR );
+
+        // 4 x 4 coarse cells of size 1 on [-2,2]^2
+        tParameters.set( "number_of_elements_per_dimension", 4, 4 );
+        tParameters.set( "domain_dimensions", 4.0, 4.0 );
+        tParameters.set( "domain_offset", -2.0, -2.0 );
+        tParameters.set( "lagrange_output_meshes", "0" );
+
+        tParameters.set( "lagrange_orders", "1,1" );
+        tParameters.set( "lagrange_pattern", "0,1" );
+        tParameters.set( "bspline_orders", "1,1" );
+        tParameters.set( "bspline_pattern", "0,1" );
+        tParameters.set( "lagrange_to_bspline", "0;1" );
+
+        tParameters.set( "refinement_buffer", 0 );
+        tParameters.set( "staircase_buffer", 1 );
+
+        // pattern 0 is finer than pattern 1, so its coarse cells are refined candidates
+        tParameters.set( "pattern_initial_refinement", 1, 0 );
+
+        Parameter_List tRefinementParameters( "Refinement" );
+        prm::create_refinement_parameterlist( tRefinementParameters );
+        tRefinementParameters.set( "field_names", "A,B" );
+        tRefinementParameters.set( "levels_of_refinement", "1;1" );
+        tRefinementParameters.set( "refinement_pattern", "0;1" );
+
+        std::shared_ptr< hmr::HMR > tHMRPerformer = std::make_shared< hmr::HMR >( tParameters );
+        tHMRPerformer->perform_initial_refinement();
+
+        std::shared_ptr< hmr::Database > tHMRDatabase = tHMRPerformer->get_database();
+
+        // field A: circle of radius 1.1 about the origin, on pattern 0
+        hmr::Interpolation_Mesh_HMR *tMeshPattern0 = new hmr::Interpolation_Mesh_HMR( tHMRDatabase, 1, 0, 1, 0 );
+        mtk::Mesh_Pair               tMeshPairPattern0( tMeshPattern0, nullptr, false );
+
+        // field B: vertical line x = 1.3, on pattern 1
+        hmr::Interpolation_Mesh_HMR *tMeshPattern1 = new hmr::Interpolation_Mesh_HMR( tHMRDatabase, 1, 1, 1, 1 );
+        mtk::Mesh_Pair               tMeshPairPattern1( tMeshPattern1, nullptr, false );
+
+        Vector< std::shared_ptr< mtk::Field > > tFields( 2, nullptr );
+
+        Matrix< DDRMat > tRadius = { { 1.1 } };
+        tFields( 0 )             = std::make_shared< mtk::Field_Analytic >( tCircle, DummyDerivativeFunction, tRadius, tMeshPairPattern0, 1 );
+        tFields( 0 )->set_label( "A" );
+
+        Matrix< DDRMat > tLinePosition = { { 1.3 } };
+        tFields( 1 )                   = std::make_shared< mtk::Field_Analytic >( tVerticalLine, DummyDerivativeFunction, tLinePosition, tMeshPairPattern1, 1 );
+        tFields( 1 )->set_label( "B" );
+
+        wrk::Refinement_Mini_Performer tRefinementPerformer( tRefinementParameters );
+        tRefinementPerformer.perform_refinement( tFields, tHMRPerformer );
+
+        // coarse cells refined on pattern 1 must be cut by field B: the column 1 < x < 2
+        hmr::Background_Mesh_Base *tBackgroundMesh = tHMRDatabase->get_background_mesh();
+
+        Vector< hmr::Background_Element_Base * > tCoarseCells;
+        tBackgroundMesh->collect_elements_on_level_within_proc_domain( 0, tCoarseCells );
+        REQUIRE( tCoarseCells.size() == 16 );
+
+        uint tNumberOfRefinedOnPattern1 = 0;
+        for ( hmr::Background_Element_Base *tCell : tCoarseCells )
+        {
+            Matrix< DDRMat > tCenter;
+            tBackgroundMesh->calc_center_of_element( tCell, tCenter );
+
+            bool tCutByB = ( tCenter( 0 ) - 0.5 - 1.3 ) * ( tCenter( 0 ) + 0.5 - 1.3 ) < 0.0;
+
+            CAPTURE( tCenter( 0 ), tCenter( 1 ) );
+            CHECK( tCell->is_refined( 1 ) == tCutByB );
+
+            if ( tCell->is_refined( 1 ) )
+            {
+                tNumberOfRefinedOnPattern1++;
+            }
+        }
+        CHECK( tNumberOfRefinedOnPattern1 == 4 );
+
+        delete tMeshPattern0;
+        delete tMeshPattern1;
+    }
+}

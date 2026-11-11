@@ -648,8 +648,8 @@ namespace moris::hmr
                 // collect elements from this level
                 aMesh->collect_elements_on_level_within_proc_domain( l, tElements );
 
-                // create a map with ids
-                map< moris_id, luint > tMap;
+                // create a map with ids (keyed by the 64-bit HMR id, MB-105)
+                map< luint, luint > tMap;
 
                 luint j = 0;
                 for ( Background_Element_Base* tElement : tElements )

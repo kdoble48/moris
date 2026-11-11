@@ -2819,10 +2819,11 @@ namespace moris::xtk
         MORIS_ASSERT( aEntityRank == mtk::EntityRank::NODE || aEntityRank == mtk::EntityRank::ELEMENT,
                 "Only Elements or Nodes have ids" );
 
+        // ids start at 1, or one past the largest id in use (get_max_entity_id() returns the largest id itself, MB-107)
         moris_id tGlobalMax = 1;
         if ( !aStartFresh )
         {
-            this->get_max_entity_id( aEntityRank );
+            tGlobalMax = this->get_max_entity_id( aEntityRank ) + 1;
         }
 
         int tProcRank = par_rank();

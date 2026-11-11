@@ -2537,4 +2537,125 @@ namespace moris::hmr
             }
         }
     }
+
+    //-------------------------------------------------------------------------------
+
+    namespace
+    {
+        /**
+         * Creates a 2D background mesh of 4 x 4 elements whose patterns 0 and 1 are both reset (coarse)
+         */
+        Background_Mesh_Base*
+        create_two_pattern_background_mesh(
+                Parameters* aParameters,
+                Factory&    aFactory )
+        {
+            aParameters->set_number_of_elements_per_dimension( 4, 4 );
+            aParameters->set_refinement_buffer( 0 );
+            aParameters->set_staircase_buffer( 1 );
+
+            Background_Mesh_Base* tBackgroundMesh = aFactory.create_background_mesh();
+            tBackgroundMesh->reset_pattern( 0 );
+            tBackgroundMesh->reset_pattern( 1 );
+
+            return tBackgroundMesh;
+        }
+    }    // namespace
+
+    //-------------------------------------------------------------------------------
+
+    // MB-106: perform_refinement refines the queued elements that are active on the pattern. A queued element that is
+    // refined on that pattern (field-based refinement queues refined candidates too) kept its flag, and the next
+    // perform_refinement on another pattern, where the element is active, refined it there.
+    TEST_CASE( "HMR refinement queue does not leak into the next pattern", "[moris],[mesh],[hmr],[Background_Mesh],[hmr_refinement_queue]" )
+    {
+        if ( par_size() == 1 )
+        {
+            SECTION( "flags of elements refined on the pattern are dropped" )
+            {
+                Parameters*           tParameters = new Parameters;
+                Factory               tFactory( tParameters );
+                Background_Mesh_Base* tBackgroundMesh = create_two_pattern_background_mesh( tParameters, tFactory );
+
+                Vector< Background_Element_Base* > tCoarseElements;
+                tBackgroundMesh->collect_elements_on_level_within_proc_domain( 0, tCoarseElements );
+                REQUIRE( tCoarseElements.size() == 16 );
+
+                // pattern 0: refine all coarse elements once
+                tBackgroundMesh->set_activation_pattern( 0 );
+                for ( Background_Element_Base* tElement : tCoarseElements )
+                {
+                    tElement->put_on_refinement_queue();
+                }
+                tBackgroundMesh->perform_refinement( 0 );
+
+                // pattern 0 again, as field-based refinement does: candidates are active or refined elements, so
+                // the refined coarse element 0 is queued together with an active fine element
+                Background_Element_Base* tStaleElement = tCoarseElements( 0 );
+                tBackgroundMesh->set_activation_pattern( 0 );
+                tStaleElement->put_on_refinement_queue();
+                tStaleElement->get_child( 3 )->put_on_refinement_queue();
+                tBackgroundMesh->perform_refinement( 0 );
+
+                CHECK( tStaleElement->get_child( 3 )->is_refined( 0 ) );
+                CHECK( not tStaleElement->is_queued_for_refinement() );
+
+                // pattern 1: only the opposite corner element is queued
+                Background_Element_Base* tRequestedElement = tCoarseElements( 15 );
+                tBackgroundMesh->set_activation_pattern( 1 );
+                tRequestedElement->put_on_refinement_queue();
+                tBackgroundMesh->perform_refinement( 1 );
+
+                // pattern 1 is refined at the requested element only
+                uint tNumberOfRefinedOnPattern1 = 0;
+                for ( Background_Element_Base* tElement : tCoarseElements )
+                {
+                    if ( tElement->is_refined( 1 ) )
+                    {
+                        tNumberOfRefinedOnPattern1++;
+                    }
+                }
+                CHECK( tRequestedElement->is_refined( 1 ) );
+                CHECK( tStaleElement->is_active( 1 ) );
+                CHECK( tNumberOfRefinedOnPattern1 == 1 );
+
+                delete tBackgroundMesh;
+                delete tParameters;
+            }
+
+            SECTION( "children queued for their minimum refinement level are kept" )
+            {
+                Parameters*           tParameters = new Parameters;
+                Factory               tFactory( tParameters );
+                Background_Mesh_Base* tBackgroundMesh = create_two_pattern_background_mesh( tParameters, tFactory );
+
+                Vector< Background_Element_Base* > tCoarseElements;
+                tBackgroundMesh->collect_elements_on_level_within_proc_domain( 0, tCoarseElements );
+
+                // the children of a new refinement inherit the minimum level and are queued on creation
+                Background_Element_Base* tElement = tCoarseElements( 5 );
+                tElement->set_min_refinement_level( 2 );
+                tBackgroundMesh->set_activation_pattern( 0 );
+                tElement->put_on_refinement_queue();
+                tBackgroundMesh->perform_refinement( 0 );
+
+                // the queued children are refined by the next calls (as in Database::perform_refinement)
+                uint tNumberOfCalls = 0;
+                while ( tBackgroundMesh->collect_refinement_queue() && tNumberOfCalls < 5 )
+                {
+                    tBackgroundMesh->perform_refinement( 0 );
+                    tNumberOfCalls++;
+                }
+
+                CHECK( tNumberOfCalls == 1 );
+                for ( uint iChild = 0; iChild < 4; iChild++ )
+                {
+                    CHECK( tElement->get_child( iChild )->is_refined( 0 ) );
+                }
+
+                delete tBackgroundMesh;
+                delete tParameters;
+            }
+        }
+    }
 }

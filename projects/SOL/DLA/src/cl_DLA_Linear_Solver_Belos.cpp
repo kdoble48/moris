@@ -138,8 +138,8 @@ Linear_Solver_Belos::solve_linear_system(
         MORIS_LOG_SPEC( "LinearResidualNorm_RHS_" + std::to_string( i ), tRelativeResidualNorm( i ) );
     }
 
-    // return solver status
-    return 0;
+    // return solver status: 0 if converged, 1 if Belos stopped before reaching the tolerance (MB-101)
+    return tSolverConvergence == Belos::Converged ? 0 : 1;
 }
 
 //---------------------------------------------------------------------------------------------------
