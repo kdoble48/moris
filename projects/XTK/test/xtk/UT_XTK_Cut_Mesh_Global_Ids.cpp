@@ -31,6 +31,7 @@
 #include "cl_MTK_Vertex.hpp"
 #include "cl_XTK_Cut_Integration_Mesh.hpp"
 #include "cl_XTK_Enriched_Integration_Mesh.hpp"
+#include "cl_XTK_Enriched_Interpolation_Mesh.hpp"
 #include "cl_XTK_Model.hpp"
 #include "cl_XTK_Cut_Pathology_Reference.hpp"
 #include "cl_XTK_Pathology_Test_Tools.hpp"
@@ -275,6 +276,34 @@ namespace moris::xtk
                 CHECK( tMaxCellId >= tMaxQueriedCellId );
             }
         }
+        // MB-107: ids of the enriched interpolation mesh after ghost setup; one id is one cell across ranks, and new ids
+        // (allocate_entity_ids( ..., aStartFresh = false ), as the ghost setup requests them) start after the largest id
+        inline void
+        require_interpolation_cell_ids( Enriched_Interpolation_Mesh& aMesh, const std::string& aName )
+        {
+            Id_Rows      tRows      = collect_id_rows( aMesh );
+            Id_Agreement tAgreement = check_agreement( tRows );
+
+            moris_id tMaxCellId        = aMesh.get_max_entity_id( mtk::EntityRank::ELEMENT );
+            moris_id tMaxQueriedCellId = max_all( tRows.mMaxCellId );
+
+            // every rank asks for a few ids; none may collide with an existing cell id
+            moris_id tFirstNewId    = aMesh.allocate_entity_ids( 3, mtk::EntityRank::ELEMENT, false );
+            uint     tNumCollisions = sum_all( (uint)( tFirstNewId <= tMaxCellId ) );
+
+            if ( par_rank() == 0 )
+            {
+                std::cout << aName << " on " << par_size() << " rank(s): " << tAgreement.mNumCellIds << " cell ids, " << tAgreement.mNumCellIdsTwoCells
+                          << " on two cells; max cell id " << tMaxCellId << " vs queried " << tMaxQueriedCellId << "; first new id on rank 0 "
+                          << tFirstNewId << ", ranks whose new ids collide: " << tNumCollisions << "\n"
+                          << std::flush;
+
+                CHECK( tAgreement.mNumCellIdsTwoCells == 0 );
+                CHECK( tMaxCellId >= tMaxQueriedCellId );
+                CHECK( tNumCollisions == 0 );
+            }
+        }
+
         // decompose, check the cut mesh, enrich, build the ghost cells, check the enriched mesh
         inline void
         check_box( real aRefineAboveX, const std::string& aName )
@@ -298,6 +327,9 @@ namespace moris::xtk
             tModel.perform_basis_enrichment( mtk::EntityRank::BSPLINE, 0 );
             tModel.construct_face_oriented_ghost_penalization_cells();
             require_global_ids( tModel.get_enriched_integ_mesh( 0 ), aName + ": enriched integration mesh with ghost", true );
+
+            // the enriched interpolation mesh after the ghost setup (MB-107)
+            require_interpolation_cell_ids( tModel.get_enriched_interp_mesh( 0 ), aName + ": enriched interpolation mesh with ghost" );
         }
     }    // namespace global_id_test
 

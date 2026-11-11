@@ -15,6 +15,7 @@ set(TEST_SOURCES
     test_main.cpp
     cl_Dist_Vector_Test.cpp #> VectorType error
     cl_Linear_Solver_Test.cpp
+    cl_DLA_Linear_Solver_Status_Test.cpp
     cl_Map_Test.cpp
     UT_convert_epetra_to_matrix.cpp
     cl_Sparse_Matrix_Test.cpp

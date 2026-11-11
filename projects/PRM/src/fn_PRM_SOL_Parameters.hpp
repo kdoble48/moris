@@ -725,13 +725,14 @@ namespace moris::prm
 
         tLinSolverParameterList.insert( "DLA_Linear_solver_algorithms", "0" );
 
-        // Maximal number of linear solver restarts on fail
+        // Maximal number of linear solver restarts on fail; restart k uses entry k of DLA_Linear_solver_algorithms,
+        // or its last entry once the list is exhausted, with the current solution as the initial guess
         tLinSolverParameterList.insert( "DLA_max_lin_solver_restarts", 0 );
 
-        // Maximal number of linear solver restarts on fail
+        // Abort when the linear solve still fails after the restarts; false continues with the unconverged solution
         tLinSolverParameterList.insert( "DLA_hard_break", true );
 
-        // Determines if linear solve should restart on fail
+        // Rebuild the preconditioner for a restart instead of reusing it (matters only with prec_reuse = true)
         tLinSolverParameterList.insert( "DLA_rebuild_lin_solver_on_fail", false );
 
         // output left hand side in linear solver, if specified by user
@@ -1013,6 +1014,10 @@ namespace moris::prm
                 break;
             case sol::SolverType::ML:
             {
+                // the ML defaults set both enums, which must exist first (setting them on the bare list threw)
+                tParameterList = create_algorithm_parameter_list();
+                tParameterList.insert_enum( "Preconditioner_Implementation",
+                        sol::PreconditionerType_String::values );
                 create_ml_preconditioner_parameterlist( tParameterList );
                 tParameterList.insert( "Max_Iter", 100 );
                 tParameterList.insert( "Convergence_Tolerance", 1e-9 );
