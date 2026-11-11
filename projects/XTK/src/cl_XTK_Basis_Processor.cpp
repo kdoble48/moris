@@ -28,6 +28,10 @@ namespace moris::xtk
 {
     namespace
     {
+        // Cap on the passes of the root search in Basis_Processor::construct_cell_aggregates(). Each pass gives a root to the
+        // SPGs next to an SPG that already has one, so the cap bounds the neighbourhood distance between an SPG and its root.
+        constexpr uint gMaxRootSearchPasses = 100;
+
         /**
          * @brief adds a weighted basis to a t-matrix row, a basis already in the row gets the weight added
          *
@@ -419,7 +423,22 @@ namespace moris::xtk
         {
             this->construct_follower_basis_using_basis_support( iMeshIndex );
 
-            this->construct_cell_aggregates( iMeshIndex );
+            uint tNumSearchPasses = this->construct_cell_aggregates( iMeshIndex );
+
+            // every cut SPG takes its basis from its root, so all SPGs need one
+            // both calls below are collective, so all processors stop here together
+            uint tNumOwnedSPGsWithoutRoot = sum_all( this->count_owned_spgs_without_root( iMeshIndex ) );
+            bool tSPGsWithoutRootExist    = this->determine_stopping_criteria();
+
+            MORIS_ERROR( not tSPGsWithoutRootExist,
+                    "Basis_Processor::perform_cell_agglomeration() - "
+                    "%u subphase group(s) found no root B-spline cell after %u search pass(es) (cap %u). "
+                    "Cell agglomeration needs an uncut B-spline cell of the same phase reachable through the subphase group "
+                    "neighbourhood of every cut subphase group: a mesh on which every B-spline cell is cut, or a phase region "
+                    "that lies entirely in cut cells, cannot be agglomerated.",
+                    tNumOwnedSPGsWithoutRoot,
+                    tNumSearchPasses,
+                    gMaxRootSearchPasses );
 
             this->visualize_cell_aggregates( iMeshIndex );
 
@@ -1183,7 +1202,7 @@ namespace moris::xtk
 
     // ==================================================================================
 
-    void
+    uint
     Basis_Processor::construct_cell_aggregates( moris_index aMeshIndex )
     {
         // get the graph connectivity for the subphase groups
@@ -1205,18 +1224,18 @@ namespace moris::xtk
         tCandidateRootCell.reserve( mSpatialDim * 2 );
         tDistanceCell.reserve( mSpatialDim * 2 );
 
-        // initialize loop counter that kills the run if the search for a root B-spline element takes too long
-        uint tLoopCounter = 0;
+        // count the search passes; the cap is a safeguard, the search normally ends when every SPG has a root or a pass finds none
+        uint tNumSearchPasses = 0;
 
         // until all SPGs are aggregated run the graph algorithm to generate aggregates
-        while ( this->determine_stopping_criteria() and tLoopCounter++ < 100)
+        // determine_stopping_criteria() is a global reduction and every decision below is global, so all processors run the same
+        // number of passes and the collective calls inside the loop stay matched
+        while ( this->determine_stopping_criteria() and tNumSearchPasses < gMaxRootSearchPasses )
         {
-            // make sure the code does not get stuck in an infinite while-loop here
-            // FIXME: a smarter stopping criteria would be good, this is only a temporary fix to the problem
-            MORIS_ERROR(
-                    tLoopCounter++ < 101,
-                    "Basis_Processor::construct_cell_aggregates() - "
-                    "Could not find root B-spline element to extend basis functions from within 100 search iterations." );
+            tNumSearchPasses++;
+
+            // number of SPGs on this processor that have no root before this pass
+            uint tNumSPGsWithoutRootBefore = static_cast< uint >( std::count( mRootSPGIds.begin(), mRootSPGIds.end(), gNoID ) );
 
             // exchange information about nearest neighbors across processor boundaries (in parallel)
             this->perform_nearest_neighbor_exchange( aMeshIndex );
@@ -1300,9 +1319,45 @@ namespace moris::xtk
 
             }    // end for: each sub-phase group (i.e. unzipped B-spline elements)
 
+            // stop when no processor found a new root in this pass: the next pass would start from the same state and find none either
+            bool tFoundNewRoot = static_cast< uint >( std::count( mRootSPGIds.begin(), mRootSPGIds.end(), gNoID ) ) < tNumSPGsWithoutRootBefore;
+
+            if ( par_size() > 1 )
+            {
+                tFoundNewRoot = all_lor( tFoundNewRoot );
+            }
+
+            if ( not tFoundNewRoot )
+            {
+                break;
+            }
+
         }    // end while: stopping criteria is not fulfilled
 
+        return tNumSearchPasses;
+
     }    // end function: Basis_Processor::construct_cell_aggregates()
+
+    //--------------------------------------------------------------------------------------------------
+
+    uint
+    Basis_Processor::count_owned_spgs_without_root( moris_index aMeshIndex )
+    {
+        // get the bspline mesh info
+        Bspline_Mesh_Info* tBsplineMeshInfo = mXTKModelPtr->mEnrichment->mBsplineMeshInfos( aMeshIndex );
+
+        uint tNumOwnedSPGsWithoutRoot = 0;
+
+        for ( moris_index iSPGIndex : tBsplineMeshInfo->mOwnedSubphaseGroupIndices )
+        {
+            if ( mRootSPGIds( iSPGIndex ) == gNoID )
+            {
+                tNumOwnedSPGsWithoutRoot++;
+            }
+        }
+
+        return tNumOwnedSPGsWithoutRoot;
+    }
 
     //--------------------------------------------------------------------------------------------------
 
