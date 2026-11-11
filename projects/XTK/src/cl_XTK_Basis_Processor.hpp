@@ -254,22 +254,59 @@ namespace moris::xtk
         // ----------------------------------------------------------------------------------
 
         /**
-         * @brief construct cell aggregation method
+         * @brief construct cell aggregation method: give every SPG without a root the root of its nearest neighbour that has one
          *
+         * The search stops when every SPG has a root, when a pass finds no new root on any processor, or after a fixed
+         * number of passes. SPGs that are still without a root keep gNoID. Collective in parallel.
+         *
+         * @return number of search passes
          */
-        void
+        uint
         construct_cell_aggregates( moris_index aMeshIndex );
 
         // ----------------------------------------------------------------------------------
 
         /**
-         * @brief over-ride the t matrices, this function is exclusive for the cell agglomeration method
+         * @brief count the SPGs owned by this processor that have no root SPG (local count)
+         */
+        uint
+        count_owned_spgs_without_root( moris_index aMeshIndex );
+
+        // ----------------------------------------------------------------------------------
+
+        /**
+         * @brief over-ride the t matrices, this function is exclusive for the cell agglomeration method: in every
+         * agglomerated SPG, each follower basis in a t-matrix row is replaced by its extension in terms of the basis of its
+         * root SPG, scaled with the weight of the follower basis; repeated basis are merged
          *
          * @param aMeshIndex
          */
 
         void
         override_t_matrices( moris_index aMeshIndex );
+
+        // ----------------------------------------------------------------------------------
+
+        /**
+         * @brief computes the extension of a follower basis in terms of the enriched basis of its root SPG: the
+         * coefficient of the follower basis is the B-spline coefficient of the root cell's polynomial extended over the
+         * support of the follower basis (cell agglomeration)
+         *
+         * @param aMeshIndex B-spline mesh index
+         * @param aFollowerBasisIndex enriched index of the follower basis
+         * @param aRootSPGIndex root SPG the follower basis is constrained to
+         * @param aExtendedBSplineCellIndex B-spline cell in the support of the follower basis
+         * @param aRootBasisIndices output: enriched indices of the root basis
+         * @param aRootBasisWeights output: extension weights of the root basis
+         */
+        void
+        compute_follower_basis_extension(
+                moris_index            aMeshIndex,
+                moris_index            aFollowerBasisIndex,
+                moris_index            aRootSPGIndex,
+                moris_index            aExtendedBSplineCellIndex,
+                Vector< moris_index >& aRootBasisIndices,
+                Vector< real >&        aRootBasisWeights );
 
         // ----------------------------------------------------------------------------------
 

@@ -222,7 +222,7 @@ moris::sint Preconditioner_Trilinos::build_ifpack_preconditioner()
         tIfpackParameterlist.set( "relaxation: damping factor", mParameterList.get< moris::real >( "relaxation: damping factor" ) );
         tIfpackParameterlist.set( "relaxation: zero starting solution", mParameterList.get< bool >( "relaxation: zero starting solution" ) );
 
-        tIfpackParameterlist.set( "relaxation: min diagonal value", mParameterList.get< std::string >( "relaxation: min diagonal value" ) );
+        tIfpackParameterlist.set( "relaxation: min diagonal value", mParameterList.get< moris::real >( "relaxation: min diagonal value" ) );
         tIfpackParameterlist.set( "relaxation: backward mode", mParameterList.get< bool >( "relaxation: backward mode" ) );
         tIfpackParameterlist.set( "relaxation: use l1", mParameterList.get< bool >( "relaxation: use l1" ) );
         tIfpackParameterlist.set( "relaxation: l1 eta", mParameterList.get< moris::real >( "relaxation: l1 eta" ) );
@@ -252,14 +252,14 @@ moris::sint Preconditioner_Trilinos::build_ifpack_preconditioner()
     }
     else if ( PrecType == "Krylov" )
     {
-        tIfpackParameterlist.set( "krylov: iterations", mParameterList.get< moris::real >( "krylov: iterations" ) );
-        tIfpackParameterlist.set( "krylov: tolerance", mParameterList.get< std::string >( "krylov: tolerance" ) );
+        tIfpackParameterlist.set( "krylov: iterations", mParameterList.get< moris::sint >( "krylov: iterations" ) );
+        tIfpackParameterlist.set( "krylov: tolerance", mParameterList.get< moris::real >( "krylov: tolerance" ) );
         tIfpackParameterlist.set( "krylov: solver", mParameterList.get< moris::sint >( "krylov: solver" ) );
         tIfpackParameterlist.set( "krylov: preconditioner", mParameterList.get< moris::sint >( "krylov: preconditioner" ) );
         tIfpackParameterlist.set( "krylov: number of sweeps", mParameterList.get< moris::sint >( "krylov: number of sweeps" ) );
         tIfpackParameterlist.set( "krylov: block size", mParameterList.get< moris::sint >( "krylov: block size" ) );
         tIfpackParameterlist.set( "krylov: damping parameter", mParameterList.get< moris::real >( "krylov: damping parameter" ) );
-        tIfpackParameterlist.set( "krylov: zero starting solution", mParameterList.get< moris::sint >( "krylov: zero starting solution" ) );
+        tIfpackParameterlist.set( "krylov: zero starting solution", mParameterList.get< bool >( "krylov: zero starting solution" ) );
     }
     else
     {
@@ -270,6 +270,12 @@ moris::sint Preconditioner_Trilinos::build_ifpack_preconditioner()
     tIfpackParameterlist.set( "schwarz: compute condest", mParameterList.get< bool >( "schwarz: compute condest" ) );
     tIfpackParameterlist.set( "schwarz: filter singletons", mParameterList.get< bool >( "schwarz: filter singletons" ) );
     tIfpackParameterlist.set( "schwarz: reordering type", mParameterList.get< std::string >( "schwarz: reordering type" ) );
+
+    // Ifpack returns no preconditioner for a type it was built without (e.g. SPARSKIT)
+    MORIS_ERROR( !mIfPackPrec.is_null(),
+            "Preconditioner_Trilinos::build_ifpack_preconditioner - Ifpack could not create preconditioner type '%s'; "
+            "this Trilinos build may not support it.",
+            PrecType.c_str() );
 
     // start timer
     tic tTimer;
