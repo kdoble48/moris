@@ -381,14 +381,27 @@ namespace moris
             nodal_values( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex, const Matrix< DDRMat >& aCoeffs );
 
             /**
-             * sdf_preserve_interface: apply freeze_interface_band() to the redistanced coefficients aNewCoeffs on the
-             * ADV field's own mesh and discretization; logs the frozen count. Serial only.
+             * In-place redistance, collective on all processors: write the redistanced coefficients of the ADV field's
+             * design (get_coefficients(), computed by compute_sdf_from_interface()) into that design's slice of the
+             * optimizer's ADV vector, which lives on processor 0 (aADVs is empty on every other processor).
+             *  - Every coefficient is taken once, from the processor that owns it, and placed by its global ADV ID.
+             *  - sdf_preserve_interface: freeze_interface_band() runs on processor 0 on the whole design (the cells
+             *    of all processors), so the frozen set does not depend on the partition.
+             *  - sdf_reinit_diagnostics: logs the footprint (log_redistance_footprint()).
+             * On one processor this is the former serial code path.
+             *
+             * @param aADVs            the optimizer's ADV vector (processor 0), edited in place
+             * @param aNumWritten      number of coefficients written into aADVs (same value on every processor)
+             * @param aNumCoefficients number of coefficients of the design (same value on every processor)
+             * @return false if the redistanced coefficients are not those of the design (the mesh changed) on any
+             *         processor; nothing is written then. Same value on every processor.
              */
-            uint
-            preserve_interface(
+            bool
+            apply_redistance_to_advs(
                     Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
-                    const Matrix< DDRMat >&                            aOldCoeffs,
-                    Matrix< DDRMat >&                                  aNewCoeffs ) const;
+                    Vector< real >&                                    aADVs,
+                    uint&                                              aNumWritten,
+                    uint&                                              aNumCoefficients ) const;
 
             //------------------------------------------------------------------------------
 
@@ -419,7 +432,8 @@ namespace moris
              * sdf_reinit_diagnostics: log what one in-place redistance changed between the design coefficients
              * aOldCoeffs (psi) and aNewCoeffs (phi = R(psi)): max |delta c| on the coefficients that touch a cell cut
              * in psi and on the others, nodal sign flips, and the cut-cell sets (a cell is cut if its Lagrange nodal
-             * values do not all have one sign; zero counts as positive, the redistance's sign rule)
+             * values do not all have one sign; zero counts as positive, the redistance's sign rule). The coefficient
+             * vectors are this processor's (local indices); the logged numbers are those of the whole mesh.
              */
             void
             log_redistance_footprint(
