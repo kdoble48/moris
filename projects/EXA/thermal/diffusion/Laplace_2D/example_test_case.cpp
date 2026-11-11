@@ -334,7 +334,8 @@ TEST_CASE( "Laplace_Petsc_Block_Inverse",
         "[moris],[example],[thermal],[Laplace_2D],[Laplace_Preconditioners],[EXA_Laplace_2D]" )
 {
     // serial only: the preconditioner reads the rows of every block from the system matrix, and in parallel a block
-    // can contain rows of another processor
+    // can contain rows of another processor; MORIS stops with an error if PCType "mat" is built on more than one
+    // processor (MB-111)
     if ( par_size() == 1 )
     {
         run_preconditioner_case( 6, true );

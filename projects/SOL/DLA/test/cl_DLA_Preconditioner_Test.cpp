@@ -8,6 +8,7 @@
  *
  */
 
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -253,6 +254,49 @@ namespace moris::dla
 
             delete tLinProblem;
             delete tSolverInterface;
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+
+    TEST_CASE( "PETSc mat preconditioner stops with an error in parallel (MB-111)", "[DLA_PETSc_Mat_Preconditioner_Serial_Guard],[Linear Solver],[DistLinAlg]" )
+    {
+        if ( par_size() > 1 )
+        {
+            // the preconditioner keeps a reference to its parameter list
+            Parameter_List tPrecParameterList = prm::create_preconditioner_parameter_list( sol::PreconditionerType::PETSC );
+            tPrecParameterList.set( "PCType", std::string( "mat" ) );
+
+            Preconditioner_PETSc tPreconditioner( tPrecParameterList );
+
+            // no linear system is created here, so PETSc is started and stopped by the test
+            PetscInitializeNoArguments();
+
+            KSP tKSP;
+            KSPCreate( PETSC_COMM_WORLD, &tKSP );
+
+            // every processor must stop before the preconditioner touches the linear system (none is passed here);
+            // without the guard the block inverse requests matrix rows of other processors and the run hangs
+            bool        tStopped = false;
+            std::string tMessage;
+            try
+            {
+                tPreconditioner.build_preconditioner( nullptr, tKSP );
+            } catch ( const std::runtime_error& tError )
+            {
+                tStopped = true;
+                tMessage = tError.what();
+            }
+
+            CHECK( tStopped );
+
+            // the error names the option and the ledger entry
+            CHECK( tMessage.find( "PCType \"mat\"" ) != std::string::npos );
+            CHECK( tMessage.find( "MB-111" ) != std::string::npos );
+
+            KSPDestroy( &tKSP );
+
+            PetscFinalize();
         }
     }
 #endif

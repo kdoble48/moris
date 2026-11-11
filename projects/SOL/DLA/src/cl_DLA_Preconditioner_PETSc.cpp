@@ -450,6 +450,13 @@ void Preconditioner_PETSc::build_schwarz_preconditioner_petsc( Linear_Problem *a
 
 void Preconditioner_PETSc::build_schwarz_preconditioner( Linear_Problem *aLinearSystem )
 {
+    // serial only (MB-111): the block inverse reads the rows of every block from the system matrix, and in parallel a
+    // block can contain rows of another processor; PETSc then fails on that processor and the run hangs
+    MORIS_ERROR( par_size() == 1,
+            "Preconditioner_PETSc::build_schwarz_preconditioner - PCType \"mat\" (block inverse) can only be used in serial, "
+            "but this run uses %d processors (MB-111). Use another PCType, e.g. \"asm\" or \"gamg\".",
+            par_size() );
+
     // write preconditioner to log file
     MORIS_LOG_INFO( "KSP Preconditioner: asm - mat" );
 

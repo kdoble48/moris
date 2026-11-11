@@ -89,7 +89,8 @@ namespace moris
     //   unchanged), and the block inverse needed more iterations than no preconditioner on every mesh, while the
     //   same code with threshold 0 (diagonal only) needed fewer (58, 79 and 139 on the refined meshes). The case
     //   is here to exercise the code path, not as a recommendation. It needs the IQI "IQIBulkVolumeFraction" on
-    //   the bulk sets and works on one processor only.
+    //   the bulk sets and works on one processor only: with more, a block can contain matrix rows of another
+    //   processor, and MORIS stops with an error when the preconditioner is built (MB-111).
     // - The iteration counts of all of these one-level preconditioners grow with the mesh; the multigrid case 0
     //   stayed at 26 to 27 iterations on the three refined meshes.
 

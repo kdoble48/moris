@@ -194,8 +194,9 @@ namespace moris::prm
     {
         aParameterlist.set( "Preconditioner_Implementation", sol::PreconditionerType::PETSC );
 
-        // Set default preconditioner
-        aParameterlist.insert( "PCType", std::string( "ilu" ) );    // "superlu-dist", "mumps", "ilu", "mg", "asm", "mat", "gamg", "none"
+        // Set default preconditioner: "superlu-dist", "mumps", "ilu", "mg", "asm", "mat", "gamg", "none"
+        // "ilu" and "mat" (block inverse) work on one processor only; with more, MORIS stops with an error ("mat": MB-111)
+        aParameterlist.insert( "PCType", std::string( "ilu" ) );
 
         // Sets the number of levels of fill to use for ILU
         aParameterlist.insert( "ILUFill", 0 );
