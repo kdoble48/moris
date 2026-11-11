@@ -220,8 +220,8 @@ namespace exa_laplace_2d_cell_agglomeration
         uint tReferenceNumSolidCells        = 220;
         uint tReferenceNumAgglomeratedCells = 20;
 
-        Vector< real > tReferenceL2ErrorSquared = { 9.922945826250896e-08, 4.681940942909169e-11 };
-        Vector< real > tReferenceH1ErrorSquared = { 3.780860907617879e-03, 1.351853643804102e-06 };
+        Vector< real > tReferenceL2ErrorSquared = { 9.922945117516934e-08, 4.681941283696269e-11 };
+        Vector< real > tReferenceH1ErrorSquared = { 3.780860906456499e-03, 1.351853690506223e-06 };
         real           tReferenceSolidVolume    = 0.50005;
 
         CHECK( tNumDims == tReferenceNumDims( aTestCaseIndex ) );

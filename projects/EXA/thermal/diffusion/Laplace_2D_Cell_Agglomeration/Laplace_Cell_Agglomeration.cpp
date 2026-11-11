@@ -519,7 +519,7 @@ namespace moris
         aParameterLists( SOL::LINEAR_ALGORITHMS ).add_parameter_list( sol::SolverType::AZTEC_IMPL );
         aParameterLists.set( "AZ_solver", AZ_gmres );
         aParameterLists.set( "AZ_max_iter", 1000 );
-        aParameterLists.set( "rel_residual", 1e-10 );
+        aParameterLists.set( "rel_residual", 1e-12 );
         aParameterLists.set( "AZ_conv", AZ_r0 );
         aParameterLists.set( "AZ_diagnostics", AZ_all );
         aParameterLists.set( "AZ_output", AZ_all );

@@ -70,7 +70,7 @@ ordinals 1 and 3 and on the phase-0 side facing phase 1 (`neighbor_phases`). IQI
 value of `TEMP`, the exact temperature (`PROPERTY`), `L2_ERROR_ANALYTIC`, `H1_ERROR_ANALYTIC`
 and `VOLUME`.
 
-**Solver (SOL).** AztecOO GMRES with ILU(0), relative residual 10⁻¹⁰; one Newton iteration. The
+**Solver (SOL).** AztecOO GMRES with ILU(0), relative residual 10⁻¹²; one Newton iteration. The
 condition number of the system matrix is computed (`dense`) and printed to the log, and the
 matrix and residual are written with `SOL_save_operator_to_matlab`.
 
@@ -94,8 +94,8 @@ Checked values (`CHECK`, so a failure does not stop the remaining checks):
 | nodes / elements of the output mesh | 354 / 280 | 984 / 280 |
 | unknowns (length of the residual file) | 231 | 264 |
 | solid cells / cells with a root other than themselves / cells without a root | 220 / 20 / 0 | 220 / 20 / 0 |
-| integral of (T_h − T)² | 9.922945826250896 × 10⁻⁸ | 4.681940942909169 × 10⁻¹¹ |
-| integral of \|∇T_h − ∇T\|² | 3.780860907617879 × 10⁻³ | 1.351853643804102 × 10⁻⁶ |
+| integral of (T_h − T)² | 9.922945117516934 × 10⁻⁸ | 4.681941283696269 × 10⁻¹¹ |
+| integral of \|∇T_h − ∇T\|² | 3.780860906456499 × 10⁻³ | 1.351853690506223 × 10⁻⁶ |
 | solid volume | 0.50005 | 0.50005 |
 
 The error integrals are compared with a relative tolerance of 10⁻⁶ and the volume with 10⁻¹⁰.
