@@ -13,6 +13,8 @@
 #include <memory>
 #include <sstream>
 #include <set>
+#include <unordered_map>
+#include <vector>
 #include "cl_Matrix.hpp"
 #include "cl_Tracer.hpp"
 #include "cl_Logger.hpp"
@@ -56,6 +58,183 @@
 
 namespace moris::wrk
 {
+    //------------------------------------------------------------------------------
+
+    namespace
+    {
+        // The helpers below make the interface redistance collective. On one processor each of them returns its input.
+
+        /** concatenation of every processor's vector (in processor order) on processor 0; empty on the others */
+        template< typename T >
+        std::vector< T >
+        gather_on_proc_0( const std::vector< T >& aLocal, MPI_Datatype aType )
+        {
+            if ( par_size() == 1 )
+            {
+                return aLocal;
+            }
+            int                tNumLocal = (int)aLocal.size();
+            std::vector< int > tCounts( par_size(), 0 );
+            MPI_Gather( &tNumLocal, 1, MPI_INT, tCounts.data(), 1, MPI_INT, 0, get_comm() );
+
+            std::vector< int > tOffsets( par_size(), 0 );
+            std::vector< T >   tAll;
+            if ( par_rank() == 0 )
+            {
+                int tTotal = 0;
+                for ( int iProc = 0; iProc < (int)par_size(); iProc++ )
+                {
+                    tOffsets[ iProc ] = tTotal;
+                    tTotal += tCounts[ iProc ];
+                }
+                tAll.resize( tTotal );
+            }
+            MPI_Gatherv( aLocal.data(), tNumLocal, aType, tAll.data(), tCounts.data(), tOffsets.data(), aType, 0, get_comm() );
+            return tAll;
+        }
+
+        /** concatenation of every processor's vector (in processor order), on every processor */
+        std::vector< real >
+        gather_on_all_procs( const std::vector< real >& aLocal )
+        {
+            if ( par_size() == 1 )
+            {
+                return aLocal;
+            }
+            int                tNumLocal = (int)aLocal.size();
+            std::vector< int > tCounts( par_size(), 0 );
+            MPI_Allgather( &tNumLocal, 1, MPI_INT, tCounts.data(), 1, MPI_INT, get_comm() );
+
+            std::vector< int > tOffsets( par_size(), 0 );
+            int                tTotal = 0;
+            for ( int iProc = 0; iProc < (int)par_size(); iProc++ )
+            {
+                tOffsets[ iProc ] = tTotal;
+                tTotal += tCounts[ iProc ];
+            }
+            std::vector< real > tAll( tTotal );
+            MPI_Allgatherv( aLocal.data(), tNumLocal, MPI_DOUBLE, tAll.data(), tCounts.data(), tOffsets.data(), MPI_DOUBLE, get_comm() );
+            return tAll;
+        }
+
+        /** processor 0's vector on every processor */
+        template< typename T >
+        void
+        broadcast_from_proc_0( std::vector< T >& aVector, MPI_Datatype aType )
+        {
+            if ( par_size() == 1 )
+            {
+                return;
+            }
+            int tSize = (int)aVector.size();
+            MPI_Bcast( &tSize, 1, MPI_INT, 0, get_comm() );
+            aVector.resize( tSize );
+            MPI_Bcast( aVector.data(), tSize, aType, 0, get_comm() );
+        }
+
+        /**
+         * The interface facets of all processors as one facet soup (every facet with its own nodes). A processor holds
+         * the facets of its own and its aura cells only, but the distance is to the whole interface. A facet that
+         * several processors hold is listed several times, which does not change the minimum distance.
+         */
+        void
+        gather_interface_facets(
+                Matrix< DDRMat >&   aFacetNodeCoords,
+                Matrix< IndexMat >& aFacetConn,
+                uint                aSpatialDim )
+        {
+            uint tNumLocalFacets = aFacetConn.n_rows();
+            uint tNodesPerFacet  = aFacetConn.n_cols();
+            uint tStride         = tNodesPerFacet * aSpatialDim;
+
+            std::vector< real > tLocal( tNumLocalFacets * tStride, 0.0 );
+            for ( uint iFacet = 0; iFacet < tNumLocalFacets; ++iFacet )
+            {
+                for ( uint iNode = 0; iNode < tNodesPerFacet; ++iNode )
+                {
+                    for ( uint iDim = 0; iDim < aSpatialDim; ++iDim )
+                    {
+                        tLocal[ iFacet * tStride + iNode * aSpatialDim + iDim ] = aFacetNodeCoords( aFacetConn( iFacet, iNode ), iDim );
+                    }
+                }
+            }
+
+            std::vector< real > tAll       = gather_on_all_procs( tLocal );
+            uint                tNumFacets = tAll.size() / tStride;
+
+            aFacetNodeCoords.set_size( tNumFacets * tNodesPerFacet, aSpatialDim );
+            aFacetConn.set_size( tNumFacets, tNodesPerFacet );
+            for ( uint iFacet = 0; iFacet < tNumFacets; ++iFacet )
+            {
+                for ( uint iNode = 0; iNode < tNodesPerFacet; ++iNode )
+                {
+                    aFacetConn( iFacet, iNode ) = (moris_index)( iFacet * tNodesPerFacet + iNode );
+                    for ( uint iDim = 0; iDim < aSpatialDim; ++iDim )
+                    {
+                        aFacetNodeCoords( iFacet * tNodesPerFacet + iNode, iDim ) = tAll[ iFacet * tStride + iNode * aSpatialDim + iDim ];
+                    }
+                }
+            }
+        }
+
+        /** nodal values of the owning processor on every processor that holds the node (shared and aura nodes) */
+        void
+        synchronize_nodal_values( Matrix< DDRMat >& aNodalValues, mtk::Mesh* aMesh )
+        {
+            if ( par_size() == 1 )
+            {
+                return;
+            }
+            uint     tNumNodes = aNodalValues.numel();
+            moris_id tMaxId    = 0;
+            for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+            {
+                tMaxId = std::max( tMaxId, aMesh->get_glb_entity_id_from_entity_loc_index( (moris_index)iNode, mtk::EntityRank::NODE ) );
+            }
+            tMaxId = max_all( tMaxId );
+
+            std::vector< real > tOwned( tMaxId + 1, 0.0 );
+            std::vector< real > tGlobal( tMaxId + 1, 0.0 );
+            for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+            {
+                if ( aMesh->get_entity_owner( (moris_index)iNode, mtk::EntityRank::NODE ) == (uint)par_rank() )
+                {
+                    tOwned[ aMesh->get_glb_entity_id_from_entity_loc_index( (moris_index)iNode, mtk::EntityRank::NODE ) ] = aNodalValues( iNode );
+                }
+            }
+            MPI_Allreduce( tOwned.data(), tGlobal.data(), (int)tOwned.size(), MPI_DOUBLE, MPI_SUM, get_comm() );
+            for ( uint iNode = 0; iNode < tNumNodes; ++iNode )
+            {
+                aNodalValues( iNode ) = tGlobal[ aMesh->get_glb_entity_id_from_entity_loc_index( (moris_index)iNode, mtk::EntityRank::NODE ) ];
+            }
+        }
+
+        /** owning processor of every (local) design coefficient; -1 for a coefficient that no node uses */
+        Vector< moris_id >
+        coefficient_owners( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex, uint aNumCoefficients )
+        {
+            Vector< moris_id > tOwners( aNumCoefficients, -1 );
+            uint               tNumNodes = aMesh->get_num_nodes();
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                if ( not aMesh->get_mtk_vertex( iNode ).has_interpolation( aDiscretizationIndex ) )
+                {
+                    continue;
+                }
+                Matrix< IndexMat > tIndices   = aMesh->get_coefficient_indices_of_node( iNode, aDiscretizationIndex );
+                Matrix< IdMat >    tNodeOwner = aMesh->get_coefficient_owners_of_node( iNode, aDiscretizationIndex );
+                for ( uint iC = 0; iC < tIndices.numel(); iC++ )
+                {
+                    if ( tIndices( iC ) >= 0 && (uint)tIndices( iC ) < aNumCoefficients )
+                    {
+                        tOwners( tIndices( iC ) ) = tNodeOwner( iC );
+                    }
+                }
+            }
+            return tOwners;
+        }
+    }    // namespace
+
     //------------------------------------------------------------------------------
 
     Reinitialize_Performer::Reinitialize_Performer( const std::shared_ptr< Library_IO >& aLibrary )
@@ -542,7 +721,8 @@ namespace moris::wrk
 
         Vector< moris_index > const& tInterfaceFacetIndices = tFilteredFacetIndices;
 
-        if ( tInterfaceFacetIndices.size() == 0 )
+        // the interface is the union of every processor's facets: all processors take this branch together
+        if ( sum_all( (uint)tInterfaceFacetIndices.size() ) == 0 )
         {
             MORIS_LOG_WARNING( "No interface facets found after filtering, skipping SDF reinitialization" );
             return;
@@ -614,6 +794,13 @@ namespace moris::wrk
             }
         }
 
+        // on several processors: the distance is to the whole interface, not to this processor's part of it (MB-113)
+        if ( par_size() > 1 )
+        {
+            gather_interface_facets( tFacetNodeCoords, tFacetConn, tSpatialDim );
+            tNumFacets = tFacetConn.n_rows();
+        }
+
         // Get interpolation mesh node coordinates
         uint tNumNodes = aInterpMesh->get_num_nodes();
         Matrix< DDRMat > tNodeCoords( tNumNodes, tSpatialDim );
@@ -677,8 +864,19 @@ namespace moris::wrk
         }
 
         // Get ADV bounds to clamp the signed distance into the design-variable range
-        real tLowerBound = aGENPerformer( 0 )->get_lower_bounds()( 0 );
-        real tUpperBound = aGENPerformer( 0 )->get_upper_bounds()( 0 );
+        // (the full bound vectors live on processor 0; as in impose_upper_lower_bound() all bounds are taken as equal)
+        real tLowerBound = 0.0;
+        real tUpperBound = 0.0;
+        if ( par_rank() == 0 )
+        {
+            tLowerBound = aGENPerformer( 0 )->get_lower_bounds()( 0 );
+            tUpperBound = aGENPerformer( 0 )->get_upper_bounds()( 0 );
+        }
+        if ( par_size() > 1 )
+        {
+            MPI_Bcast( &tLowerBound, 1, MPI_DOUBLE, 0, get_comm() );
+            MPI_Bcast( &tUpperBound, 1, MPI_DOUBLE, 0, get_comm() );
+        }
 
         // Helper to check if a phase is excluded (for logging only; the facets of excluded
         // phases were already filtered out of the interface above, so excluded-phase nodes
@@ -723,9 +921,16 @@ namespace moris::wrk
             real tDenom = 0.0;
             for ( uint iNode = 0; iNode < tSDF.numel(); ++iNode )
             {
+                // every node once: on its owning processor
+                if ( par_size() > 1 && aInterpMesh->get_entity_owner( (moris_index)iNode, mtk::EntityRank::NODE ) != (uint)par_rank() )
+                {
+                    continue;
+                }
                 tNumer += std::pow( tSDF( iNode ) - tExistingValues( iNode ), 2 );
                 tDenom += std::pow( tExistingValues( iNode ), 2 );
             }
+            tNumer = sum_all( tNumer );
+            tDenom = sum_all( tDenom );
             real tRelChange = ( tDenom > 0.0 ) ? std::sqrt( tNumer / tDenom ) : 0.0;
             MORIS_LOG_INFO( "SDF reinit field drift (diagnostic): %.4e", tRelChange );
         }
@@ -839,6 +1044,11 @@ namespace moris::wrk
             std::set< moris_index > tUnion;
             for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
             {
+                // on several processors the outer nodes of the aura carry no interpolation; the cells of this processor do
+                if ( not aMesh->get_mtk_vertex( tNodes( iNode ) ).has_interpolation( aDiscretizationIndex ) )
+                {
+                    continue;
+                }
                 Matrix< IndexMat > tCoefficients = aMesh->get_coefficient_indices_of_node( (uint)tNodes( iNode ), aDiscretizationIndex );
                 for ( uint iC = 0; iC < tCoefficients.numel(); iC++ )
                 {
@@ -863,6 +1073,11 @@ namespace moris::wrk
         Matrix< DDRMat > tValues( tNumNodes, 1, 0.0 );
         for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
         {
+            // on several processors the outer nodes of the aura carry no interpolation (their value stays 0)
+            if ( not aMesh->get_mtk_vertex( iNode ).has_interpolation( aDiscretizationIndex ) )
+            {
+                continue;
+            }
             const Matrix< DDRMat >& tT            = aMesh->get_t_matrix_of_node_loc_ind( iNode, aDiscretizationIndex );
             Matrix< IndexMat >      tCoefficients = aMesh->get_coefficient_indices_of_node( iNode, aDiscretizationIndex );
             real                    tValue        = 0.0;
@@ -966,30 +1181,184 @@ namespace moris::wrk
 
     //------------------------------------------------------------------------------
 
-    uint
-    Reinitialize_Performer::preserve_interface(
+    bool
+    Reinitialize_Performer::apply_redistance_to_advs(
             Vector< std::shared_ptr< gen::Geometry_Engine > >& aGENPerformer,
-            const Matrix< DDRMat >&                            aOldCoeffs,
-            Matrix< DDRMat >&                                  aNewCoeffs ) const
+            Vector< real >&                                    aADVs,
+            uint&                                              aNumWritten,
+            uint&                                              aNumCoefficients ) const
     {
-        MORIS_ERROR( par_size() == 1, "sdf_preserve_interface: the in-place redistance is serial only." );
+        aNumWritten      = 0;
+        aNumCoefficients = 0;
 
-        std::shared_ptr< mtk::Field > tField    = find_adv_field( aGENPerformer, mADVFiledName );
-        mtk::Mesh_Pair                tMeshPair = tField->get_mesh_pair();
+        std::shared_ptr< mtk::Field > tField     = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair  = tField->get_mesh_pair();
+        mtk::Interpolation_Mesh*      tMesh      = tMeshPair.get_interpolation_mesh();
+        uint                          tMeshIndex = (uint)tField->get_discretization_mesh_index();
 
-        // strict-sign tolerance: GEN's default isocontour_tolerance, so no free coefficient lands where GEN would
-        // treat a node as on the interface
-        uint tRings  = 0;
-        uint tFrozen = freeze_interface_band(
-                aNewCoeffs,
-                aOldCoeffs,
-                cell_coefficients( tMeshPair.get_interpolation_mesh(), (uint)tField->get_discretization_mesh_index() ),
-                1.0e-12,
-                tRings );
+        // global ADV ID of every coefficient this processor holds (owned, shared and aura)
+        Vector< sint > tLocalADVIds = aGENPerformer( 0 )->get_design_determining_adv_ids( mADVFiledName );
 
-        MORIS_LOG_INFO( "SDF redistance preserves the interface: %u of %u coefficients frozen (%u growth passes)",
-                tFrozen, (uint)aOldCoeffs.numel(), tRings );
-        return tFrozen;
+        MORIS_ERROR( tLocalADVIds.size() > 0,
+                "SDF in-place redistance: GEN has no design named '%s' (the mapping sublist's adv_field), so the "
+                "redistance cannot be applied (MB-019: this used to be skipped silently every iteration).",
+                mADVFiledName.c_str() );
+
+        // the redistanced coefficients must be those of the design on every processor
+        uint tNumLocal = mCoefficients.n_rows();
+        uint tMatch    = ( tLocalADVIds.size() == tNumLocal && tNumLocal > 0 ) ? 1 : 0;
+        if ( min_all( tMatch ) == 0 )
+        {
+            aNumCoefficients = tNumLocal;
+            return false;
+        }
+
+        // 1. every coefficient once, from its owning processor, onto processor 0: ADV ID and redistanced value
+        Vector< moris_id >  tOwners = coefficient_owners( tMesh, tMeshIndex, tNumLocal );
+        std::vector< sint > tOwnedIds;
+        std::vector< real > tOwnedValues;
+        tOwnedIds.reserve( tNumLocal );
+        tOwnedValues.reserve( tNumLocal );
+        for ( uint iC = 0; iC < tNumLocal; iC++ )
+        {
+            if ( tOwners( iC ) == par_rank() )
+            {
+                tOwnedIds.push_back( tLocalADVIds( iC ) );
+                tOwnedValues.push_back( mCoefficients( iC ) );
+            }
+        }
+        std::vector< sint > tIds    = gather_on_proc_0( tOwnedIds, MPI_INT );
+        std::vector< real > tValues = gather_on_proc_0( tOwnedValues, MPI_DOUBLE );
+
+        // 2. for the freeze band: the coefficients of every cell, from the processor that owns the cell (as ADV IDs)
+        std::vector< sint > tCellSizes;
+        std::vector< sint > tCellIds;
+        if ( mPreserveInterface )
+        {
+            Vector< Vector< moris_index > > tLocalCells = cell_coefficients( tMesh, tMeshIndex );
+            for ( uint iCell = 0; iCell < tLocalCells.size(); iCell++ )
+            {
+                if ( par_size() > 1 && tMesh->get_mtk_cell( (moris_index)iCell ).get_owner() != par_rank() )
+                {
+                    continue;
+                }
+                tCellSizes.push_back( (sint)tLocalCells( iCell ).size() );
+                for ( uint iC = 0; iC < tLocalCells( iCell ).size(); iC++ )
+                {
+                    tCellIds.push_back( tLocalADVIds( tLocalCells( iCell )( iC ) ) );
+                }
+            }
+            tCellSizes = gather_on_proc_0( tCellSizes, MPI_INT );
+            tCellIds   = gather_on_proc_0( tCellIds, MPI_INT );
+        }
+
+        // 3. processor 0 holds the optimizer's ADV vector: psi from the design's slice, freeze, write phi back
+        std::vector< real > tOld( tIds.size(), 0.0 );
+        if ( par_rank() == 0 )
+        {
+            uint tNumCoefficients = tIds.size();
+
+            Vector< sint > tIdVector( tNumCoefficients );
+            for ( uint iC = 0; iC < tNumCoefficients; iC++ )
+            {
+                tIdVector( iC ) = tIds[ iC ];
+            }
+            // positions in aADVs, not global ADV IDs (MB-017: using the IDs shifted the design by one index)
+            Vector< sint > tPositions = aGENPerformer( 0 )->get_adv_positions( tIdVector );
+
+            // psi: the design coefficients this evaluation was called with
+            Matrix< DDRMat > tOldCoeffs( tNumCoefficients, 1, 0.0 );
+            Matrix< DDRMat > tNewCoeffs( tNumCoefficients, 1, 0.0 );
+            for ( uint iC = 0; iC < tNumCoefficients; iC++ )
+            {
+                sint tPosition = tPositions( iC );
+                if ( tPosition >= 0 && tPosition < (sint)aADVs.size() )
+                {
+                    tOldCoeffs( iC ) = aADVs( tPosition );
+                }
+                tNewCoeffs( iC ) = tValues[ iC ];
+            }
+
+            // sdf_preserve_interface (MB-027): keep every coefficient that can reach a cut cell, so the cut, the criteria
+            // and their sensitivities are those of psi bit for bit
+            if ( mPreserveInterface )
+            {
+                std::unordered_map< sint, moris_index > tIndexOfId;
+                tIndexOfId.reserve( tNumCoefficients );
+                for ( uint iC = 0; iC < tNumCoefficients; iC++ )
+                {
+                    tIndexOfId[ tIds[ iC ] ] = (moris_index)iC;
+                }
+
+                Vector< Vector< moris_index > > tCells( tCellSizes.size() );
+                uint                            tCursor = 0;
+                for ( uint iCell = 0; iCell < tCellSizes.size(); iCell++ )
+                {
+                    tCells( iCell ).reserve( tCellSizes[ iCell ] );
+                    for ( sint iC = 0; iC < tCellSizes[ iCell ]; iC++ )
+                    {
+                        std::unordered_map< sint, moris_index >::const_iterator tFound = tIndexOfId.find( tCellIds[ tCursor++ ] );
+                        MORIS_ERROR( tFound != tIndexOfId.end(),
+                                "sdf_preserve_interface: a cell uses a design coefficient that no processor owns." );
+                        tCells( iCell ).push_back( tFound->second );
+                    }
+                }
+
+                // strict-sign tolerance: GEN's default isocontour_tolerance, so no free coefficient lands where GEN
+                // would treat a node as on the interface
+                uint tRings  = 0;
+                uint tFrozen = freeze_interface_band( tNewCoeffs, tOldCoeffs, tCells, 1.0e-12, tRings );
+
+                MORIS_LOG_INFO( "SDF redistance preserves the interface: %u of %u coefficients frozen (%u growth passes)",
+                        tFrozen, tNumCoefficients, tRings );
+            }
+
+            for ( uint iC = 0; iC < tNumCoefficients; iC++ )
+            {
+                sint tPosition = tPositions( iC );
+                if ( tPosition >= 0 && tPosition < (sint)aADVs.size() )
+                {
+                    aADVs( tPosition ) = tNewCoeffs( iC );
+                    ++aNumWritten;
+                }
+                tOld[ iC ]    = tOldCoeffs( iC );
+                tValues[ iC ] = tNewCoeffs( iC );
+            }
+            aNumCoefficients = tNumCoefficients;
+        }
+
+        // every processor continues with the same decision (re-cut or not)
+        broadcast( aNumWritten );
+        broadcast( aNumCoefficients );
+
+        // 4. sdf_reinit_diagnostics: psi and phi on this processor's coefficients
+        if ( mDiagnostics )
+        {
+            broadcast_from_proc_0( tIds, MPI_INT );
+            broadcast_from_proc_0( tOld, MPI_DOUBLE );
+            broadcast_from_proc_0( tValues, MPI_DOUBLE );
+
+            std::unordered_map< sint, uint > tIndexOfId;
+            tIndexOfId.reserve( tIds.size() );
+            for ( uint iC = 0; iC < tIds.size(); iC++ )
+            {
+                tIndexOfId[ tIds[ iC ] ] = iC;
+            }
+            Matrix< DDRMat > tOldLocal( tNumLocal, 1, 0.0 );
+            Matrix< DDRMat > tNewLocal( tNumLocal, 1, 0.0 );
+            for ( uint iC = 0; iC < tNumLocal; iC++ )
+            {
+                std::unordered_map< sint, uint >::const_iterator tFound = tIndexOfId.find( tLocalADVIds( iC ) );
+                if ( tFound != tIndexOfId.end() )
+                {
+                    tOldLocal( iC ) = tOld[ tFound->second ];
+                    tNewLocal( iC ) = tValues[ tFound->second ];
+                }
+            }
+            this->log_redistance_footprint( aGENPerformer, tOldLocal, tNewLocal );
+        }
+
+        return true;
     }
 
     //------------------------------------------------------------------------------
@@ -1022,9 +1391,10 @@ namespace moris::wrk
             const Matrix< DDRMat >&                            aOldCoeffs,
             const Matrix< DDRMat >&                            aNewCoeffs ) const
     {
-        std::shared_ptr< mtk::Field > tField    = find_adv_field( aGENPerformer, mADVFiledName );
-        mtk::Mesh_Pair                tMeshPair = tField->get_mesh_pair();
-        mtk::Interpolation_Mesh*      tMesh     = tMeshPair.get_interpolation_mesh();
+        std::shared_ptr< mtk::Field > tField     = find_adv_field( aGENPerformer, mADVFiledName );
+        mtk::Mesh_Pair                tMeshPair  = tField->get_mesh_pair();
+        mtk::Interpolation_Mesh*      tMesh      = tMeshPair.get_interpolation_mesh();
+        uint                          tMeshIndex = (uint)tField->get_discretization_mesh_index();
 
         Vector< Vector< moris_index > > tCellCoefficients = this->get_cell_coefficients( aGENPerformer );
         Matrix< DDRMat >                tOldNodal         = this->get_nodal_values( aGENPerformer, aOldCoeffs );
@@ -1032,12 +1402,22 @@ namespace moris::wrk
 
         uint tNumCells = tCellCoefficients.size();
         uint tNumNodes = tOldNodal.numel();
+        uint tNumCoeff = aOldCoeffs.numel();
 
-        std::vector< bool > tBandCoefficient( aOldCoeffs.numel(), false );
-        std::vector< bool > tBandNode( tNumNodes, false );
+        // cells, nodes and coefficients are counted once, on their owning processor; the band (everything that touches
+        // a cell cut in psi) is marked by the owner of the cell and merged over the processors below
+        bool               tParallel = par_size() > 1;
+        Vector< moris_id > tOwners   = coefficient_owners( tMesh, tMeshIndex, tNumCoeff );
+
+        std::vector< int > tBandCoefficient( tNumCoeff, 0 );
+        std::vector< int > tBandNode( tNumNodes, 0 );
         uint                tCutOld = 0, tCutNew = 0, tCutChanged = 0;
         for ( uint iCell = 0; iCell < tNumCells; iCell++ )
         {
+            if ( tParallel && tMesh->get_mtk_cell( (moris_index)iCell ).get_owner() != par_rank() )
+            {
+                continue;
+            }
             Matrix< IndexMat > tNodes = tMesh->get_nodes_connected_to_element_loc_inds( (moris_index)iCell );
             uint               tPosOld = 0, tPosNew = 0;
             for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
@@ -1054,21 +1434,84 @@ namespace moris::wrk
             {
                 for ( uint iC = 0; iC < tCellCoefficients( iCell ).size(); iC++ )
                 {
-                    tBandCoefficient[ tCellCoefficients( iCell )( iC ) ] = true;
+                    tBandCoefficient[ tCellCoefficients( iCell )( iC ) ] = 1;
                 }
                 for ( uint iNode = 0; iNode < tNodes.numel(); iNode++ )
                 {
-                    tBandNode[ tNodes( iNode ) ] = true;
+                    tBandNode[ tNodes( iNode ) ] = 1;
+                }
+            }
+        }
+
+        // a cut cell of another processor can touch a coefficient or a node of this one: merge the band flags by ADV ID
+        // and by node ID
+        if ( tParallel )
+        {
+            moris_id tMaxNodeId = 0;
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                tMaxNodeId = std::max( tMaxNodeId, tMesh->get_glb_entity_id_from_entity_loc_index( (moris_index)iNode, mtk::EntityRank::NODE ) );
+            }
+            tMaxNodeId = max_all( tMaxNodeId );
+            std::vector< int > tLocalNodeFlags( tMaxNodeId + 1, 0 );
+            std::vector< int > tGlobalNodeFlags( tMaxNodeId + 1, 0 );
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                if ( tBandNode[ iNode ] == 1 )
+                {
+                    tLocalNodeFlags[ tMesh->get_glb_entity_id_from_entity_loc_index( (moris_index)iNode, mtk::EntityRank::NODE ) ] = 1;
+                }
+            }
+            MPI_Allreduce( tLocalNodeFlags.data(), tGlobalNodeFlags.data(), (int)tLocalNodeFlags.size(), MPI_INT, MPI_MAX, get_comm() );
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                tBandNode[ iNode ] = tGlobalNodeFlags[ tMesh->get_glb_entity_id_from_entity_loc_index( (moris_index)iNode, mtk::EntityRank::NODE ) ];
+            }
+
+            Vector< sint > tADVIds = aGENPerformer( 0 )->get_design_determining_adv_ids( mADVFiledName );
+            sint           tMinId  = MORIS_SINT_MAX;
+            sint           tMaxId  = -MORIS_SINT_MAX;
+            for ( uint iC = 0; iC < tNumCoeff; iC++ )
+            {
+                if ( tOwners( iC ) >= 0 )
+                {
+                    tMinId = std::min( tMinId, tADVIds( iC ) );
+                    tMaxId = std::max( tMaxId, tADVIds( iC ) );
+                }
+            }
+            tMinId = min_all( tMinId );
+            tMaxId = max_all( tMaxId );
+
+            std::vector< int > tLocalFlags( tMaxId - tMinId + 1, 0 );
+            std::vector< int > tGlobalFlags( tMaxId - tMinId + 1, 0 );
+            for ( uint iC = 0; iC < tNumCoeff; iC++ )
+            {
+                if ( tOwners( iC ) >= 0 && tBandCoefficient[ iC ] == 1 )
+                {
+                    tLocalFlags[ tADVIds( iC ) - tMinId ] = 1;
+                }
+            }
+            MPI_Allreduce( tLocalFlags.data(), tGlobalFlags.data(), (int)tLocalFlags.size(), MPI_INT, MPI_MAX, get_comm() );
+            for ( uint iC = 0; iC < tNumCoeff; iC++ )
+            {
+                if ( tOwners( iC ) >= 0 )
+                {
+                    tBandCoefficient[ iC ] = tGlobalFlags[ tADVIds( iC ) - tMinId ];
                 }
             }
         }
 
         real tMaxBand = 0.0, tMaxFar = 0.0;
-        uint tNumBand = 0;
-        for ( uint iC = 0; iC < aOldCoeffs.numel(); iC++ )
+        uint tNumBand = 0, tNumOwnedCoeff = 0;
+        for ( uint iC = 0; iC < tNumCoeff; iC++ )
         {
+            if ( tParallel && tOwners( iC ) != par_rank() )
+            {
+                continue;
+            }
+            tNumOwnedCoeff++;
             real tDelta = std::abs( aNewCoeffs( iC ) - aOldCoeffs( iC ) );
-            if ( tBandCoefficient[ iC ] )
+            if ( tBandCoefficient[ iC ] == 1 )
             {
                 tNumBand++;
                 tMaxBand = std::max( tMaxBand, tDelta );
@@ -1079,13 +1522,18 @@ namespace moris::wrk
             }
         }
 
-        uint tFlips = 0, tFlipsBand = 0;
+        uint tFlips = 0, tFlipsBand = 0, tNumOwnedNodes = 0;
         real tMaxNodalBand = 0.0;
         for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
         {
+            if ( tParallel && tMesh->get_entity_owner( (moris_index)iNode, mtk::EntityRank::NODE ) != (uint)par_rank() )
+            {
+                continue;
+            }
+            tNumOwnedNodes++;
             bool tFlip = ( tOldNodal( iNode ) >= 0.0 ) != ( tNewNodal( iNode ) >= 0.0 );
             tFlips += tFlip ? 1 : 0;
-            if ( tBandNode[ iNode ] )
+            if ( tBandNode[ iNode ] == 1 )
             {
                 tFlipsBand += tFlip ? 1 : 0;
                 tMaxNodalBand = std::max( tMaxNodalBand, std::abs( tNewNodal( iNode ) - tOldNodal( iNode ) ) );
@@ -1094,8 +1542,8 @@ namespace moris::wrk
 
         MORIS_LOG_INFO( "SDF-FOOTPRINT coeffs=%u band_coeffs=%u max|dc|_band=%.6e max|dc|_far=%.6e max|dphi_node|_band=%.6e "
                         "nodes=%u sign_flips=%u (band %u) cut_cells psi=%u phi=%u changed=%u",
-                (uint)aOldCoeffs.numel(), tNumBand, tMaxBand, tMaxFar, tMaxNodalBand,
-                tNumNodes, tFlips, tFlipsBand, tCutOld, tCutNew, tCutChanged );
+                sum_all( tNumOwnedCoeff ), sum_all( tNumBand ), max_all( tMaxBand ), max_all( tMaxFar ), max_all( tMaxNodalBand ),
+                sum_all( tNumOwnedNodes ), sum_all( tFlips ), sum_all( tFlipsBand ), sum_all( tCutOld ), sum_all( tCutNew ), sum_all( tCutChanged ) );
     }
 
     //------------------------------------------------------------------------------
@@ -1160,6 +1608,9 @@ namespace moris::wrk
                 }
                 // If no neighbors (shouldn't happen), keep original value
             }
+
+            // a processor does not hold every neighbour of its shared and aura nodes: take their values from the owner
+            synchronize_nodal_values( aCoefficients, aInterpMesh );
         }
 
         MORIS_LOG_INFO( "Laplacian smoothing complete. ADV range: [%.6f, %.6f]",
