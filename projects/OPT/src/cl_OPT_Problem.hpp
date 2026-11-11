@@ -44,6 +44,7 @@ namespace moris::opt
         real mGradClipFactor     = 0.0;                // clip entries above this x the median nonzero |gradient|; <= 0 = off (set via "grad_clip_factor")
 
         std::string mRestartFile;                      // Restart file
+        sint        mRestartFileNumProcs = -1;         // Processor count of the restart file read (-1: none read)
 
         real mADVNormTolerance = 1e-12;                // Tolerance for determining whether ADV vector has changed
 
@@ -143,6 +144,16 @@ namespace moris::opt
         Matrix< IdMat >& get_ijklIDs()
         {
             return mIjklIds;
+        }
+
+        /**
+         * Processor count the ADV restart file of this run was written on (its ADV order belongs to that count)
+         *
+         * @return processor count, -1 if no restart file was read
+         */
+        sint get_restart_file_num_procs() const
+        {
+            return mRestartFileNumProcs;
         }
 
         /**

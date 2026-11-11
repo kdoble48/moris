@@ -2391,4 +2391,506 @@ namespace moris::opt
 
         warm_restart::remove_state_files();
     }
+
+    //--------------------------------------------------------------------------------------------------------------
+    // The optimizer state file identifies its ADVs by ID (MB-114): the ADV order depends on the processor count, so a
+    // state written in one order must land on the same ADVs in another. The tests emulate the orders of 1, 2 and 4
+    // processors by permutations of the ADV IDs (processor by processor, the owned ADVs first); the process count of
+    // the test itself does not change the order of a user-defined problem.
+
+    namespace state_ids
+    {
+        /** ID of the ADV at each position, in the order emulated for aNumProcs processors (8 ADVs, IDs 100 .. 107) */
+        std::vector< moris_id >
+        order( sint aNumProcs )
+        {
+            switch ( aNumProcs )
+            {
+                case 1:
+                    return { 100, 101, 102, 103, 104, 105, 106, 107 };
+                case 2:
+                    return { 104, 105, 106, 107, 100, 101, 102, 103 };
+                default:
+                    return { 107, 100, 104, 103, 101, 106, 105, 102 };
+            }
+        }
+
+        Matrix< IdMat >
+        id_matrix( const std::vector< moris_id >& aIds )
+        {
+            Matrix< IdMat > tIds( aIds.size(), 1, gNoID );
+            for ( uint iADV = 0; iADV < aIds.size(); iADV++ )
+            {
+                tIds( iADV ) = aIds[ iADV ];
+            }
+            return tIds;
+        }
+
+        // per-ADV values as functions of the ID, so that a value found at a position names the ADV it belongs to
+        real
+        centre_of( moris_id aId )
+        {
+            return 0.1 + 0.1 * ( aId - 100 );
+        }
+
+        real
+        low_width_of( moris_id aId )
+        {
+            return 0.02 + 0.01 * ( aId - 100 );
+        }
+
+        real
+        upp_width_of( moris_id aId )
+        {
+            return 0.2 + 0.03 * ( aId - 100 );
+        }
+
+        real
+        move_step_of( moris_id aId )
+        {
+            return 0.011 + 0.002 * ( aId - 100 );
+        }
+
+        /** a state in the given order; with aWithIds = false as a problem without ADV IDs writes it */
+        Algorithm_MMA::Restart_State
+        make_state( const std::vector< moris_id >& aIds, sint aNumProcs, bool aWithIds )
+        {
+            Algorithm_MMA::Restart_State tState;
+            tState.mValid = true;
+            for ( moris_id tId : aIds )
+            {
+                tState.mCentre.push_back( centre_of( tId ) );
+                tState.mLowWidth.push_back( low_width_of( tId ) );
+                tState.mUppWidth.push_back( upp_width_of( tId ) );
+                tState.mMoveStep.push_back( move_step_of( tId ) );
+                tState.mLowerBounds.push_back( 0.0 );
+                tState.mUpperBounds.push_back( 1.0 );
+            }
+            tState.mRaa      = { 1.0e-3 };
+            tState.mPenalty  = { 7.0 };
+            tState.mRaa0     = 2.0e-3;
+            tState.mObjScale = 0.5;
+            tState.mKKTRef   = 0.25;
+            if ( aWithIds )
+            {
+                tState.mIjklIds = id_matrix( aIds );
+            }
+            tState.mNumProcs = aNumProcs;
+            return tState;
+        }
+
+        /** a state file as written before the IDs and the processor count were stored */
+        void
+        write_old_format_state( const std::string& aFileName, const Algorithm_MMA::Restart_State& aState )
+        {
+            hid_t  tFileID = create_hdf5_file( aFileName, false );
+            herr_t tStatus = 0;
+            save_vector_to_hdf5_file( tFileID, "Centre", aState.mCentre, tStatus );
+            save_vector_to_hdf5_file( tFileID, "LowWidth", aState.mLowWidth, tStatus );
+            save_vector_to_hdf5_file( tFileID, "UppWidth", aState.mUppWidth, tStatus );
+            save_vector_to_hdf5_file( tFileID, "MoveStep", aState.mMoveStep, tStatus );
+            save_vector_to_hdf5_file( tFileID, "LowerBounds", aState.mLowerBounds, tStatus );
+            save_vector_to_hdf5_file( tFileID, "UpperBounds", aState.mUpperBounds, tStatus );
+            save_vector_to_hdf5_file( tFileID, "Raa", aState.mRaa, tStatus );
+            save_vector_to_hdf5_file( tFileID, "Penalty", aState.mPenalty, tStatus );
+            save_scalar_to_hdf5_file( tFileID, "Raa0", aState.mRaa0, tStatus );
+            save_scalar_to_hdf5_file( tFileID, "ObjScale", aState.mObjScale, tStatus );
+            save_scalar_to_hdf5_file( tFileID, "KKTRef", aState.mKKTRef, tStatus );
+            save_scalar_to_hdf5_file( tFileID, "OptIteration", (sint)3, tStatus );
+            close_hdf5_file( tFileID );
+        }
+
+        /** the design with every ADV at the centre the state holds for its ID, in the given order */
+        std::vector< double >
+        design_at_centres( const std::vector< moris_id >& aIds )
+        {
+            std::vector< double > tX;
+            for ( moris_id tId : aIds )
+            {
+                tX.push_back( centre_of( tId ) );
+            }
+            return tX;
+        }
+
+        // ---- a problem whose ADVs are identified by their IDs: min sum_i w( id_i ) ( x_i - t( id_i ) )^2 ----
+
+        /** ID of the ADV at each position of the problem that is being solved */
+        std::vector< moris_id > gSolveOrder;
+
+        Matrix< DDRMat >
+        compute_objectives( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            real tObjective = 0.0;
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                const uint tVariable = gSolveOrder[ iADV ] - 100;
+                tObjective += warm_restart::weight( tVariable ) * std::pow( aCriteria( iADV ) - warm_restart::target( tVariable ), 2 );
+            }
+            return { { tObjective } };
+        }
+
+        Matrix< DDRMat >
+        compute_dobjective_dcriteria( const Vector< real >& aADVs, const Vector< real >& aCriteria )
+        {
+            Matrix< DDRMat > tGradient( 1, aCriteria.size(), 0.0 );
+            for ( uint iADV = 0; iADV < aCriteria.size(); iADV++ )
+            {
+                const uint tVariable = gSolveOrder[ iADV ] - 100;
+                tGradient( 0, iADV ) = 2.0 * warm_restart::weight( tVariable ) * ( aCriteria( iADV ) - warm_restart::target( tVariable ) );
+            }
+            return tGradient;
+        }
+
+        /** ADVs in the order mIds, with those IDs; the first design is mStart (by position), 0.5 if empty */
+        class Interface_Ordered : public warm_restart::Interface_Forced_Restart
+        {
+          public:
+            std::vector< moris_id > mIds;
+            std::vector< real >     mStart;
+
+            void
+            initialize( Vector< real >& aADVs, Vector< real >& aLowerBounds, Vector< real >& aUpperBounds, Matrix< IdMat >& aIjklIds ) override
+            {
+                mNumADVs = mIds.size();
+                aADVs.resize( mNumADVs );
+                aLowerBounds.resize( mNumADVs );
+                aUpperBounds.resize( mNumADVs );
+                for ( uint iADV = 0; iADV < mNumADVs; iADV++ )
+                {
+                    aADVs( iADV )        = mStart.empty() ? 0.5 : mStart[ iADV ];
+                    aLowerBounds( iADV ) = 0.0;
+                    aUpperBounds( iADV ) = 1.0;
+                }
+                aIjklIds                       = id_matrix( mIds );
+                mInitializeOptimizationRestart = false;
+            }
+        };
+
+        /** position of each ID of aIds: tPosition[ id - 100 ] */
+        std::vector< uint >
+        positions( const std::vector< moris_id >& aIds )
+        {
+            std::vector< uint > tPosition( aIds.size(), 0 );
+            for ( uint iADV = 0; iADV < aIds.size(); iADV++ )
+            {
+                tPosition[ aIds[ iADV ] - 100 ] = iADV;
+            }
+            return tPosition;
+        }
+
+        /** aValues (in the order aIds) sorted by ID */
+        std::vector< real >
+        by_id( const std::vector< real >& aValues, const std::vector< moris_id >& aIds )
+        {
+            std::vector< real > tById( aValues.size(), 0.0 );
+            for ( uint iADV = 0; iADV < aIds.size(); iADV++ )
+            {
+                tById[ aIds[ iADV ] - 100 ] = aValues[ iADV ];
+            }
+            return tById;
+        }
+
+        /** what one run leaves behind, per-ADV values sorted by ID */
+        struct Run
+        {
+            std::vector< std::vector< real > > mDesigns;          ///< every evaluated design
+            std::vector< real >                mStartLowWidth;    ///< state the warm solve started with
+            std::vector< real >                mStartUppWidth;
+            std::vector< real >                mStartMoveStep;
+            Algorithm_MMA::Restart_Counts      mCounts;
+            int                                mNumWarmSolves = 0;
+            std::string                        mStateFile;    ///< copy of the state file of the last iteration
+        };
+
+        /**
+         * aMaxIts iterations on the problem in the order aIds, from the design aStartById (empty: 0.5) and the state
+         * file aStateFile (empty: none). The state file of the last iteration is kept as aKeepAs.
+         */
+        Run
+        run( const std::vector< moris_id >& aIds,
+                const std::vector< real >&  aStartById,
+                const std::string&          aStateFile,
+                sint                        aMaxIts,
+                const std::string&          aKeepAs )
+        {
+            warm_restart::remove_state_files();
+            gSolveOrder = aIds;
+
+            std::shared_ptr< Interface_Ordered > tInterface = std::make_shared< Interface_Ordered >();
+            tInterface->mIds                                = aIds;
+            for ( uint iADV = 0; iADV < aIds.size() && !aStartById.empty(); iADV++ )
+            {
+                tInterface->mStart.push_back( aStartById[ aIds[ iADV ] - 100 ] );
+            }
+
+            Parameter_List             tProblemParameterList = moris::prm::create_opt_problem_parameter_list();
+            std::shared_ptr< Problem > tProblem              = std::make_shared< Problem_User_Defined >(
+                    tProblemParameterList,
+                    tInterface,
+                    &warm_restart::get_constraint_types,
+                    &compute_objectives,
+                    &warm_restart::compute_constraints,
+                    &warm_restart::zero_dadv,
+                    &compute_dobjective_dcriteria,
+                    &warm_restart::zero_dadv,
+                    &warm_restart::compute_dconstraint_dcriteria );
+            tProblem->initialize();
+
+            Parameter_List tParameters = warm_restart::algorithm_parameters( true, aMaxIts );
+            tParameters.set( "restart_state_file", aStateFile );
+            Algorithm_MMA tAlgorithm( tParameters );
+            warm_restart::solve_with_restarts( tAlgorithm, tProblem );
+
+            Run tRun;
+            for ( const std::vector< real >& tDesign : tInterface->mEvaluated )
+            {
+                tRun.mDesigns.push_back( by_id( tDesign, aIds ) );
+            }
+            tRun.mNumWarmSolves = tAlgorithm.get_num_warm_solves();
+            if ( tRun.mNumWarmSolves > 0 )
+            {
+                tRun.mStartLowWidth = by_id( tAlgorithm.get_warm_start_state().mLowWidth, aIds );
+                tRun.mStartUppWidth = by_id( tAlgorithm.get_warm_start_state().mUppWidth, aIds );
+                tRun.mStartMoveStep = by_id( tAlgorithm.get_warm_start_state().mMoveStep, aIds );
+                tRun.mCounts        = tAlgorithm.get_warm_start_counts();
+            }
+
+            // the state file of the last iteration
+            std::string tLatest;
+            uint        tLatestIter = 0;
+            for ( const std::filesystem::directory_entry& tEntry : std::filesystem::directory_iterator( "." ) )
+            {
+                const std::string tName = tEntry.path().filename().string();
+                if ( tName.rfind( "MMA_State_Alg_0_Iter_", 0 ) == 0 )
+                {
+                    uint tIter = (uint)std::stoul( tName.substr( 21 ) );
+                    if ( tLatest.empty() || tIter > tLatestIter )
+                    {
+                        tLatest     = tName;
+                        tLatestIter = tIter;
+                    }
+                }
+            }
+            REQUIRE( !tLatest.empty() );
+            std::filesystem::copy_file( tLatest, aKeepAs, std::filesystem::copy_options::overwrite_existing );
+            tRun.mStateFile = aKeepAs;
+            warm_restart::remove_state_files();
+            return tRun;
+        }
+    }    // namespace state_ids
+
+    TEST_CASE( "Native MMA state file is mapped to the ADV order by ID", "[optimization][restart_keep_state][restart_state_ids]" )
+    {
+        using namespace state_ids;
+
+        // each rank writes its own files
+        const std::string tFileName    = "MMA_State_ids_test_" + std::to_string( par_rank() ) + ".hdf5";
+        const std::string tOldFileName = "MMA_State_old_test_" + std::to_string( par_rank() ) + ".hdf5";
+        const uint        tNumVar      = 8;
+
+        const std::vector< double > tXMin( tNumVar, 0.0 );
+        const std::vector< double > tXMax( tNumVar, 1.0 );
+
+        // written in the order of 1, 2 or 4 processors, read in each of the other orders
+        const std::vector< sint > tNumProcs = { 1, 2, 4 };
+        for ( sint tWriteProcs : tNumProcs )
+        {
+            const std::vector< moris_id > tWriteIds = order( tWriteProcs );
+            Algorithm_MMA::write_restart_state( tFileName, make_state( tWriteIds, tWriteProcs, true ), 3 );
+            Algorithm_MMA::Restart_State tFile = Algorithm_MMA::read_restart_state( tFileName );
+
+            // the file carries the order
+            REQUIRE( tFile.mIjklIds.numel() == tNumVar );
+            CHECK( tFile.mNumProcs == tWriteProcs );
+            for ( uint iADV = 0; iADV < tNumVar; iADV++ )
+            {
+                CHECK( tFile.mIjklIds( iADV ) == tWriteIds[ iADV ] );
+                CHECK( tFile.mCentre[ iADV ] == centre_of( tWriteIds[ iADV ] ) );
+            }
+
+            for ( sint tReadProcs : tNumProcs )
+            {
+                const std::vector< moris_id > tReadIds = order( tReadProcs );
+                const std::vector< sint >     tMap     = Algorithm_MMA::restart_state_id_map(
+                        tFile, id_matrix( tReadIds ), tNumVar, tReadProcs, -1, tFileName );
+
+                // the same order needs no map
+                if ( tReadProcs == tWriteProcs )
+                {
+                    CHECK( tMap.empty() );
+                    continue;
+                }
+                REQUIRE( tMap.size() == tNumVar );
+
+                // the restart design is the state's centre, ADV by ADV: with the map every ADV keeps its own state
+                const std::vector< double >   tX = design_at_centres( tReadIds );
+                std::vector< double >         tLow, tUpp, tMove;
+                Algorithm_MMA::Restart_Counts tCounts = Algorithm_MMA::apply_restart_state(
+                        tFile, tMap, tX, tXMin, tXMax, 0.25, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove );
+                CHECK( tCounts.mKept == (int)tNumVar );
+                CHECK( tCounts.mMoved == 0 );
+                CHECK( tCounts.mFresh == 0 );
+                for ( uint iADV = 0; iADV < tNumVar; iADV++ )
+                {
+                    const moris_id tId = tReadIds[ iADV ];
+                    CHECK( tFile.mIjklIds( tMap[ iADV ] ) == tId );
+                    CHECK( tLow[ iADV ] == Approx( centre_of( tId ) - low_width_of( tId ) ).epsilon( 1e-14 ) );
+                    CHECK( tUpp[ iADV ] == Approx( centre_of( tId ) + upp_width_of( tId ) ).epsilon( 1e-14 ) );
+                    CHECK( tMove[ iADV ] == Approx( move_step_of( tId ) ).epsilon( 1e-14 ) );
+                }
+
+                // read by position (the defect): ADVs count as moved, the others carry another ADV's state
+                tCounts = Algorithm_MMA::apply_restart_state(
+                        tFile, {}, tX, tXMin, tXMax, 0.25, 0.5, true, 0.07, 1.0e-4, 0.1, tLow, tUpp, tMove );
+                CHECK( tCounts.mMoved > 0 );
+            }
+        }
+
+        // an ADV without an ID keeps its position; the others are mapped
+        {
+            std::vector< moris_id > tWriteIds = order( 1 );
+            std::vector< moris_id > tReadIds  = { 107, 106, gNoID, 104, 103, 105, 101, 100 };
+            tWriteIds[ 2 ]                    = gNoID;
+            Algorithm_MMA::write_restart_state( tFileName, make_state( tWriteIds, 1, true ), 3 );
+            Algorithm_MMA::Restart_State tFile = Algorithm_MMA::read_restart_state( tFileName );
+            const std::vector< sint >    tMap  = Algorithm_MMA::restart_state_id_map( tFile, id_matrix( tReadIds ), tNumVar, 4, -1, tFileName );
+            CHECK( tMap == std::vector< sint >{ 7, 6, 2, 4, 3, 5, 1, 0 } );
+
+            // ... but not if the file holds an ID at that position
+            tReadIds = { 107, gNoID, 102, 104, 103, 105, 101, 100 };
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tFile, id_matrix( tReadIds ), tNumVar, 4, -1, tFileName ) );
+        }
+
+        // IDs that do not identify the ADVs are an error: an ID the file does not hold, an ID twice in the file or in
+        // the current design, another number of ADVs
+        {
+            Algorithm_MMA::Restart_State tFile = make_state( order( 1 ), 1, true );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tFile, id_matrix( { 107, 100, 104, 103, 101, 106, 105, 999 } ), tNumVar, 4, -1, tFileName ) );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tFile, id_matrix( { 107, 100, 104, 103, 101, 106, 105, 105 } ), tNumVar, 4, -1, tFileName ) );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tFile, id_matrix( { 107, 100, 104, 103, 101, 106, 105 } ), 7, 4, -1, tFileName ) );
+
+            Algorithm_MMA::Restart_State tTwice = make_state( { 100, 101, 102, 103, 104, 105, 106, 106 }, 1, true );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tTwice, id_matrix( order( 4 ) ), tNumVar, 4, -1, tFileName ) );
+
+            // the same IDs at the same positions are the same order, whatever they are
+            CHECK( Algorithm_MMA::restart_state_id_map( tTwice, tTwice.mIjklIds, tNumVar, 4, -1, tFileName ).empty() );
+        }
+
+        // a state without IDs (ADVs that carry none) is read in file order on its processor count, and nowhere else
+        {
+            Algorithm_MMA::write_restart_state( tFileName, make_state( order( 2 ), 2, false ), 3 );
+            Algorithm_MMA::Restart_State tFile = Algorithm_MMA::read_restart_state( tFileName );
+            CHECK( tFile.mIjklIds.numel() == 0 );
+            CHECK( tFile.mNumProcs == 2 );
+            CHECK( Algorithm_MMA::restart_state_id_map( tFile, Matrix< IdMat >(), tNumVar, 2, -1, tFileName ).empty() );
+            CHECK( Algorithm_MMA::restart_state_id_map( tFile, id_matrix( order( 2 ) ), tNumVar, 2, -1, tFileName ).empty() );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tFile, Matrix< IdMat >(), tNumVar, 4, -1, tFileName ) );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tFile, id_matrix( order( 4 ) ), tNumVar, 4, -1, tFileName ) );
+
+            // a state with IDs, a problem without: the same rule
+            Algorithm_MMA::Restart_State tWithIds = make_state( order( 2 ), 2, true );
+            CHECK( Algorithm_MMA::restart_state_id_map( tWithIds, Matrix< IdMat >(), tNumVar, 2, -1, tFileName ).empty() );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tWithIds, Matrix< IdMat >(), tNumVar, 1, -1, tFileName ) );
+        }
+
+        // a file written before the order was stored: read in file order (as before) on the processor count of the ADV
+        // restart file read with it; an error on another count, or if there is no ADV restart file to tell
+        {
+            write_old_format_state( tOldFileName, make_state( order( 1 ), 1, false ) );
+            Algorithm_MMA::Restart_State tOld = Algorithm_MMA::read_restart_state( tOldFileName );
+            CHECK( tOld.mIjklIds.numel() == 0 );
+            CHECK( tOld.mNumProcs == -1 );
+            CHECK( tOld.mCentre == make_state( order( 1 ), 1, false ).mCentre );
+            CHECK( tOld.mMoveStep == make_state( order( 1 ), 1, false ).mMoveStep );
+            CHECK( Algorithm_MMA::restart_state_id_map( tOld, id_matrix( order( 1 ) ), tNumVar, 1, 1, tOldFileName ).empty() );
+            CHECK( Algorithm_MMA::restart_state_id_map( tOld, Matrix< IdMat >(), tNumVar, 4, 4, tOldFileName ).empty() );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tOld, id_matrix( order( 4 ) ), tNumVar, 4, 1, tOldFileName ) );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tOld, id_matrix( order( 1 ) ), tNumVar, 1, 4, tOldFileName ) );
+            CHECK_THROWS( Algorithm_MMA::restart_state_id_map( tOld, id_matrix( order( 1 ) ), tNumVar, 1, -1, tOldFileName ) );
+        }
+
+        std::filesystem::remove( tFileName );
+        std::filesystem::remove( tOldFileName );
+    }
+
+    TEST_CASE( "Native MMA restarts from a state file written in another ADV order", "[optimization][restart_keep_state][restart_state_ids]" )
+    {
+        // one processor only: the test drives solve() on a single rank (MB-091)
+        if ( par_size() > 1 )
+        {
+            return;
+        }
+        using namespace state_ids;
+        const uint tNumVar = 8;
+
+        // each pair: a run in the writer's order, then the same continuation in the writer's order (the reference) and
+        // in the reader's order, both from the writer's state file
+        const std::vector< std::pair< sint, sint > > tPairs = { { 1, 2 }, { 1, 4 }, { 2, 1 }, { 4, 1 }, { 4, 2 } };
+        for ( const std::pair< sint, sint >& tPair : tPairs )
+        {
+            const std::vector< moris_id > tWriteIds = order( tPair.first );
+            const std::vector< moris_id > tReadIds  = order( tPair.second );
+
+            Run tFirst = run( tWriteIds, {}, "", 5, "MMA_State_ids_first.hdf5" );
+            REQUIRE( tFirst.mNumWarmSolves == 0 );
+            const std::vector< real > tDesign = tFirst.mDesigns.back();
+
+            // the file holds the writer's IDs and the committed design
+            Algorithm_MMA::Restart_State tFile = Algorithm_MMA::read_restart_state( tFirst.mStateFile );
+            REQUIRE( tFile.mIjklIds.numel() == tNumVar );
+            CHECK( tFile.mNumProcs == par_size() );
+            for ( uint iADV = 0; iADV < tNumVar; iADV++ )
+            {
+                CHECK( tFile.mIjklIds( iADV ) == tWriteIds[ iADV ] );
+                CHECK( tFile.mCentre[ iADV ] == tDesign[ tWriteIds[ iADV ] - 100 ] );
+            }
+
+            Run tReference = run( tWriteIds, tDesign, tFirst.mStateFile, 4, "MMA_State_ids_reference.hdf5" );
+            Run tReordered = run( tReadIds, tDesign, tFirst.mStateFile, 4, "MMA_State_ids_reordered.hdf5" );
+
+            // every ADV starts from its own state
+            REQUIRE( tReference.mNumWarmSolves == 1 );
+            REQUIRE( tReordered.mNumWarmSolves == 1 );
+            CHECK( tReference.mCounts.mKept == (int)tNumVar );
+            CHECK( tReordered.mCounts.mKept == (int)tNumVar );
+            CHECK( tReordered.mCounts.mMoved == 0 );
+            CHECK( tReordered.mCounts.mFresh == 0 );
+            const std::vector< uint > tFilePosition = positions( tWriteIds );
+            for ( uint iVariable = 0; iVariable < tNumVar; iVariable++ )
+            {
+                CHECK( tReordered.mStartLowWidth[ iVariable ] == tReference.mStartLowWidth[ iVariable ] );
+                CHECK( tReordered.mStartUppWidth[ iVariable ] == tReference.mStartUppWidth[ iVariable ] );
+                CHECK( tReordered.mStartMoveStep[ iVariable ] == tReference.mStartMoveStep[ iVariable ] );
+                CHECK( tReordered.mStartMoveStep[ iVariable ] == tFile.mMoveStep[ tFilePosition[ iVariable ] ] );
+            }
+
+            // ... and the two continuations visit the same designs (the sums of the subproblem run in another order)
+            REQUIRE( tReordered.mDesigns.size() == tReference.mDesigns.size() );
+            REQUIRE( tReference.mDesigns.size() > 3 );
+            real tMaxDifference = 0.0;
+            real tMaxChange     = 0.0;
+            for ( uint iDesign = 0; iDesign < tReference.mDesigns.size(); iDesign++ )
+            {
+                for ( uint iVariable = 0; iVariable < tNumVar; iVariable++ )
+                {
+                    tMaxDifference = std::max( tMaxDifference, std::abs( tReordered.mDesigns[ iDesign ][ iVariable ] - tReference.mDesigns[ iDesign ][ iVariable ] ) );
+                    tMaxChange     = std::max( tMaxChange, std::abs( tReference.mDesigns[ iDesign ][ iVariable ] - tDesign[ iVariable ] ) );
+                }
+            }
+            CHECK( tMaxDifference < 1.0e-10 );
+            CHECK( tMaxChange > 1.0e-3 );    // the continuation moves the design
+
+            // the reordered run writes its own order
+            Algorithm_MMA::Restart_State tWritten = Algorithm_MMA::read_restart_state( tReordered.mStateFile );
+            REQUIRE( tWritten.mIjklIds.numel() == tNumVar );
+            for ( uint iADV = 0; iADV < tNumVar; iADV++ )
+            {
+                CHECK( tWritten.mIjklIds( iADV ) == tReadIds[ iADV ] );
+            }
+        }
+
+        std::filesystem::remove( "MMA_State_ids_first.hdf5" );
+        std::filesystem::remove( "MMA_State_ids_reference.hdf5" );
+        std::filesystem::remove( "MMA_State_ids_reordered.hdf5" );
+    }
 }    // namespace moris::opt
