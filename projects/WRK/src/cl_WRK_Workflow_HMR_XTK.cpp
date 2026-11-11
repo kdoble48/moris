@@ -616,7 +616,8 @@ namespace moris::wrk
                                 }
 
                                 // sdf_preserve_interface (MB-027): keep every coefficient that can reach a cut cell, so the
-                                // cut, the criteria and their sensitivities are those of psi bit for bit
+                                // cut, the criteria and their sensitivities are those of psi bit for bit (with
+                                // sdf_preserve_interface_slope_tol > 0: up to that crossing-shift tolerance)
                                 if ( tReinitPerformer->get_preserve_interface() )
                                 {
                                     tReinitPerformer->preserve_interface( mPerformerManager->mGENPerformer, tOldCoeffs, tCoeffs );

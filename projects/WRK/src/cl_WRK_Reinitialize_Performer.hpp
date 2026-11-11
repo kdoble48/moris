@@ -122,6 +122,20 @@ namespace moris
             }
         };
 
+        /** what Reinitialize_Performer::rescale_interface_band() did (sdf_preserve_interface_slope_tol) */
+        struct Band_Rescale_Report
+        {
+            uint mBandCells     = 0;      ///< possibly cut cells
+            uint mBandCoeffs    = 0;      ///< coefficients of those cells
+            uint mScaledCoeffs  = 0;      ///< coefficients whose value changed
+            real mMinFactor     = 1.0;    ///< smallest factor applied to a scaled coefficient (1 if none was scaled)
+            real mMaxFactor     = 1.0;    ///< largest factor applied to a scaled coefficient (1 if none was scaled)
+            real mMaxLogSpread  = 0.0;    ///< largest spread of ln(factor) over the coefficients of one band cell
+            real mMaxRequested  = 0.0;    ///< largest |ln(factor)| the slopes asked for, before the limiter
+            uint mLimiterPasses = 0;      ///< sweeps of the spread limiter
+            uint mBackoffs      = 0;      ///< global halvings of ln(factor) (limiter not converged, or a nodal sign flipped)
+        };
+
         enum class ReinitMode
         {
             FIELD_REMAP,     ///< Original: remap solution field to target mesh
@@ -169,6 +183,8 @@ namespace moris
             bool mReinitEveryStep = false;    ///< Redistance every iteration in-place (no restart); smooth every reinit_freq
             bool mDiagnostics     = false;    ///< sdf_reinit_diagnostics: log the footprint of every in-place redistance
             bool mPreserveInterface = false;  ///< sdf_preserve_interface: keep every coefficient that can reach a cut cell
+            real mPreserveSlopeTol   = 0.0;   ///< sdf_preserve_interface_slope_tol: crossing-shift tolerance of the band rescale (0 = off)
+            real mPreserveSlopeRange = 1.25;  ///< sdf_preserve_interface_slope_range: slopes in [1/range, range] are left alone
 
           public:
             //------------------------------------------------------------------------------
@@ -372,6 +388,67 @@ namespace moris
                     real                                   aTolerance,
                     uint&                                  aRings );
 
+            /**
+             * Slope restoration inside the frozen band (sdf_preserve_interface_slope_tol). aCoeffs holds the design
+             * coefficients after freeze_interface_band() (band coefficients = psi). Every coefficient c_k of a possibly
+             * cut cell (not all coefficients of one strict sign, |c| > aTolerance: the same set as step 1 of
+             * freeze_interface_band) is replaced by s_k c_k, s_k = exp( q_k ) > 0:
+             *  1. each band cell asks for the log factor that brings its slope aCellSlopes( cell ) to the nearer end of
+             *     [1/aSlopeRange, aSlopeRange] (0 inside the range); q_k starts as the mean over the band cells of k;
+             *  2. q_k is boxed so that s_k c_k stays within [aLowerBound, aUpperBound] and beyond aTolerance in
+             *     magnitude (coefficients with |c_k| <= aTolerance keep q_k = 0 and do not take part in step 3);
+             *  3. limiter: in every band cell max q - min q <= aMaxLogSpread, enforced by clipping each violating cell
+             *     to its mid-range until no cell violates; if the sweeps do not converge q is halved until they do.
+             *     aMaxLogSpread = 0 returns the band unchanged.
+             * Guarantees: every coefficient keeps its sign and its side of aTolerance, so strictly signed cells stay
+             * strictly signed (B-spline convex hull) and, for coefficients that are nodal values, every node keeps its
+             * sign; on a band cell phi_new = s ( phi + e ) with a positive s and
+             * |e| <= ( exp( aMaxLogSpread / 2 ) - 1 ) max |c_k|, so for nodal coefficients the intersection point of a
+             * cell edge moves by at most tanh( aMaxLogSpread / 4 ) of the edge length; a common factor on a connected
+             * band moves nothing. Not guaranteed: the interface inside a cell away from its edges (a multilinear zero
+             * set fixes the cell's values up to one factor, so any spread of s moves it). Pure function.
+             */
+            static Band_Rescale_Report
+            rescale_interface_band(
+                    Matrix< DDRMat >&                      aCoeffs,
+                    const Vector< Vector< moris_index > >& aCellCoefficients,
+                    const Matrix< DDRMat >&                aCellSlopes,
+                    real                                   aTolerance,
+                    real                                   aMaxLogSpread,
+                    real                                   aSlopeRange,
+                    real                                   aLowerBound,
+                    real                                   aUpperBound );
+
+            /**
+             * slope of the level set on every Lagrange cell: magnitude of the least-squares gradient of the cell's nodal
+             * values sum_k T_nk c_k about the cell's node centroid (for a QUAD4 / HEX8 this is the gradient of the
+             * multilinear interpolant at the cell centre). A signed distance gives 1.
+             */
+            static Matrix< DDRMat >
+            cell_slopes( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex, const Matrix< DDRMat >& aCoeffs );
+
+            /**
+             * rescale_interface_band() on a mesh: cell slopes of aOldCoeffs (psi), the rescale of aNewCoeffs (the
+             * coefficients after freeze_interface_band()), and a check on the Lagrange nodal values: if any node
+             * changes sign against psi (possible only when coefficients are not nodal values), ln(factor) is halved
+             * until none does; such halvings are counted in the report's mBackoffs.
+             */
+            static Band_Rescale_Report
+            rescale_interface_band_on_mesh(
+                    mtk::Interpolation_Mesh* aMesh,
+                    uint                     aDiscretizationIndex,
+                    const Matrix< DDRMat >&  aOldCoeffs,
+                    Matrix< DDRMat >&        aNewCoeffs,
+                    real                     aTolerance,
+                    real                     aMaxLogSpread,
+                    real                     aSlopeRange,
+                    real                     aLowerBound,
+                    real                     aUpperBound );
+
+            /** sdf_preserve_interface_slope_tol: crossing-shift tolerance of the band rescale (0 = off) */
+            real
+            get_preserve_slope_tol() const { return mPreserveSlopeTol; }
+
             /** cell -> design coefficient indices nonzero on the cell (union of its nodes' T-matrix indices) */
             static Vector< Vector< moris_index > >
             cell_coefficients( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex );
@@ -382,7 +459,8 @@ namespace moris
 
             /**
              * sdf_preserve_interface: apply freeze_interface_band() to the redistanced coefficients aNewCoeffs on the
-             * ADV field's own mesh and discretization; logs the frozen count. Serial only.
+             * ADV field's own mesh and discretization; logs the frozen count. With sdf_preserve_interface_slope_tol > 0
+             * the frozen band is then rescaled towards unit slope (rescale_interface_band()). Serial only.
              */
             uint
             preserve_interface(

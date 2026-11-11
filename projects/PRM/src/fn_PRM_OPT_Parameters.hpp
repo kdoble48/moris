@@ -115,6 +115,20 @@ namespace moris::prm
         // redistances do not drift the criteria. The band can grow until every other cell keeps a strict sign.
         tParameterList.insert( "sdf_preserve_interface", false );
 
+        // slope restoration inside the band that sdf_preserve_interface freezes (needs sdf_preserve_interface = true).
+        // 0.0 (default): off, the band keeps its values bit for bit. > 0: every frozen coefficient c_k of a possibly cut
+        // cell is multiplied by a positive factor s_k that moves the level-set slope of the cell towards
+        // [1/sdf_preserve_interface_slope_range, sdf_preserve_interface_slope_range], with ln(s_k) limited to a spread of
+        // 4 atanh(tol) over the coefficients of each such cell. Signs are kept exactly; for a level set whose
+        // coefficients are its nodal values (linear B-splines) every intersection point on a cell edge moves by at most
+        // tol times the edge length per redistance. A level set of order 1 is fixed by its interface up to one factor
+        // per connected band, so the slope correction that fits under a tolerance is limited; tol < 1.
+        tParameterList.insert( "sdf_preserve_interface_slope_tol", 0.0 );
+
+        // target slope range of sdf_preserve_interface_slope_tol: cells whose slope |grad phi| lies in [1/range, range]
+        // ask for no change; others ask for the factor that brings them to the nearer end of the range (>= 1)
+        tParameterList.insert( "sdf_preserve_interface_slope_range", 1.25 );
+
         // Gradient-explosion clip: cap each objective/constraint gradient entry at
         // grad_clip_factor x the median of the nonzero |entries| (the active-sensitivity
         // scale). Intended as a recovery tool for ill-conditioned designs where small XFEM
