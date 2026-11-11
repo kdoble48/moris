@@ -18,6 +18,7 @@
 #ifndef MORIS_CL_OPT_ALGORITHM_MMA_HPP_
 #define MORIS_CL_OPT_ALGORITHM_MMA_HPP_
 
+#include <string>
 #include <vector>
 
 #include "core.hpp"
@@ -124,6 +125,120 @@ namespace moris::opt
                                                          ///< proven regimes needlessly perturbs the trajectory
         static constexpr real sObjGradTarget = 1.0e8;    ///< decade-quantized scale brings max into (1e7, 1e8]
 
+        real mKKTRef = -1.0;    ///< KKT reference residual (first kktcheck of the run; < 0 = not set yet)
+
+      public:
+        /**
+         * Optimizer state carried across a restart (restart_keep_state). Widths and move steps are in ADV units, so
+         * that they survive a change of the bounds; the centre is the design they belong to.
+         */
+        struct Restart_State
+        {
+            bool                  mValid = false;
+            std::vector< double > mCentre;         ///< design the asymptote widths are centred on
+            std::vector< double > mLowWidth;       ///< centre - low of the next asymptotes (> 0)
+            std::vector< double > mUppWidth;       ///< upp - centre of the next asymptotes (> 0)
+            std::vector< double > mMoveStep;       ///< per-ADV move limit times the ADV range
+            std::vector< double > mLowerBounds;    ///< bounds the state was saved with (diagnostic)
+            std::vector< double > mUpperBounds;
+            std::vector< double > mRaa;        ///< constraint conservatism weights raa_j
+            std::vector< double > mPenalty;    ///< constraint penalties c_j
+            real                  mRaa0     = 0.0;
+            real                  mObjScale = 1.0;
+            real                  mKKTRef   = -1.0;
+        };
+
+        /** what apply_restart_state() did per ADV */
+        struct Restart_Counts
+        {
+            int mKept  = 0;    ///< state kept (re-centred)
+            int mMoved = 0;    ///< mapped, but moved by more than the moved fraction of the range: fresh
+            int mFresh = 0;    ///< mapped to -1 (row map): fresh
+        };
+
+        /**
+         * Re-centre a kept state on the restart design aX (bounds aXMin, aXMax): for ADV i with old index
+         * k = aRowMap[ i ] (identity if aRowMap is empty), low_i = x_i - w_low_k, upp_i = x_i + w_upp_k and
+         * move_i = step_k / range_i, clamped to [aMoveMin, aMoveMax]. ADV i starts fresh (low/upp = x_i -+ aAsympAdapt0
+         * * range_i, move_i = aFreshMove) when k = -1, or when aMovedFraction > 0 and |x_i - centre_k| > aMovedFraction
+         * * range_i (the restart moved it out of the region the kept state describes). Widths are clamped to the
+         * asymptote limits [0.01, 10] * range_i of asymp(). aMove is left unchanged if aKeepMove is false (fixed box).
+         */
+        static Restart_Counts apply_restart_state(
+                const Restart_State&         aState,
+                const std::vector< sint >&   aRowMap,
+                const std::vector< double >& aX,
+                const std::vector< double >& aXMin,
+                const std::vector< double >& aXMax,
+                real                         aMovedFraction,
+                real                         aAsympAdapt0,
+                bool                         aKeepMove,
+                real                         aFreshMove,
+                real                         aMoveMin,
+                real                         aMoveMax,
+                std::vector< double >&       aLow,
+                std::vector< double >&       aUpp,
+                std::vector< double >&       aMove );
+
+        /** write aState to an HDF5 file (datasets Centre, LowWidth, UppWidth, MoveStep, bounds, Raa, Penalty, scalars) */
+        static void write_restart_state( const std::string& aFileName, const Restart_State& aState, uint aOptIter );
+
+        /** read a state written by write_restart_state() */
+        static Restart_State read_restart_state( const std::string& aFileName );
+
+        /** file name of the state saved with the committed design of optimization iteration aOptIter */
+        static std::string restart_state_file_name( uint aAlgIndex, uint aOptIter );
+
+        /** the kept state: of the last completed iteration, or the one applied at the start of the current solve */
+        const Restart_State&
+        get_kept_state() const
+        {
+            return mKeptState;
+        }
+
+        /** the state applied at the start of the last warm solve (re-centred), and what was kept of it */
+        const Restart_State&
+        get_warm_start_state() const
+        {
+            return mWarmStartState;
+        }
+
+        const Restart_Counts&
+        get_warm_start_counts() const
+        {
+            return mWarmStartCounts;
+        }
+
+        /** number of solves that started from a kept state */
+        int
+        get_num_warm_solves() const
+        {
+            return mNumWarmSolves;
+        }
+
+      private:
+        // ---- warm restart (restart_keep_state) ----
+        bool                mKeepState     = false;    ///< keep the optimizer state across restarts
+        real                mMovedFraction = 0.25;     ///< restart_keep_state_moved_fraction
+        std::string         mStateFile;                ///< restart_state_file (read once, at the first solve)
+        std::vector< sint > mStateRowMap;              ///< restart_state_row_map(_file)
+        bool                mStateFileRead   = false;
+        bool                mWarmSolve       = false;    ///< the current solve started from a kept state
+        uint                mLastFuncOptIter = 0;        ///< optimization iteration of the last func() evaluation
+        Restart_State       mKeptState;
+        Restart_State       mWarmStartState;
+        Restart_Counts      mWarmStartCounts;
+        int                 mNumWarmSolves = 0;
+
+        /** snapshot of the state at the end of a completed iteration (next asymptotes, move limits, raa, scale) */
+        Restart_State capture_restart_state();
+
+        /** apply the kept (or file) state at the start of a solve; returns true if this solve is warm */
+        bool begin_warm_solve();
+
+        /** asymptote history update of asymp() for one variable (iteration > 2), into aLowOut / aUppOut */
+        static void history_asymptote( double aX, double aXOld1, double aXOld2, double aLow, double aUpp, double aXMin, double aXMax, double aShrink, double aExpand, double& aLowOut, double& aUppOut );
+
         /** true if the objective and all constraints are finite */
         bool all_finite( real aF0, const std::vector< double >& aF ) const;
 
@@ -203,8 +318,8 @@ namespace moris::opt
         static void solve_dense( std::vector< double >& aA, std::vector< double >& aX,
                 const std::vector< double >& aB, int aN );
 
-        inline double mx( double a, double b ) { return a > b ? a : b; }
-        inline double mn( double a, double b ) { return a < b ? a : b; }
+        static double mx( double a, double b ) { return a > b ? a : b; }
+        static double mn( double a, double b ) { return a < b ? a : b; }
 
       public:
         /**

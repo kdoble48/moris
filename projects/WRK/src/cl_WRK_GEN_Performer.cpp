@@ -70,4 +70,31 @@ namespace moris::wrk
 
     // ----------------------------------------------------------------------------
 
+    uint
+    Gen_Performer::get_feature_refinement_samples( uint aFieldIndex )
+    {
+        return mGeometryEngine->get_feature_refinement_samples( aFieldIndex );
+    }
+
+    // ----------------------------------------------------------------------------
+
+    bool
+    Gen_Performer::can_change_region_inside_cell( uint aFieldIndex )
+    {
+        return mGeometryEngine->can_change_region_inside_cell( aFieldIndex );
+    }
+
+    // ----------------------------------------------------------------------------
+
+    uint
+    Gen_Performer::detect_cell_features(
+            uint                    aFieldIndex,
+            const Matrix< DDRMat >& aCorners,
+            uint                    aLagrangeOrder,
+            uint                    aSamples )
+    {
+        return gen::cell_feature_flags( mGeometryEngine->detect_cell_features( aFieldIndex, aCorners, aLagrangeOrder, aSamples ) );
+    }
+
+    // ----------------------------------------------------------------------------
 }

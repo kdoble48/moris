@@ -145,37 +145,42 @@ namespace moris::prm
 
         aParameterlist.insert( "schwarz: reordering type", "rcm" );
 
-        // Sparskit parameters
-        aParameterlist.insert( "fact: sparskit: lfil", 0.0 );
+        // Sparskit parameters: types and values as in Ifpack_SPARSKIT (fill and block size are integers)
+        aParameterlist.insert( "fact: sparskit: lfil", 0 );
 
         aParameterlist.insert( "fact: sparskit: tol", 0.0 );
 
         aParameterlist.insert( "fact: sparskit: droptol", 0.0 );
 
-        aParameterlist.insert( "fact: sparskit: permtol", 0.0 );
+        aParameterlist.insert( "fact: sparskit: permtol", 0.1 );
 
         aParameterlist.insert( "fact: sparskit: alph", 0.0 );
 
-        aParameterlist.insert( "fact: sparskit: mbloc", 0.0 );
+        // -1: permute within the whole matrix
+        aParameterlist.insert( "fact: sparskit: mbloc", -1 );
 
-        aParameterlist.insert( "fact: sparskit: type", "" );
+        // ILUT, ILUTP, ILUD, ILUDP, ILUK, ILU0
+        aParameterlist.insert( "fact: sparskit: type", "ILUT" );
 
-        // Krylov parameters
-        aParameterlist.insert( "krylov: iterations", 0 );
+        // Krylov parameters: types and values as in Ifpack_Krylov, except one relaxation sweep (Ifpack's 0 sweeps
+        // makes the inner Jacobi preconditioner zero)
+        aParameterlist.insert( "krylov: iterations", 5 );
 
-        aParameterlist.insert( "krylov: tolerance", 0.0 );
+        aParameterlist.insert( "krylov: tolerance", 1e-6 );
 
-        aParameterlist.insert( "krylov: solver", 0 );
+        // 0: CG, 1: GMRES
+        aParameterlist.insert( "krylov: solver", 1 );
 
-        aParameterlist.insert( "krylov: preconditioner", 0 );
+        // 0: none, 1: Jacobi, 2: Gauss-Seidel, 3: symmetric Gauss-Seidel
+        aParameterlist.insert( "krylov: preconditioner", 1 );
 
-        aParameterlist.insert( "krylov: number of sweeps", 0 );
+        aParameterlist.insert( "krylov: number of sweeps", 1 );
 
-        aParameterlist.insert( "krylov: block size", 0 );
+        aParameterlist.insert( "krylov: block size", 1 );
 
-        aParameterlist.insert( "krylov: damping parameter", 0.0 );
+        aParameterlist.insert( "krylov: damping parameter", 1.0 );
 
-        aParameterlist.insert( "krylov: zero starting solution", 0 );
+        aParameterlist.insert( "krylov: zero starting solution", true );
 
         // Reuse of preconditioner
         aParameterlist.insert( "prec_reuse", false );
@@ -189,8 +194,9 @@ namespace moris::prm
     {
         aParameterlist.set( "Preconditioner_Implementation", sol::PreconditionerType::PETSC );
 
-        // Set default preconditioner
-        aParameterlist.insert( "PCType", std::string( "ilu" ) );    // "superlu-dist", "mumps", "ilu", "mg", "asm", "mat", "gamg", "none"
+        // Set default preconditioner: "superlu-dist", "mumps", "ilu", "mg", "asm", "mat", "gamg", "none"
+        // "ilu" and "mat" (block inverse) work on one processor only; with more, MORIS stops with an error ("mat": MB-111)
+        aParameterlist.insert( "PCType", std::string( "ilu" ) );
 
         // Sets the number of levels of fill to use for ILU
         aParameterlist.insert( "ILUFill", 0 );
@@ -720,13 +726,14 @@ namespace moris::prm
 
         tLinSolverParameterList.insert( "DLA_Linear_solver_algorithms", "0" );
 
-        // Maximal number of linear solver restarts on fail
+        // Maximal number of linear solver restarts on fail; restart k uses entry k of DLA_Linear_solver_algorithms,
+        // or its last entry once the list is exhausted, with the current solution as the initial guess
         tLinSolverParameterList.insert( "DLA_max_lin_solver_restarts", 0 );
 
-        // Maximal number of linear solver restarts on fail
+        // Abort when the linear solve still fails after the restarts; false continues with the unconverged solution
         tLinSolverParameterList.insert( "DLA_hard_break", true );
 
-        // Determines if linear solve should restart on fail
+        // Rebuild the preconditioner for a restart instead of reusing it (matters only with prec_reuse = true)
         tLinSolverParameterList.insert( "DLA_rebuild_lin_solver_on_fail", false );
 
         // output left hand side in linear solver, if specified by user
@@ -1008,6 +1015,10 @@ namespace moris::prm
                 break;
             case sol::SolverType::ML:
             {
+                // the ML defaults set both enums, which must exist first (setting them on the bare list threw)
+                tParameterList = create_algorithm_parameter_list();
+                tParameterList.insert_enum( "Preconditioner_Implementation",
+                        sol::PreconditionerType_String::values );
                 create_ml_preconditioner_parameterlist( tParameterList );
                 tParameterList.insert( "Max_Iter", 100 );
                 tParameterList.insert( "Convergence_Tolerance", 1e-9 );

@@ -1084,6 +1084,21 @@ namespace moris::hmr
         void
         clear_refinement_queue();
 
+        //--------------------------------------------------------------------------------
+
+        /**
+         * Removes the refinement flag from every element that is refined on a pattern. Called at the end of
+         * perform_refinement(): such flags have nothing left to do on this pattern (e.g. refined candidates of
+         * field-based refinement) and must not trigger refinement on the next pattern, where the element may be
+         * active (MB-106). Flags of active elements (children queued for their minimum refinement level) and of
+         * elements that do not exist on the pattern yet (queued before Database::perform_refinement resets the
+         * pattern, refined level by level) are kept.
+         *
+         * @param aPattern pattern that was just refined
+         */
+        void
+        clear_refinement_queue_of_refined_elements( uint aPattern );
+
       protected:
         //------------------------------------------------------------------------------
 

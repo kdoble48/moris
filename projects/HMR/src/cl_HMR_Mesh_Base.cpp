@@ -627,8 +627,8 @@ namespace moris::hmr
             }
         }
 
-        // get my memory index
-        uint tID = aBasis->get_hmr_id();
+        // get the id of the basis (64 bit: lattice ids exceed 2^32 on fine parallel meshes, MB-105)
+        luint tID = aBasis->get_hmr_id();
 
         // set basis to invalid value
         aElementLocalBasisIndex = mNumberOfBasesPerElement;

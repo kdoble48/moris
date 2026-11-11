@@ -31,6 +31,37 @@ namespace moris::xtk
         // Cap on the passes of the root search in Basis_Processor::construct_cell_aggregates(). Each pass gives a root to the
         // SPGs next to an SPG that already has one, so the cap bounds the neighbourhood distance between an SPG and its root.
         constexpr uint gMaxRootSearchPasses = 100;
+
+        /**
+         * @brief adds a weighted basis to a t-matrix row, a basis already in the row gets the weight added
+         *
+         * @param aBasisIndex enriched basis index
+         * @param aWeight weight of the basis
+         * @param aRowIndices basis indices of the row
+         * @param aRowWeights basis weights of the row
+         * @param aRowPositions position of each basis index in the row
+         */
+        void
+        add_weighted_basis(
+                moris_index                              aBasisIndex,
+                real                                     aWeight,
+                Vector< moris_index >&                   aRowIndices,
+                Vector< real >&                          aRowWeights,
+                std::unordered_map< moris_index, uint >& aRowPositions )
+        {
+            std::unordered_map< moris_index, uint >::const_iterator tIter = aRowPositions.find( aBasisIndex );
+
+            if ( tIter == aRowPositions.end() )
+            {
+                aRowPositions[ aBasisIndex ] = aRowIndices.size();
+                aRowIndices.push_back( aBasisIndex );
+                aRowWeights.push_back( aWeight );
+            }
+            else
+            {
+                aRowWeights( tIter->second ) += aWeight;
+            }
+        }
     }    // namespace
 
     Basis_Processor::Basis_Processor( xtk::Model* aXTKModelPtr )
@@ -1333,14 +1364,35 @@ namespace moris::xtk
     void
     Basis_Processor::override_t_matrices( moris_index aMeshIndex )
     {
+        // Cell agglomeration constrains every follower basis to its root cell (MB-108): the coefficient of a follower basis is
+        // replaced by the coefficients of the root cell's polynomial extended over the follower's support,
+        //     u_f = sum_r E_fr u_r,
+        // where E is the B-spline extension matrix between the root B-spline cell and a cell in the support of the follower.
+        // Each Lagrange node row then becomes T_b for the other bases plus T_f E_fr for the root bases, with repeated bases
+        // merged. The rows keep the partition of unity (each row of E sums to one) and reproduce polynomials up to the
+        // B-spline order, independent of the Lagrange order and of the Lagrange refinement.
+
         // get the bspline mesh info
         Bspline_Mesh_Info* tBsplineMeshInfo = mXTKModelPtr->mEnrichment->mBsplineMeshInfos( aMeshIndex );
 
         // get the subphase groups
-        Vector< Subphase_Group* > tSPGs = tBsplineMeshInfo->mSubphaseGroups;
+        Vector< Subphase_Group* > const & tSPGs = tBsplineMeshInfo->mSubphaseGroups;
 
         // get a reference to the enriched interpolation cells
         Vector< Interpolation_Cell_Unzipped* > const & tEnrichedIPCells = mXTKModelPtr->mEnrichedInterpMesh( 0 )->get_enriched_interpolation_cells();
+
+        // get the map to convert enriched basis indices to ids
+        Matrix< IndexMat > const & tEnrichedBasisIndexToId = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mEnrichedBasisIndexToId;
+
+        // follower basis flags and the root SPG that each follower basis is constrained to
+        Vector< moris_index > const & tFollowerBasis           = mBasisData( aMeshIndex ).mFollowerBasis;
+        Vector< moris_index > const & tFollowerBasisOwningCell = mBasisData( aMeshIndex ).mFollowerBasisOwningCell;
+
+        // extension of each follower basis in terms of the enriched root basis, computed once per follower basis
+        // input: enriched follower BF index || output: position in the extension lists
+        std::unordered_map< moris_index, uint > tFollowerToExtension;
+        Vector< Vector< moris_index > >         tExtensionBasisIndices;
+        Vector< Vector< real > >                tExtensionBasisWeights;
 
         // get the number of subphase groups
         uint tNumSubphaseGroups = mXTKModelPtr->mCutIntegrationMesh->get_num_subphase_groups( aMeshIndex );
@@ -1348,141 +1400,197 @@ namespace moris::xtk
         // loop over the SPGs and if an SPG has a different root cell than itself process further
         for ( moris_index iSPGIndex = 0; iSPGIndex < (int)tNumSubphaseGroups; iSPGIndex++ )
         {
-            // if the root cell of the SPG is not itself
-            if ( mRootSPGIds( iSPGIndex ) != iSPGIndex )
+            // SPGs that are their own root keep their t-matrices
+            if ( mRootSPGIds( iSPGIndex ) == iSPGIndex )
             {
-                // get the bspline cell of the root cell
-                moris_index tRootBSplineCellIndex = tSPGs( mRootSPGIds( iSPGIndex ) )->get_bspline_cell_index();
+                continue;
+            }
 
-                // get the all the lagrange cells of the that SPG index
-                Vector< moris_index > const & tUIPCIndices = mXTKModelPtr->mEnrichment->get_UIPC_indices_on_SPG( aMeshIndex, iSPGIndex );
+            // get the B-spline cell of this agglomerated SPG, every follower basis in its rows is supported on it
+            moris_index tExtendedBSplineCellIndex = tSPGs( iSPGIndex )->get_bspline_cell_index();
 
-                // loop over the unzipped lagrange cells and evaluate t-matrices
-                for ( const auto& iUIPCIndex : tUIPCIndices )
+            // get the all the lagrange cells of the that SPG index
+            Vector< moris_index > const & tUIPCIndices = mXTKModelPtr->mEnrichment->get_UIPC_indices_on_SPG( aMeshIndex, iSPGIndex );
+
+            // loop over the unzipped lagrange cells and override their t-matrices
+            for ( moris_index iUIPCIndex : tUIPCIndices )
+            {
+                // get a const pointer to UIPC such that the following xtk specific function can be called
+                const Interpolation_Cell_Unzipped* tConstUIPC = tEnrichedIPCells( iUIPCIndex );
+
+                // Get the lagrange vertices of the UIPC to obtain the vertex interpolation object of each lagrange node
+                Vector< xtk::Interpolation_Vertex_Unzipped* > const & tXTKUIPVs = tConstUIPC->get_xtk_interpolation_vertices();
+
+                // loop over the unzipped interpolation vertices and overwrite their t-matrix rows
+                for ( xtk::Interpolation_Vertex_Unzipped* tXTKUIPV : tXTKUIPVs )
                 {
-                    // get base cell of the lagrange mesh
-                    Interpolation_Cell_Unzipped* tUIPC = tEnrichedIPCells( iUIPCIndex );
+                    // get the vertex enrichment object
+                    xtk::Vertex_Enrichment* tVertexEnrichment = tXTKUIPV->get_xtk_interpolation( aMeshIndex );
 
-                    Vector< Vector< mtk::Vertex* > > tBsplineBasis;
-                    Vector< Matrix< DDRMat > >       tWeights;
+                    // access the basis indices
+                    Matrix< IndexMat > const & tBasisIndices = tVertexEnrichment->get_basis_indices();
+                    Matrix< DDRMat > const &   tBasisWeights = tVertexEnrichment->get_basis_weights();
 
-                    // get the indices, ids and weights from the hmr mesh from the
-                    mXTKModelPtr->mBackgroundMesh->get_extended_t_matrix( aMeshIndex, tRootBSplineCellIndex, *tUIPC->get_base_cell(), tBsplineBasis, tWeights );
+                    // new row of the t-matrix and the position of each basis in it
+                    Vector< moris_index >                   tAgglomeratedBasisIndices;
+                    Vector< real >                          tAgglomeratedBasisWeights;
+                    std::unordered_map< moris_index, uint > tAgglomeratedBasisPositions;
+                    tAgglomeratedBasisIndices.reserve( tBasisIndices.numel() );
+                    tAgglomeratedBasisWeights.reserve( tBasisIndices.numel() );
 
-                    // get a const pointer to UIPC such that the following xtk specific function can be called
-                    const Interpolation_Cell_Unzipped* tConstUIPC = tUIPC;
-
-                    // Get the lagrange vertices of the UIPC to obtain the vertex interpolation object of each lagrange node
-                    Vector< xtk::Interpolation_Vertex_Unzipped* > const & tXTKUIPVs = tConstUIPC->get_xtk_interpolation_vertices();
-
-                    // loop over the unzipped interpolation vertices and get their t-matrix info to overwrite
-                    for ( size_t iLocalVertIndex = 0; iLocalVertIndex < tXTKUIPVs.size(); iLocalVertIndex++ )
+                    // loop over the basis of the row and substitute the follower basis
+                    for ( uint iLocalBasisIndex = 0; iLocalBasisIndex < tBasisIndices.numel(); iLocalBasisIndex++ )
                     {
-                        // get the vertex enrichment object
-                        xtk::Vertex_Enrichment* tVertexEnrichment = tXTKUIPVs( iLocalVertIndex )->get_xtk_interpolation( aMeshIndex );
+                        moris_index tBasisIndex  = tBasisIndices( iLocalBasisIndex );
+                        real        tBasisWeight = tBasisWeights( iLocalBasisIndex );
 
-                        // access the basis indices
-                        Matrix< IndexMat > const & tBasisIndices = tVertexEnrichment->get_basis_indices();
-                        Matrix< DDRMat >&          tBasisWeights = tVertexEnrichment->get_basis_weights();
-                        IndexMap&                  tBasisMap     = tVertexEnrichment->get_basis_map();
+                        // get the root SPG of a follower basis
+                        moris_index tRootSPGIndex = ( 1 == tFollowerBasis( tBasisIndex ) ) ? tFollowerBasisOwningCell( tBasisIndex ) : gNoIndex;
 
-                        // probably need to do a resize call here
-                        // overallocation basis Indices
-                        Matrix< IndexMat > tAgglomeratedBasisIndices( tBasisIndices.numel() + tBsplineBasis( iLocalVertIndex ).size() );
-                        Matrix< DDRMat >   tAgglomeratedBasisWeights( tBasisIndices.numel() + tBsplineBasis( iLocalVertIndex ).size() );
-                        tBasisMap.clear();
-
-                        // initialize a counter to count the number of basis that will be replaced
-                        uint iBasisCounter = 0;
-
-                        // Loop over the basis indices and check if there is a dependent basis
-                        for ( size_t iLocalBasisIndex = 0; iLocalBasisIndex < tBasisIndices.numel(); iLocalBasisIndex++ )
+                        // leader basis and follower basis without root SPG are kept
+                        if ( tRootSPGIndex == gNoIndex )
                         {
-                            moris_index iOldBasisIndex = tBasisIndices( iLocalBasisIndex );
-
-                            // check if this basis is good basis or it does not belong to the current
-                            if ( 0 == mBasisData( aMeshIndex ).mFollowerBasis( iOldBasisIndex ) )
-                            {
-                                tAgglomeratedBasisIndices( iBasisCounter ) = iOldBasisIndex;
-                                tAgglomeratedBasisWeights( iBasisCounter ) = tBasisWeights( iLocalBasisIndex );
-                                iBasisCounter++;
-                            }
-                            // if this is a bad basis place all the
-                            else
-                            {
-                                // get the root SPG index
-                                moris_index tRootSPGIndex = mRootSPGIds( iSPGIndex );
-
-                                // This association checks such that 1 basis does not get modified twice
-                                if ( mBasisData( aMeshIndex ).mFollowerBasisOwningCell( iOldBasisIndex ) != tRootSPGIndex )
-                                {
-                                    tAgglomeratedBasisIndices( iBasisCounter ) = iOldBasisIndex;
-                                    tAgglomeratedBasisWeights( iBasisCounter ) = tBasisWeights( iLocalBasisIndex );
-                                    iBasisCounter++;
-
-                                    continue;
-                                }
-
-                                // This two maps help to get the the enriched basis index from the
-                                Vector< moris_index > const & tBGBasisIndices = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mSubphaseGroupBGBasisIndices( tRootSPGIndex );
-                                Vector< moris_index > const & tBGBasisLevels  = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mSubphaseGroupBGBasisEnrLev( tRootSPGIndex );
-
-                                // convert the bg basis indices to the map
-                                IndexMap tBasisToLocalIndexMap;
-                                convert_cell_to_map( tBGBasisIndices, tBasisToLocalIndexMap );
-
-                                // get the enrichment indices that contains combines data of the above cells
-                                Vector< Matrix< IndexMat > > const & tBasisEnrichmentIndices = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mBasisEnrichmentIndices;
-
-                                // loop over the unenriched BSpline vertices
-                                for ( uint iBGBasisIndex = 0; iBGBasisIndex < tBsplineBasis( iLocalVertIndex ).size(); iBGBasisIndex++ )
-                                {
-                                    // get the bg basis index
-                                    moris_index tBGBasisIndex = tBsplineBasis( iLocalVertIndex )( iBGBasisIndex )->get_index();
-
-                                    // get the local index of the bg basis index
-                                    auto        tIter            = tBasisToLocalIndexMap.find( tBGBasisIndex );
-                                    moris_index tLocalBasisIndex = tIter->second;
-
-                                    // get the enrichment level of the bg basis index
-                                    moris_index tEnrLevel = tBGBasisLevels( tLocalBasisIndex );
-
-                                    // get the enriched index
-                                    moris_index tEnrichedBasisIndex = tBasisEnrichmentIndices( tBGBasisIndex )( tEnrLevel );
-
-                                    // get the local index of the enriched basis index
-                                    tAgglomeratedBasisIndices( iBasisCounter ) = tEnrichedBasisIndex;
-                                    tAgglomeratedBasisWeights( iBasisCounter ) = tWeights( iLocalVertIndex )( iBGBasisIndex );
-
-                                    // increment the counter
-                                    iBasisCounter++;
-                                }
-                            }
+                            add_weighted_basis( tBasisIndex, tBasisWeight, tAgglomeratedBasisIndices, tAgglomeratedBasisWeights, tAgglomeratedBasisPositions );
+                            continue;
                         }
 
-                        // resize the basis indices and weights and the basis ids based on the actual number of basis
-                        tAgglomeratedBasisIndices.resize( iBasisCounter, 1 );
-                        tAgglomeratedBasisWeights.resize( iBasisCounter, 1 );
-                        Matrix< IndexMat > tAgglomeratedBasisIds( iBasisCounter, 1 );
-                        // tBasisMap.reserve( iBasisCounter ); // FIXME: only works if the Mini_Map is implemented using a std::unordered_map
+                        // get the extension of the follower basis, compute it if it is not known yet
+                        std::unordered_map< moris_index, uint >::const_iterator tExtensionIter = tFollowerToExtension.find( tBasisIndex );
 
-                        // get the map to convert indices to ids
-                        Matrix< IndexMat > const & tBasisEnrichmentIndices = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mEnrichedBasisIndexToId;
-
-                        // loop over the basis and get ids and add that to the basis map
-                        for ( uint iBC = 0; iBC < tAgglomeratedBasisIndices.numel(); iBC++ )
+                        uint tExtensionIndex;
+                        if ( tExtensionIter == tFollowerToExtension.end() )
                         {
-                            moris::moris_index tBasisIndex = tAgglomeratedBasisIndices( iBC );
-                            tBasisMap[ tBasisIndex ]       = iBC;
-                            tAgglomeratedBasisIds( iBC )   = tBasisEnrichmentIndices( tBasisIndex );
+                            tExtensionIndex = tExtensionBasisIndices.size();
+                            tExtensionBasisIndices.push_back( Vector< moris_index >() );
+                            tExtensionBasisWeights.push_back( Vector< real >() );
+                            tFollowerToExtension[ tBasisIndex ] = tExtensionIndex;
+
+                            this->compute_follower_basis_extension(
+                                    aMeshIndex,
+                                    tBasisIndex,
+                                    tRootSPGIndex,
+                                    tExtendedBSplineCellIndex,
+                                    tExtensionBasisIndices( tExtensionIndex ),
+                                    tExtensionBasisWeights( tExtensionIndex ) );
+                        }
+                        else
+                        {
+                            tExtensionIndex = tExtensionIter->second;
                         }
 
-                        // add vertex enrichment data
-                        tVertexEnrichment->add_basis_information( tAgglomeratedBasisIndices, tAgglomeratedBasisIds );
-                        tVertexEnrichment->add_basis_weights( tAgglomeratedBasisIndices, tAgglomeratedBasisWeights );
+                        // replace the follower basis by the root basis, scaled with the weight of the follower basis
+                        Vector< moris_index > const & tRootBasisIndices = tExtensionBasisIndices( tExtensionIndex );
+                        Vector< real > const &        tRootBasisWeights = tExtensionBasisWeights( tExtensionIndex );
+                        for ( uint iRootBasis = 0; iRootBasis < tRootBasisIndices.size(); iRootBasis++ )
+                        {
+                            add_weighted_basis( tRootBasisIndices( iRootBasis ), tBasisWeight * tRootBasisWeights( iRootBasis ), tAgglomeratedBasisIndices, tAgglomeratedBasisWeights, tAgglomeratedBasisPositions );
+                        }
                     }
+
+                    // copy the new row into matrices, get the basis ids and fill the basis map
+                    uint               tNumBasis = tAgglomeratedBasisIndices.size();
+                    Matrix< IndexMat > tNewBasisIndices( tNumBasis, 1 );
+                    Matrix< IndexMat > tNewBasisIds( tNumBasis, 1 );
+                    Matrix< DDRMat >   tNewBasisWeights( tNumBasis, 1 );
+
+                    IndexMap& tBasisMap = tVertexEnrichment->get_basis_map();
+                    tBasisMap.clear();
+
+                    for ( uint iBC = 0; iBC < tNumBasis; iBC++ )
+                    {
+                        moris_index tBasisIndex  = tAgglomeratedBasisIndices( iBC );
+                        tNewBasisIndices( iBC )  = tBasisIndex;
+                        tNewBasisIds( iBC )      = tEnrichedBasisIndexToId( tBasisIndex );
+                        tNewBasisWeights( iBC )  = tAgglomeratedBasisWeights( iBC );
+                        tBasisMap[ tBasisIndex ] = iBC;
+                    }
+
+                    // add vertex enrichment data
+                    tVertexEnrichment->add_basis_information( tNewBasisIndices, tNewBasisIds );
+                    tVertexEnrichment->add_basis_weights( tNewBasisIndices, tNewBasisWeights );
                 }
             }
+        }
+    }
+
+    //----------------------------------------------------------------------------------------------
+
+    void
+    Basis_Processor::compute_follower_basis_extension(
+            moris_index            aMeshIndex,
+            moris_index            aFollowerBasisIndex,
+            moris_index            aRootSPGIndex,
+            moris_index            aExtendedBSplineCellIndex,
+            Vector< moris_index >& aRootBasisIndices,
+            Vector< real >&        aRootBasisWeights )
+    {
+        // get the bspline mesh info, its subphase groups and B-spline cells
+        Bspline_Mesh_Info*                tBsplineMeshInfo = mXTKModelPtr->mEnrichment->mBsplineMeshInfos( aMeshIndex );
+        Vector< Subphase_Group* > const & tSPGs            = tBsplineMeshInfo->mSubphaseGroups;
+        Vector< mtk::Cell* > const &      tBsplineCells    = tBsplineMeshInfo->mBsplineCells;
+
+        // get the root B-spline cell and the cell the root polynomial is extended to
+        mtk::Cell const * tRootBSplineCell     = tBsplineCells( tSPGs( aRootSPGIndex )->get_bspline_cell_index() );
+        mtk::Cell const * tExtendedBSplineCell = tBsplineCells( aExtendedBSplineCellIndex );
+
+        // the extension matrix is built from the ijk shift between the two cells, so both have to be on one refinement level
+        MORIS_ERROR( tRootBSplineCell->get_level() == tExtendedBSplineCell->get_level(),
+                "Basis_Processor::compute_follower_basis_extension() - "
+                "Cell agglomeration extends a root B-spline cell on refinement level %u to a B-spline cell on level %u. "
+                "Only root and agglomerated cells on the same refinement level are supported.",
+                tRootBSplineCell->get_level(),
+                tExtendedBSplineCell->get_level() );
+
+        // get the extension matrix: the basis of the extended cell in terms of the basis of the root cell
+        Vector< Vector< const mtk::Vertex* > > tRootBsplineBasis;
+        Vector< const mtk::Vertex* >           tExtendedBsplineBasis;
+        Vector< Matrix< DDRMat > >             tWeights;
+        mXTKModelPtr->mBackgroundMesh->get_L2_projection_matrix( aMeshIndex, tRootBSplineCell, tExtendedBSplineCell, tRootBsplineBasis, tExtendedBsplineBasis, tWeights );
+
+        // find the ordinal of the follower basis among the basis of the extended cell
+        moris_index tNonEnrBasisIndex = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mNonEnrBfIndForEnrBfInd( aFollowerBasisIndex );
+        uint        tNonEnrBasisOrd   = 0;
+        while ( tNonEnrBasisOrd < tExtendedBsplineBasis.size() and tExtendedBsplineBasis( tNonEnrBasisOrd )->get_index() != tNonEnrBasisIndex )
+        {
+            tNonEnrBasisOrd++;
+        }
+
+        MORIS_ERROR( tNonEnrBasisOrd < tExtendedBsplineBasis.size(),
+                "Basis_Processor::compute_follower_basis_extension() - "
+                "Follower basis %d (B-spline basis %d) is not a basis of the B-spline cell %d it is extended to.",
+                aFollowerBasisIndex,
+                tNonEnrBasisIndex,
+                aExtendedBSplineCellIndex );
+
+        // the root SPG's background basis and their enrichment levels, to get the enriched root basis
+        Vector< moris_index > const &        tBGBasisIndices         = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mSubphaseGroupBGBasisIndices( aRootSPGIndex );
+        Vector< moris_index > const &        tBGBasisLevels          = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mSubphaseGroupBGBasisEnrLev( aRootSPGIndex );
+        Vector< Matrix< IndexMat > > const & tBasisEnrichmentIndices = mXTKModelPtr->mEnrichment->mEnrichmentData( aMeshIndex ).mBasisEnrichmentIndices;
+
+        IndexMap tBasisToLocalIndexMap;
+        convert_cell_to_map( tBGBasisIndices, tBasisToLocalIndexMap );
+
+        // collect the enriched root basis and the extension weights of the follower basis
+        Vector< const mtk::Vertex* > const & tRootBasisOfFollower = tRootBsplineBasis( tNonEnrBasisOrd );
+        aRootBasisIndices.resize( tRootBasisOfFollower.size() );
+        aRootBasisWeights.resize( tRootBasisOfFollower.size() );
+
+        for ( uint iRootBasisOrd = 0; iRootBasisOrd < tRootBasisOfFollower.size(); iRootBasisOrd++ )
+        {
+            // get the background basis index of the root basis
+            moris_index tBGBasisIndex = tRootBasisOfFollower( iRootBasisOrd )->get_index();
+
+            // get its enrichment level in the root SPG
+            IndexMap::const_iterator tIter = tBasisToLocalIndexMap.find( tBGBasisIndex );
+            MORIS_ERROR( tIter != tBasisToLocalIndexMap.end(),
+                    "Basis_Processor::compute_follower_basis_extension() - B-spline basis %d is not active on the root SPG %d.",
+                    tBGBasisIndex,
+                    aRootSPGIndex );
+
+            moris_index tEnrLevel = tBGBasisLevels( tIter->second );
+
+            aRootBasisIndices( iRootBasisOrd ) = tBasisEnrichmentIndices( tBGBasisIndex )( tEnrLevel );
+            aRootBasisWeights( iRootBasisOrd ) = tWeights( tNonEnrBasisOrd )( iRootBasisOrd );
         }
     }
 
