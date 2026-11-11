@@ -13,6 +13,9 @@
 #include <memory>
 #include <sstream>
 #include <set>
+#include <cmath>
+#include <limits>
+#include <vector>
 #include "cl_Matrix.hpp"
 #include "cl_Tracer.hpp"
 #include "cl_Logger.hpp"
@@ -123,6 +126,19 @@ namespace moris::wrk
 
         // interface-preserving in-place redistance (freeze every coefficient that can reach a cut cell)
         mPreserveInterface = tOPTParameterList( 0 )( 0 ).get< bool >( "sdf_preserve_interface" );
+
+        // slope restoration inside the frozen band
+        mPreserveSlopeTol   = tOPTParameterList( 0 )( 0 ).get< real >( "sdf_preserve_interface_slope_tol" );
+        mPreserveSlopeRange = tOPTParameterList( 0 )( 0 ).get< real >( "sdf_preserve_interface_slope_range" );
+        MORIS_ERROR( mPreserveSlopeTol >= 0.0 && mPreserveSlopeTol < 1.0,
+                "Reinitialize_Performer: sdf_preserve_interface_slope_tol = %e must lie in [0, 1) (fraction of a cell edge).",
+                mPreserveSlopeTol );
+        MORIS_ERROR( mPreserveSlopeRange >= 1.0,
+                "Reinitialize_Performer: sdf_preserve_interface_slope_range = %e must be >= 1.",
+                mPreserveSlopeRange );
+        MORIS_ERROR( mPreserveSlopeTol == 0.0 || mPreserveInterface,
+                "Reinitialize_Performer: sdf_preserve_interface_slope_tol > 0 rescales the band that sdf_preserve_interface "
+                "freezes; set sdf_preserve_interface = true." );
 
         mADVFiledName = tMORISParameterList( 2 )( 0 ).get< std::string >( "adv_field" );
         
@@ -989,7 +1005,393 @@ namespace moris::wrk
 
         MORIS_LOG_INFO( "SDF redistance preserves the interface: %u of %u coefficients frozen (%u growth passes)",
                 tFrozen, (uint)aOldCoeffs.numel(), tRings );
+
+        // sdf_preserve_interface_slope_tol: rescale the band towards unit slope under a bound on the crossing shift
+        if ( mPreserveSlopeTol > 0.0 )
+        {
+            real                tMaxLogSpread = 4.0 * std::atanh( mPreserveSlopeTol );
+            Band_Rescale_Report tReport       = rescale_interface_band_on_mesh(
+                    tMeshPair.get_interpolation_mesh(),
+                    (uint)tField->get_discretization_mesh_index(),
+                    aOldCoeffs,
+                    aNewCoeffs,
+                    1.0e-12,
+                    tMaxLogSpread,
+                    mPreserveSlopeRange,
+                    aGENPerformer( 0 )->get_lower_bounds()( 0 ),
+                    aGENPerformer( 0 )->get_upper_bounds()( 0 ) );
+
+            MORIS_LOG_INFO(
+                    "SDF redistance rescales the interface band: %u cells, %u of %u band coefficients scaled by %.4f to %.4f "
+                    "(requested max |ln| %.3f, spread per cell %.4f <= %.4f, %u limiter sweeps, %u backoffs)",
+                    tReport.mBandCells,
+                    tReport.mScaledCoeffs,
+                    tReport.mBandCoeffs,
+                    tReport.mMinFactor,
+                    tReport.mMaxFactor,
+                    tReport.mMaxRequested,
+                    tReport.mMaxLogSpread,
+                    tMaxLogSpread,
+                    tReport.mLimiterPasses,
+                    tReport.mBackoffs );
+        }
         return tFrozen;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Band_Rescale_Report
+    Reinitialize_Performer::rescale_interface_band_on_mesh(
+            mtk::Interpolation_Mesh* aMesh,
+            uint                     aDiscretizationIndex,
+            const Matrix< DDRMat >&  aOldCoeffs,
+            Matrix< DDRMat >&        aNewCoeffs,
+            real                     aTolerance,
+            real                     aMaxLogSpread,
+            real                     aSlopeRange,
+            real                     aLowerBound,
+            real                     aUpperBound )
+    {
+        Vector< Vector< moris_index > > tCellCoefficients = cell_coefficients( aMesh, aDiscretizationIndex );
+        Matrix< DDRMat >                tSlopes           = cell_slopes( aMesh, aDiscretizationIndex, aOldCoeffs );
+        const Matrix< DDRMat >          tFrozenCoeffs     = aNewCoeffs;
+
+        Band_Rescale_Report tReport = rescale_interface_band(
+                aNewCoeffs, tCellCoefficients, tSlopes, aTolerance, aMaxLogSpread, aSlopeRange, aLowerBound, aUpperBound );
+
+        // coefficients that are not nodal values (order >= 2, hanging nodes): a node of a band cell can change sign
+        // although no coefficient does; halve ln(factor) until no node does (the last pass restores the frozen band)
+        const uint             tMaxBackoffs = 40;
+        const Matrix< DDRMat > tOldNodal    = nodal_values( aMesh, aDiscretizationIndex, aOldCoeffs );
+        for ( uint iBackoff = 0; iBackoff <= tMaxBackoffs; iBackoff++ )
+        {
+            Matrix< DDRMat > tNewNodal = nodal_values( aMesh, aDiscretizationIndex, aNewCoeffs );
+            uint             tFlips    = 0;
+            for ( uint iNode = 0; iNode < tOldNodal.numel(); iNode++ )
+            {
+                tFlips += ( tOldNodal( iNode ) >= 0.0 ) != ( tNewNodal( iNode ) >= 0.0 ) ? 1 : 0;
+            }
+            if ( tFlips == 0 )
+            {
+                break;
+            }
+            MORIS_ERROR( iBackoff < tMaxBackoffs,
+                    "Reinitialize_Performer::rescale_interface_band_on_mesh: %u nodes change sign with the band frozen; "
+                    "the coefficients passed in do not preserve the interface.",
+                    tFlips );
+            tReport.mBackoffs++;
+            for ( uint iC = 0; iC < aNewCoeffs.numel(); iC++ )
+            {
+                if ( aNewCoeffs( iC ) != tFrozenCoeffs( iC ) )
+                {
+                    // the geometric mean halves ln(factor)
+                    aNewCoeffs( iC ) = iBackoff + 1 == tMaxBackoffs
+                                             ? tFrozenCoeffs( iC )
+                                             : ( tFrozenCoeffs( iC ) > 0.0 ? 1.0 : -1.0 ) * std::sqrt( aNewCoeffs( iC ) * tFrozenCoeffs( iC ) );
+                }
+            }
+        }
+        return tReport;
+    }
+
+    //------------------------------------------------------------------------------
+
+    Matrix< DDRMat >
+    Reinitialize_Performer::cell_slopes( mtk::Interpolation_Mesh* aMesh, uint aDiscretizationIndex, const Matrix< DDRMat >& aCoeffs )
+    {
+        const Matrix< DDRMat > tNodal    = nodal_values( aMesh, aDiscretizationIndex, aCoeffs );
+        uint                   tNumCells = aMesh->get_num_elems();
+        uint                   tDim      = aMesh->get_spatial_dim();
+        Matrix< DDRMat >       tSlopes( tNumCells, 1, 0.0 );
+
+        for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+        {
+            Matrix< IndexMat > tNodes    = aMesh->get_nodes_connected_to_element_loc_inds( (moris_index)iCell );
+            uint               tNumNodes = tNodes.numel();
+            if ( tNumNodes <= tDim )
+            {
+                continue;
+            }
+
+            // node coordinates and values about their means
+            Matrix< DDRMat > tX( tNumNodes, tDim, 0.0 );
+            real             tCentroid[ 3 ] = { 0.0, 0.0, 0.0 };
+            real             tMeanValue     = 0.0;
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                Matrix< DDRMat > tCoords = aMesh->get_mtk_vertex( tNodes( iNode ) ).get_coords();
+                for ( uint iDim = 0; iDim < tDim; iDim++ )
+                {
+                    tX( iNode, iDim ) = tCoords( iDim );
+                    tCentroid[ iDim ] += tCoords( iDim ) / tNumNodes;
+                }
+                tMeanValue += tNodal( tNodes( iNode ) ) / tNumNodes;
+            }
+
+            // normal equations A g = b of the least-squares fit phi ~ mean + g . ( x - centroid ), augmented [ A | b ]
+            real tA[ 3 ][ 4 ] = { { 0.0, 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0, 0.0 } };
+            for ( uint iNode = 0; iNode < tNumNodes; iNode++ )
+            {
+                for ( uint iDim = 0; iDim < tDim; iDim++ )
+                {
+                    real tDx = tX( iNode, iDim ) - tCentroid[ iDim ];
+                    for ( uint jDim = 0; jDim < tDim; jDim++ )
+                    {
+                        tA[ iDim ][ jDim ] += tDx * ( tX( iNode, jDim ) - tCentroid[ jDim ] );
+                    }
+                    tA[ iDim ][ 3 ] += tDx * ( tNodal( tNodes( iNode ) ) - tMeanValue );
+                }
+            }
+
+            // Gauss elimination with partial pivoting; a degenerate cell keeps slope 0
+            bool tSingular = false;
+            for ( uint iCol = 0; iCol < tDim && !tSingular; iCol++ )
+            {
+                uint tPivot = iCol;
+                for ( uint iRow = iCol + 1; iRow < tDim; iRow++ )
+                {
+                    tPivot = std::abs( tA[ iRow ][ iCol ] ) > std::abs( tA[ tPivot ][ iCol ] ) ? iRow : tPivot;
+                }
+                if ( std::abs( tA[ tPivot ][ iCol ] ) < 1.0e-300 )
+                {
+                    tSingular = true;
+                    break;
+                }
+                for ( uint jCol = 0; jCol < 4; jCol++ )
+                {
+                    std::swap( tA[ iCol ][ jCol ], tA[ tPivot ][ jCol ] );
+                }
+                for ( uint iRow = 0; iRow < tDim; iRow++ )
+                {
+                    if ( iRow == iCol )
+                    {
+                        continue;
+                    }
+                    real tFactor = tA[ iRow ][ iCol ] / tA[ iCol ][ iCol ];
+                    for ( uint jCol = 0; jCol < 4; jCol++ )
+                    {
+                        tA[ iRow ][ jCol ] -= tFactor * tA[ iCol ][ jCol ];
+                    }
+                }
+            }
+            if ( tSingular )
+            {
+                continue;
+            }
+            real tNormSquared = 0.0;
+            for ( uint iDim = 0; iDim < tDim; iDim++ )
+            {
+                real tG = tA[ iDim ][ 3 ] / tA[ iDim ][ iDim ];
+                tNormSquared += tG * tG;
+            }
+            tSlopes( iCell ) = std::sqrt( tNormSquared );
+        }
+        return tSlopes;
+    }
+
+    //------------------------------------------------------------------------------
+
+    namespace
+    {
+        /**
+         * one sweep of the spread limiter of rescale_interface_band(): returns the largest spread max q - min q over the
+         * active coefficients of a band cell as found; with aClip every cell above aMaxSpread is clipped to its mid-range
+         * and to the coefficient boxes on the way (Gauss-Seidel)
+         */
+        real
+        limit_log_spread(
+                const std::vector< uint >&             aBandCells,
+                const Vector< Vector< moris_index > >& aCellCoefficients,
+                const std::vector< bool >&             aActive,
+                const std::vector< real >&             aQLow,
+                const std::vector< real >&             aQHigh,
+                real                                   aMaxSpread,
+                bool                                   aClip,
+                std::vector< real >&                   aQ )
+        {
+            real tWorst = 0.0;
+            for ( uint tCell : aBandCells )
+            {
+                const Vector< moris_index >& tCoeffs = aCellCoefficients( tCell );
+                real                         tMin    = std::numeric_limits< real >::max();
+                real                         tMax    = -std::numeric_limits< real >::max();
+                for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+                {
+                    if ( aActive[ tCoeffs( iC ) ] )
+                    {
+                        tMin = std::min( tMin, aQ[ tCoeffs( iC ) ] );
+                        tMax = std::max( tMax, aQ[ tCoeffs( iC ) ] );
+                    }
+                }
+                if ( tMax < tMin )
+                {
+                    continue;
+                }
+                tWorst = std::max( tWorst, tMax - tMin );
+                if ( aClip && tMax - tMin > aMaxSpread )
+                {
+                    real tMid = 0.5 * ( tMax + tMin );
+                    for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+                    {
+                        moris_index tIndex = tCoeffs( iC );
+                        if ( aActive[ tIndex ] )
+                        {
+                            real tClipped = std::min( std::max( aQ[ tIndex ], tMid - 0.5 * aMaxSpread ), tMid + 0.5 * aMaxSpread );
+                            aQ[ tIndex ]  = std::min( std::max( tClipped, aQLow[ tIndex ] ), aQHigh[ tIndex ] );
+                        }
+                    }
+                }
+            }
+            return tWorst;
+        }
+    }    // namespace
+
+    //------------------------------------------------------------------------------
+
+    Band_Rescale_Report
+    Reinitialize_Performer::rescale_interface_band(
+            Matrix< DDRMat >&                      aCoeffs,
+            const Vector< Vector< moris_index > >& aCellCoefficients,
+            const Matrix< DDRMat >&                aCellSlopes,
+            real                                   aTolerance,
+            real                                   aMaxLogSpread,
+            real                                   aSlopeRange,
+            real                                   aLowerBound,
+            real                                   aUpperBound )
+    {
+        uint tNumCells  = aCellCoefficients.size();
+        uint tNumCoeffs = aCoeffs.numel();
+        MORIS_ERROR( aCellSlopes.numel() == tNumCells,
+                "Reinitialize_Performer::rescale_interface_band: %zu cell slopes for %u cells.",
+                (size_t)aCellSlopes.numel(),
+                tNumCells );
+        MORIS_ERROR( aMaxLogSpread >= 0.0 && aSlopeRange >= 1.0,
+                "Reinitialize_Performer::rescale_interface_band: needs aMaxLogSpread >= 0 and aSlopeRange >= 1." );
+
+        Band_Rescale_Report tReport;
+
+        // 1. band cells (possibly cut, as in freeze_interface_band) and the log factor each asks for
+        std::vector< uint > tBandCells;
+        std::vector< real > tSum( tNumCoeffs, 0.0 );
+        std::vector< uint > tCount( tNumCoeffs, 0 );
+        const real          tLogRange = std::log( aSlopeRange );
+        for ( uint iCell = 0; iCell < tNumCells; iCell++ )
+        {
+            const Vector< moris_index >& tCoeffs = aCellCoefficients( iCell );
+            bool                         tAllPos = tCoeffs.size() > 0;
+            bool                         tAllNeg = tCoeffs.size() > 0;
+            for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+            {
+                real tValue = aCoeffs( tCoeffs( iC ) );
+                tAllPos     = tAllPos && tValue > aTolerance;
+                tAllNeg     = tAllNeg && tValue < -aTolerance;
+            }
+            if ( tAllPos || tAllNeg || tCoeffs.size() == 0 )
+            {
+                continue;
+            }
+            tBandCells.push_back( iCell );
+
+            // slope s asks for ln(1/(s range)) > 0 below the range, ln(range/s) < 0 above it, 0 inside
+            real tLogSlope = std::log( std::min( std::max( aCellSlopes( iCell ), 1.0e-3 ), 1.0e3 ) );
+            real tRequest  = tLogSlope < -tLogRange ? -tLogRange - tLogSlope : ( tLogSlope > tLogRange ? tLogRange - tLogSlope : 0.0 );
+            for ( uint iC = 0; iC < tCoeffs.size(); iC++ )
+            {
+                tSum[ tCoeffs( iC ) ] += tRequest;
+                tCount[ tCoeffs( iC ) ]++;
+            }
+        }
+        tReport.mBandCells = tBandCells.size();
+
+        // 2. start value and box of q = ln(factor) per band coefficient
+        std::vector< real > tQ( tNumCoeffs, 0.0 );
+        std::vector< real > tQLow( tNumCoeffs, 0.0 );
+        std::vector< real > tQHigh( tNumCoeffs, 0.0 );
+        std::vector< bool > tActive( tNumCoeffs, false );
+        for ( uint iC = 0; iC < tNumCoeffs; iC++ )
+        {
+            if ( tCount[ iC ] == 0 )
+            {
+                continue;
+            }
+            tReport.mBandCoeffs++;
+            real tValue     = aCoeffs( iC );
+            real tMagnitude = std::abs( tValue );
+            if ( tMagnitude <= aTolerance )
+            {
+                continue;    // on the interface: stays as it is and does not tie its neighbours
+            }
+            tActive[ iC ]         = true;
+            real tBound           = tValue > 0.0 ? aUpperBound : -aLowerBound;
+            tQHigh[ iC ]          = tBound > tMagnitude ? std::log( tBound / tMagnitude ) : 0.0;
+            tQLow[ iC ]           = tMagnitude > 2.0 * aTolerance ? std::log( 2.0 * aTolerance / tMagnitude ) : 0.0;
+            real tRequest         = tSum[ iC ] / tCount[ iC ];
+            tReport.mMaxRequested = std::max( tReport.mMaxRequested, std::abs( tRequest ) );
+            tQ[ iC ]              = std::min( std::max( tRequest, tQLow[ iC ] ), tQHigh[ iC ] );
+        }
+
+        // no spread allowed: the band stays frozen (a common factor per connected band would be admissible, but the
+        // zero tolerance is the documented way to get the frozen band bit for bit)
+        if ( aMaxLogSpread == 0.0 )
+        {
+            return tReport;
+        }
+
+        // 3. limiter: spread of q over the active coefficients of every band cell <= aMaxLogSpread. The sweeps clip to
+        // 95 % of the allowed spread, so that the test against the full spread is met after finitely many of them
+        const real tSlack      = 1.0e-12;
+        const real tClipSpread = 0.95 * aMaxLogSpread;
+
+        const uint tMaxSweeps = 5000;
+        real       tWorst     = limit_log_spread( tBandCells, aCellCoefficients, tActive, tQLow, tQHigh, aMaxLogSpread + tSlack, false, tQ );
+        while ( tWorst > aMaxLogSpread + tSlack && tReport.mLimiterPasses < tMaxSweeps )
+        {
+            limit_log_spread( tBandCells, aCellCoefficients, tActive, tQLow, tQHigh, tClipSpread, true, tQ );
+            tReport.mLimiterPasses++;
+            tWorst = limit_log_spread( tBandCells, aCellCoefficients, tActive, tQLow, tQHigh, aMaxLogSpread + tSlack, false, tQ );
+        }
+
+        // not converged: q -> q / 2 keeps every box (each contains 0) and halves every spread
+        while ( tWorst > aMaxLogSpread + tSlack && tReport.mBackoffs < 200 )
+        {
+            for ( uint iC = 0; iC < tNumCoeffs; iC++ )
+            {
+                tQ[ iC ] *= 0.5;
+            }
+            tReport.mBackoffs++;
+            tWorst = limit_log_spread( tBandCells, aCellCoefficients, tActive, tQLow, tQHigh, aMaxLogSpread + tSlack, false, tQ );
+        }
+        if ( tWorst > aMaxLogSpread + tSlack )
+        {
+            return tReport;    // leave the band frozen
+        }
+        tReport.mMaxLogSpread = tWorst;
+
+        // apply
+        for ( uint iC = 0; iC < tNumCoeffs; iC++ )
+        {
+            if ( tActive[ iC ] && tQ[ iC ] != 0.0 )
+            {
+                real tFactor = std::exp( tQ[ iC ] );
+                real tValue  = aCoeffs( iC );
+                real tScaled = tFactor * tValue;
+                // round-off guard: never past the bounds or onto the tolerance
+                tScaled = std::min( std::max( tScaled, aLowerBound ), aUpperBound );
+                if ( std::abs( tScaled ) <= aTolerance )
+                {
+                    continue;
+                }
+                if ( tScaled == tValue )
+                {
+                    continue;
+                }
+                aCoeffs( iC )      = tScaled;
+                tReport.mMinFactor = tReport.mScaledCoeffs == 0 ? tFactor : std::min( tReport.mMinFactor, tFactor );
+                tReport.mMaxFactor = tReport.mScaledCoeffs == 0 ? tFactor : std::max( tReport.mMaxFactor, tFactor );
+                tReport.mScaledCoeffs++;
+            }
+        }
+        return tReport;
     }
 
     //------------------------------------------------------------------------------
