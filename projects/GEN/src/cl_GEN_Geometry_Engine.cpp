@@ -214,8 +214,14 @@ namespace moris::gen
     Vector< sint >
     Geometry_Engine::get_design_adv_positions( const std::string& aDesignName )
     {
-        Vector< sint > tIds = this->get_design_determining_adv_ids( aDesignName );
+        return this->get_adv_positions( this->get_design_determining_adv_ids( aDesignName ) );
+    }
 
+    //--------------------------------------------------------------------------------------------------------------
+
+    Vector< sint >
+    Geometry_Engine::get_adv_positions( const Vector< sint >& aADVIds ) const
+    {
         // global ADV ID -> position in the full ADV vector
         std::unordered_map< sint, sint > tPositionOfId;
         tPositionOfId.reserve( mFullADVIds.size() );
@@ -224,10 +230,10 @@ namespace moris::gen
             tPositionOfId[ mFullADVIds( iPosition ) ] = (sint)iPosition;
         }
 
-        Vector< sint > tPositions( tIds.size(), -1 );
-        for ( uint iCoefficient = 0; iCoefficient < tIds.size(); iCoefficient++ )
+        Vector< sint > tPositions( aADVIds.size(), -1 );
+        for ( uint iCoefficient = 0; iCoefficient < aADVIds.size(); iCoefficient++ )
         {
-            std::unordered_map< sint, sint >::const_iterator tFound = tPositionOfId.find( tIds( iCoefficient ) );
+            std::unordered_map< sint, sint >::const_iterator tFound = tPositionOfId.find( aADVIds( iCoefficient ) );
             if ( tFound != tPositionOfId.end() )
             {
                 tPositions( iCoefficient ) = tFound->second;

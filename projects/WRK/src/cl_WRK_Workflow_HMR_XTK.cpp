@@ -589,70 +589,33 @@ namespace moris::wrk
                         // requirement that the single-field coefficient count equal the whole
                         // composite ADV vector. The next optimizer iteration's normal set_advs()
                         // re-syncs all fields and PDVs consistently.
-                        // a copy: the interface-preserving option below edits it
-                        Matrix< DDRMat > tCoeffs = tReinitPerformer->get_coefficients();
-                        // positions in aNewADVs, not global ADV IDs (MB-017: using the IDs shifted the design by one index)
-                        Vector< sint >          tLSAdvIds = mPerformerManager->mGENPerformer( 0 )
-                                ->get_design_adv_positions( tReinitPerformer->get_adv_field_name() );
-
-                        MORIS_ERROR( tLSAdvIds.size() > 0,
-                                "SDF in-place redistance: GEN has no design named '%s' (the mapping sublist's adv_field), so the "
-                                "redistance cannot be applied (MB-019: this used to be skipped silently every iteration).",
-                                tReinitPerformer->get_adv_field_name().c_str() );
-
-                        if ( tLSAdvIds.size() == tCoeffs.n_rows() && tCoeffs.n_rows() > 0 )
+                        // Collective: the ADV vector lives on processor 0, the coefficients on their owning
+                        // processors; every processor gets the same answer and re-cuts (or not) together (MB-113).
+                        uint tWritten         = 0;
+                        uint tNumCoefficients = 0;
+                        if ( tReinitPerformer->apply_redistance_to_advs( mPerformerManager->mGENPerformer, aNewADVs, tWritten, tNumCoefficients ) )
                         {
-                            if ( tReinitPerformer->get_diagnostics() || tReinitPerformer->get_preserve_interface() )
-                            {
-                                // psi: the design coefficients this evaluation was called with, gathered from the same slice
-                                Matrix< DDRMat > tOldCoeffs( tCoeffs.n_rows(), 1, 0.0 );
-                                for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
-                                {
-                                    sint tAdvId = tLSAdvIds( iC );
-                                    if ( tAdvId >= 0 && tAdvId < (sint)aNewADVs.size() )
-                                    {
-                                        tOldCoeffs( iC ) = aNewADVs( tAdvId );
-                                    }
-                                }
-
-                                // sdf_preserve_interface (MB-027): keep every coefficient that can reach a cut cell, so the
-                                // cut, the criteria and their sensitivities are those of psi bit for bit
-                                if ( tReinitPerformer->get_preserve_interface() )
-                                {
-                                    tReinitPerformer->preserve_interface( mPerformerManager->mGENPerformer, tOldCoeffs, tCoeffs );
-                                }
-
-                                if ( tReinitPerformer->get_diagnostics() )
-                                {
-                                    tReinitPerformer->log_redistance_footprint( mPerformerManager->mGENPerformer, tOldCoeffs, tCoeffs );
-                                }
-                            }
-
-                            uint tWritten = 0;
-                            for ( uint iC = 0; iC < tCoeffs.n_rows(); ++iC )
-                            {
-                                sint tAdvId = tLSAdvIds( iC );
-                                if ( tAdvId >= 0 && tAdvId < (sint)aNewADVs.size() )
-                                {
-                                    aNewADVs( tAdvId ) = tCoeffs( iC );
-                                    ++tWritten;
-                                }
-                            }
                             mSDFInitialized = true;
                             tRecut          = tWritten > 0;
                             MORIS_LOG_INFO( "SDF redistanced in-place every step (no restart): wrote %u of %u level-set coeffs into the %u-ADV vector slice%s",
-                                    tWritten, (uint)tCoeffs.n_rows(), (uint)aNewADVs.size(), tDoSmooth ? ", smoothed" : "" );
+                                    tWritten, tNumCoefficients, (uint)aNewADVs.size(), tDoSmooth ? ", smoothed" : "" );
                         }
                         else
                         {
-                            MORIS_LOG_INFO( "SDF redistance skipped this step: %u level-set ADV ids vs %u coeffs (mesh changed)",
-                                    (uint)tLSAdvIds.size(), (uint)tCoeffs.n_rows() );
+                            MORIS_LOG_INFO( "SDF redistance skipped this step: the redistanced coefficients (%u on processor 0) are not those of the design (mesh changed)",
+                                    tNumCoefficients );
                         }
                         // no NaN, no restart -- fall through to FEM with the redistanced design
                     }
                     // Distribute new SDF to ADVs (restart-based reinit; scheduled mode every reinit_freq)
                     else if ( tSDFField != nullptr )
                     {
+                        // the restart applies processor-local coefficients to the whole ADV vector (initialize() and the
+                        // "Interface-SDF-Apply-ADVs" stage above); on several processors that would skip or misplace them
+                        MORIS_ERROR( par_size() == 1,
+                                "Workflow_HMR_XTK: the restart-based interface reinitialization (sdf_reinit_every_step = false) "
+                                "runs on one processor only; use sdf_reinit_every_step = true (in-place redistance) on several." );
+
                         // Wean-off decision driven by the actual DESIGN-VARIABLE change between
                         // reinits, ||x_k - x_{k-1}|| / ||x_{k-1}||. Unlike the reinit's field drift
                         // (which is dominated by |grad phi| re-normalization and stays large), the

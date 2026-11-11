@@ -197,6 +197,15 @@ namespace moris::gen
         Vector< sint > get_design_adv_positions( const std::string& aDesignName );
 
         /**
+         * Positions in the optimizer's full ADV vector of the given global ADV IDs. The full ADV vector lives on
+         * processor 0 only, so on every other processor all positions are -1.
+         *
+         * @param aADVIds Global ADV IDs (of any processor's coefficients)
+         * @return Position of each ID in the full ADV vector, -1 if the ID is not in it
+         */
+        Vector< sint > get_adv_positions( const Vector< sint >& aADVIds ) const;
+
+        /**
          * Gets the names of all designs (geometries and properties) discretized with discretization_mode = "additive".
          *
          * @return Names of additively discretized designs (empty if none)
